@@ -11,11 +11,31 @@ import os
 import json
 import psutil
 
-SCRIPT = os.path.join(os.path.dirname(__file__), "mountain-time-sync.py")
-PYTHON = sys.executable
-LANG_DIR = os.path.join(os.path.dirname(__file__), "lang")
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_FROZEN = getattr(sys, "frozen", False)
+
+if _FROZEN:
+    _BIN = os.path.dirname(sys.executable)
+    _RES = sys._MEIPASS        # bundled resources (lang/, logo.png, etc.)
+    PYTHON = None
+    SCRIPT = os.path.join(_BIN, "basecamp-controller")
+    TRAY_HELPER = os.path.join(_BIN, "basecamp-tray")
+else:
+    _BIN = _HERE
+    _RES = _HERE
+    PYTHON = sys.executable
+    SCRIPT = os.path.join(_HERE, "mountain-time-sync.py")
+    TRAY_HELPER = os.path.join(_HERE, "tray_helper.py")
+
+LANG_DIR = os.path.join(_RES, "lang")
 
 STYLES = {"Analog": "analog", "Digital": "digital"}
+
+def _cmd(*args):
+    """Build subprocess command, works both frozen and normal."""
+    if _FROZEN:
+        return [SCRIPT] + list(args)
+    return [PYTHON, SCRIPT] + list(args)
 
 import pwd as _pwd
 _real_home = _pwd.getpwnam(os.environ["SUDO_USER"]).pw_dir if os.environ.get("SUDO_USER") else os.path.expanduser("~")
@@ -662,7 +682,7 @@ class App(tk.Tk):
     def _run_sync(self, callback=None):
         style_arg = STYLES[self._current_style.get()]
         def task():
-            result = subprocess.run([PYTHON, SCRIPT, style_arg], capture_output=True)
+            result = subprocess.run(_cmd(style_arg), capture_output=True)
             ok = result.returncode == 0
             if callback:
                 self.after(0, lambda: callback(ok))
@@ -682,7 +702,7 @@ class App(tk.Tk):
         else:
             style_arg = STYLES[self._current_style.get()]
             self._cpu_proc = subprocess.Popen(
-                [PYTHON, SCRIPT, "cpu", style_arg],
+                _cmd("cpu", style_arg),
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             self._btn_cpu.config(text=self.T("monitor_stop"), bg=RED, fg=FG)
             self._cpu_status.config(text=self.T("monitor_running"), fg=GRN)
@@ -800,7 +820,7 @@ class App(tk.Tk):
 
         def do_upload():
             result = subprocess.run(
-                [PYTHON, SCRIPT, "upload", str(idx), path],
+                _cmd("upload", str(idx), path),
                 capture_output=True)
             ok = result.returncode == 0
             if was_running:
@@ -820,7 +840,6 @@ class App(tk.Tk):
         _signal.signal(_signal.SIGUSR1, lambda *_: self.after(0, self._show_window))
         _signal.signal(_signal.SIGUSR2, lambda *_: self.after(0, self._quit))
 
-        helper = os.path.join(os.path.dirname(__file__), "tray_helper.py")
         lang_file = os.path.join(LANG_DIR, f"{self._lang_code}.json")
         env = os.environ.copy()
         if os.environ.get("SUDO_USER"):
@@ -829,10 +848,17 @@ class App(tk.Tk):
             env["DISPLAY"] = os.environ.get("DISPLAY", ":0")
             env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path=/run/user/{uid}/bus"
             env["XDG_RUNTIME_DIR"] = f"/run/user/{uid}"
-            cmd = ["sudo", "-u", user, "-E", sys.executable, helper,
-                   str(os.getpid()), lang_file]
+            if _FROZEN:
+                cmd = ["sudo", "-u", user, "-E", TRAY_HELPER,
+                       str(os.getpid()), lang_file]
+            else:
+                cmd = ["sudo", "-u", user, "-E", sys.executable, TRAY_HELPER,
+                       str(os.getpid()), lang_file]
         else:
-            cmd = [sys.executable, helper, str(os.getpid()), lang_file]
+            if _FROZEN:
+                cmd = [TRAY_HELPER, str(os.getpid()), lang_file]
+            else:
+                cmd = [sys.executable, TRAY_HELPER, str(os.getpid()), lang_file]
         self._tray_proc = subprocess.Popen(cmd, env=env)
 
     def _hide_window(self):
