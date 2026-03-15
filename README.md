@@ -74,27 +74,17 @@ sudo usermod -aG plugdev $USER
 
 > Log out and back in after adding the group, then unplug and replug the keyboard.
 
-#### Fedora / Nobara
+#### Fedora / Nobara / Arch / CachyOS / Manjaro
 
 ```bash
 sudo tee /etc/udev/rules.d/99-mountain-everest-max.rules <<EOF
-SUBSYSTEM=="usb", ATTRS{idVendor}=="3282", ATTRS{idProduct}=="0001", MODE="0660", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="3282", ATTRS{idProduct}=="0001", MODE="0666"
 EOF
 sudo udevadm control --reload-rules && sudo udevadm trigger
 ```
 
 > Unplug and replug the keyboard. No group changes needed.
 
-#### Arch Linux
-
-```bash
-sudo tee /etc/udev/rules.d/99-mountain-everest-max.rules <<EOF
-SUBSYSTEM=="usb", ATTRS{idVendor}=="3282", ATTRS{idProduct}=="0001", MODE="0660", TAG+="uaccess"
-EOF
-sudo udevadm control --reload-rules && sudo udevadm trigger
-```
-
-> Unplug and replug the keyboard. No group changes needed.
 
 ---
 
@@ -110,18 +100,25 @@ The GUI starts with a splash screen and auto-activates Monitor mode. The app min
 
 ## AppImage
 
-A self-contained AppImage is available in the [releases](../../releases). No Python installation required.
+Self-contained AppImages are available in the [releases](../../releases). No Python installation required.
+
+Two builds are provided — pick the one for your distro:
+
+| File | Distro |
+|------|--------|
+| `BaseCamp-Linux-x86_64-debian.AppImage` | Debian, Ubuntu, Linux Mint |
+| `BaseCamp-Linux-x86_64-fedora.AppImage` | Fedora, Nobara, Arch, CachyOS, Manjaro |
 
 ```bash
-chmod +x BaseCamp-Linux-x86_64.AppImage
-./BaseCamp-Linux-x86_64.AppImage
+chmod +x BaseCamp-Linux-x86_64-*.AppImage
+./BaseCamp-Linux-x86_64-debian.AppImage   # or -fedora
 ```
 
-USB permissions still need to be set up once (see above).
+USB permissions still need to be set up once (see below).
 
-> If you get a FUSE error on startup, run with `--appimage-extract-and-run` instead:
+> If you get a FUSE error on startup, add `--appimage-extract-and-run`:
 > ```bash
-> ./BaseCamp-Linux-x86_64.AppImage --appimage-extract-and-run
+> ./BaseCamp-Linux-x86_64-fedora.AppImage --appimage-extract-and-run
 > ```
 
 ---
