@@ -11,6 +11,7 @@ import subprocess
 import threading
 import psutil
 import struct
+import pwd as _pwd
 
 VID = 0x3282
 PID = 0x0001
@@ -34,7 +35,6 @@ BTN_LOOKUP = {
 ICON_BASE    = 0x40
 ICONS_PER_BTN = 9
 
-import pwd as _pwd
 _real_home = _pwd.getpwnam(os.environ["SUDO_USER"]).pw_dir if os.environ.get("SUDO_USER") else os.path.expanduser("~")
 CONFIG_DIR  = os.path.join(_real_home, ".config", "mountain-time-sync")
 STYLE_FILE  = os.path.join(CONFIG_DIR, "style")
@@ -85,7 +85,8 @@ def icon_id(button_idx, variant):
 def _send_time_packet(dev, style):
     now = datetime.datetime.now()
     try:
-        fmt = open(os.path.join(CONFIG_DIR, "clock_format")).read().strip()
+        with open(os.path.join(CONFIG_DIR, "clock_format")) as f:
+            fmt = f.read().strip()
     except FileNotFoundError:
         fmt = "24H"
     hour = (now.hour % 12) or 12 if fmt == "12H" else now.hour
@@ -262,12 +263,10 @@ def _upload_icon_image(dev, button_idx, img_bytes):
 
     # Wait for display update signal on interrupt endpoint (max 4s)
     dev.write(EP_OUT, make_packet(0x11, 0x14))
-    got_ffaa = False
     for _ in range(20):
         try:
             r = bytes(dev.read(EP_IN, PKT_SIZE, timeout=200))
             if r[:2] == bytes([0xff, 0xaa]):
-                got_ffaa = True
                 break
         except usb.core.USBTimeoutError:
             pass
@@ -454,10 +453,13 @@ def set_main_display_mode(mode, style=STYLE_ANALOG):
         sys.exit(1)
     _claim(dev)
     try:
-        # Init interrupt endpoint
-        dev.write(EP_OUT, make_packet(0x11, 0x12))
-        try: dev.read(EP_IN, PKT_SIZE, timeout=500)
-        except Exception: pass
+        # Send keepalives to wake up keyboard before mode switch
+        # (required after upload or idle — keyboard ignores mode switch without prior keepalives)
+        for _ in range(5):
+            dev.write(EP_OUT, make_packet(0x11, 0x14))
+            try: dev.read(EP_IN, PKT_SIZE, timeout=300)
+            except Exception: pass
+            time.sleep(0.1)
 
         # Read keyboard's current 11 14 state to get device-specific bytes[7-9]
         dev.write(EP_OUT, make_packet(0x11, 0x14))
@@ -639,7 +641,8 @@ def controller_loop(style=STYLE_ANALOG):
                 obs_cfg = _load_obs_config()
                 last_config_check = now
                 try:
-                    cur_fmt = open(os.path.join(CONFIG_DIR, "clock_format")).read().strip()
+                    with open(os.path.join(CONFIG_DIR, "clock_format")) as f:
+                        cur_fmt = f.read().strip()
                 except FileNotFoundError:
                     cur_fmt = "24H"
                 if cur_fmt != last_clock_format:

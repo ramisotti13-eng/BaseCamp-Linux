@@ -12,6 +12,7 @@ import sys
 import os
 import json
 import psutil
+import pwd as _pwd
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("dark-blue")
@@ -41,7 +42,6 @@ def _cmd(*args):
         return [SCRIPT] + list(args)
     return [PYTHON, SCRIPT] + list(args)
 
-import pwd as _pwd
 _real_home = _pwd.getpwnam(os.environ["SUDO_USER"]).pw_dir if os.environ.get("SUDO_USER") else os.path.expanduser("~")
 CONFIG_DIR      = os.path.join(_real_home, ".config", "mountain-time-sync")
 os.makedirs(CONFIG_DIR, exist_ok=True)
@@ -137,7 +137,6 @@ def native_open_image(title="Bild wählen"):
 
 
 def save_style(style_arg):
-    os.makedirs(CONFIG_DIR, exist_ok=True)
     with open(STYLE_FILE, "w") as f:
         f.write(style_arg)
 
@@ -164,7 +163,6 @@ def load_buttons():
 
 
 def save_buttons(buttons):
-    os.makedirs(CONFIG_DIR, exist_ok=True)
     with open(BUTTON_FILE, "w") as f:
         json.dump(buttons, f, indent=2)
 
@@ -187,7 +185,6 @@ def load_obs_config():
 
 
 def save_obs_config(cfg):
-    os.makedirs(CONFIG_DIR, exist_ok=True)
     with open(OBS_FILE, "w") as f:
         json.dump(cfg, f, indent=2)
 
@@ -238,7 +235,6 @@ def load_splash_enabled():
 
 
 def save_splash_enabled(val):
-    os.makedirs(CONFIG_DIR, exist_ok=True)
     with open(os.path.join(CONFIG_DIR, "splash"), "w") as f:
         f.write("1" if val else "0")
 
@@ -819,7 +815,6 @@ class App(ctk.CTk):
     # ── Logic ─────────────────────────────────────────────────────────────────
 
     def _on_format_change(self):
-        os.makedirs(CONFIG_DIR, exist_ok=True)
         with open(os.path.join(CONFIG_DIR, "clock_format"), "w") as f:
             f.write(self._clock_format.get())
 
@@ -832,7 +827,6 @@ class App(ctk.CTk):
                 break
         if code is None:
             return
-        os.makedirs(CONFIG_DIR, exist_ok=True)
         with open(os.path.join(CONFIG_DIR, "language"), "w") as f:
             f.write(code)
         self._load_lang_code(code)
@@ -1149,7 +1143,8 @@ class App(ctk.CTk):
 
     def _set_main_mode_image(self):
         self._main_mode_clock = False
-        open(MAIN_MODE_FILE, "w").write("image")
+        with open(MAIN_MODE_FILE, "w") as f:
+            f.write("image")
         self._btn_main_image.configure(fg_color=YLW, text_color="#0d0d14")
         self._btn_main_clock.configure(fg_color=BG3, text_color=FG2)
         was_running = self._cpu_proc and self._cpu_proc.poll() is None
@@ -1165,7 +1160,8 @@ class App(ctk.CTk):
 
     def _set_main_mode_clock(self):
         self._main_mode_clock = True
-        open(MAIN_MODE_FILE, "w").write("clock")
+        with open(MAIN_MODE_FILE, "w") as f:
+            f.write("clock")
         self._btn_main_clock.configure(fg_color=YLW, text_color="#0d0d14")
         self._btn_main_image.configure(fg_color=BG3, text_color=FG2)
         self._main_status.configure(text="", text_color=FG2)
@@ -1176,11 +1172,11 @@ class App(ctk.CTk):
             self._cpu_proc = None
 
         def run():
-            time.sleep(0.5 if was_running else 0.0)
+            time.sleep(0.8 if was_running else 0.5)
             # Kill any orphaned controller processes from previous sessions
             pkill = "basecamp-controller.*cpu" if _FROZEN else r"mountain-time-sync\.py.*cpu"
             subprocess.run(["pkill", "-f", pkill], capture_output=True)
-            time.sleep(0.3)
+            time.sleep(0.5)
             subprocess.run(_cmd("main-mode", "clock"), capture_output=True)
             time.sleep(0.3)
             self.after(0, self._start_cpu_auto)
@@ -1329,7 +1325,43 @@ def show_splash():
     splash.mainloop()
 
 
+def _install_desktop_entry():
+    """Install .desktop file and icon to ~/.local/share/ for app menu integration."""
+    import shutil
+    app_dir = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
+    appimage_path = os.environ.get("APPIMAGE", os.path.abspath(sys.executable if getattr(sys, "frozen", False) else __file__))
+
+    # Icon
+    icon_src = os.path.join(app_dir, "_internal", "resources", "app_icon_256.png")
+    if not os.path.exists(icon_src):
+        icon_src = os.path.join(app_dir, "resources", "app_icon_256.png")
+    icon_dst = os.path.join(_real_home, ".local", "share", "icons", "hicolor", "256x256", "apps", "basecamp-linux.png")
+    os.makedirs(os.path.dirname(icon_dst), exist_ok=True)
+    shutil.copy2(icon_src, icon_dst)
+
+    # .desktop file
+    desktop_dir = os.path.join(_real_home, ".local", "share", "applications")
+    os.makedirs(desktop_dir, exist_ok=True)
+    desktop_path = os.path.join(desktop_dir, "basecamp-linux.desktop")
+    with open(desktop_path, "w") as f:
+        f.write(f"""[Desktop Entry]
+Name=BaseCamp Linux
+Comment=Unofficial Linux companion app for the Mountain Everest Max keyboard
+Exec={appimage_path}
+Icon=basecamp-linux
+Type=Application
+Categories=Utility;
+""")
+    os.chmod(desktop_path, 0o755)
+    print(f"Installed: {desktop_path}")
+    print(f"Installed: {icon_dst}")
+    print("Done. BaseCamp Linux should now appear in your app menu.")
+
+
 if __name__ == "__main__":
+    if "--install" in sys.argv:
+        _install_desktop_entry()
+        sys.exit(0)
     psutil.cpu_percent()
     if load_splash_enabled():
         show_splash()

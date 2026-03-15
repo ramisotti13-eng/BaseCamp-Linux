@@ -107,6 +107,18 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 
 ---
 
+## Known Issues
+
+### Clock mode after main display image upload
+
+After uploading an image to the main display, switching back to **Clock** mode does not work immediately — the keyboard ignores the mode switch command.
+
+**Workaround:** Unplug and replug the keyboard, then click Clock in the app.
+
+This is a known firmware-level issue with the Mountain Everest Max. A fix is planned for the next release.
+
+---
+
 ## Usage
 
 ```bash
