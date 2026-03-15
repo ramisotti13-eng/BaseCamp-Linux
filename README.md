@@ -8,7 +8,7 @@
 
 Mountain Base Camp is only available on Windows — this project brings display control, button actions, monitor metrics and OBS integration to Linux.
 
-![Python](https://img.shields.io/badge/Python-3.10+-blue) ![Platform](https://img.shields.io/badge/Platform-Linux-black) ![License](https://img.shields.io/badge/License-MIT-yellow)
+![Python](https://img.shields.io/badge/Python-3.10+-blue) ![Platform](https://img.shields.io/badge/Platform-Linux-black) ![License](https://img.shields.io/badge/License-GPL%20v3%20%2B%20Non--Commercial-red)
 
 ---
 
@@ -112,4 +112,4 @@ Other Mountain keyboards may work but are untested.
 
 ## License
 
-MIT
+GPL v3 + Non-Commercial — free for personal and open-source use, commercial use prohibited. See [LICENSE](LICENSE) for details.
