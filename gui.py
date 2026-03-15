@@ -44,6 +44,7 @@ def _cmd(*args):
 import pwd as _pwd
 _real_home = _pwd.getpwnam(os.environ["SUDO_USER"]).pw_dir if os.environ.get("SUDO_USER") else os.path.expanduser("~")
 CONFIG_DIR      = os.path.join(_real_home, ".config", "mountain-time-sync")
+os.makedirs(CONFIG_DIR, exist_ok=True)
 STYLE_FILE      = os.path.join(CONFIG_DIR, "style")
 BUTTON_FILE     = os.path.join(CONFIG_DIR, "buttons.json")
 OBS_FILE        = os.path.join(CONFIG_DIR, "obs.json")
