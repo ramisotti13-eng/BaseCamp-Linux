@@ -7,7 +7,7 @@
 - New folder picker: opens native file manager dialog to browse for a folder
 - New app picker: searchable list of installed `.desktop` applications
 - Actions are saved immediately to config when ✓ is pressed — no restart required
-- New **Reset Buttons Flash** button: writes all 4 button actions to keyboard flash at once
+- New **Reset Buttons Flash** button: overwrites all 4 keyboard flash slots with your configured actions — use this after first setup or when switching from Mountain Base Camp, as BaseCamp may have stored its own actions in flash that cause two actions to fire on a single button press
 
 ### OBS Integration
 - Removed per-button ✓ save button — type and scene changes now save automatically
