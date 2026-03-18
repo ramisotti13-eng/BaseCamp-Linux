@@ -877,14 +877,18 @@ def controller_loop(style=STYLE_ANALOG):
                         btype = buttons[i].get("type", "shell")
                         action = buttons[i].get("action", "").strip()
                         if action and btype != "none":
-                            env = os.environ.copy()
                             sudo_user = os.environ.get("SUDO_USER")
                             if sudo_user:
                                 uid = _pwd.getpwnam(sudo_user).pw_uid
-                                env.setdefault("DISPLAY", ":0")
-                                env.setdefault("DBUS_SESSION_BUS_ADDRESS",
-                                    f"unix:path=/run/user/{uid}/bus")
-                                env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{uid}")
+                                env = {
+                                    "DISPLAY": os.environ.get("DISPLAY", ":0"),
+                                    "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{uid}/bus",
+                                    "XDG_RUNTIME_DIR": f"/run/user/{uid}",
+                                    "HOME": _pwd.getpwnam(sudo_user).pw_dir,
+                                    "USER": sudo_user,
+                                    "LOGNAME": sudo_user,
+                                    "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                                }
                                 if btype in ("url", "folder"):
                                     subprocess.Popen(
                                         ["sudo", "-u", sudo_user, "-E", "xdg-open", action],
