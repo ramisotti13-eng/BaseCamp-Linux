@@ -887,11 +887,11 @@ def controller_loop(style=STYLE_ANALOG):
                                 env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{uid}")
                                 if btype in ("url", "folder"):
                                     subprocess.Popen(
-                                        ["sudo", "-u", sudo_user, "xdg-open", action],
+                                        ["sudo", "-u", sudo_user, "-E", "xdg-open", action],
                                         env=env)
                                 else:  # shell, app
                                     subprocess.Popen(
-                                        ["sudo", "-u", sudo_user, "bash", "-c", action],
+                                        ["sudo", "-u", sudo_user, "-E", "bash", "-c", action],
                                         env=env)
                             else:
                                 if btype in ("url", "folder"):
