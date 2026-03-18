@@ -66,6 +66,18 @@ def _release(dev):
             pass
     usb.util.dispose_resources(dev)
 
+def _get_claimed_device():
+    """Find keyboard, claim Interface 3 with retries. Returns dev or exits."""
+    dev = usb.core.find(idVendor=VID, idProduct=PID)
+    if dev is None:
+        print("Keyboard not found!", file=sys.stderr); sys.exit(1)
+    for _ in range(10):
+        try:
+            _claim(dev); return dev
+        except usb.core.USBError:
+            time.sleep(0.5)
+    print("Failed to claim interface", file=sys.stderr); sys.exit(1)
+
 _EMPTY_PKT = bytes(PKT_SIZE)
 
 def _read(dev, timeout=1000):
@@ -128,13 +140,22 @@ def _set_icon(dev, button_idx, variant):
         except usb.core.USBTimeoutError:
             break
 
-def _write_action(dev, button_idx, command):
-    """Schreibt eine Aktion (Linux-Befehl) in den Keyboard-Flash für einen Button."""
+def _action_type_byte(type_str):
+    """Map action type string to protocol byte (0x02=URL, 0x04=shell/folder/none)."""
+    return 0x02 if type_str == "url" else 0x04
+
+
+def _write_action(dev, button_idx, command, action_type=0x04):
+    """Schreibt eine Aktion in den Keyboard-Flash für einen Button.
+
+    12 08 00 [btn+1] wählt den Slot, 17 AA schreibt die Aktion.
+    action_type: 0x02 = URL/browser, 0x04 = shell/folder/none
+    """
     cmd_bytes = command.encode('utf-8')[:55]  # max ~55 Zeichen
-    # Paketformat: 17 aa [total_len] 00 04 [cmd_bytes]
-    total_len = 1 + len(cmd_bytes)  # 1 Byte für Typ (0x04) + Befehl
-    pkt = make_packet(0x17, 0xAA, total_len, 0x00, 0x04, *cmd_bytes)
-    # Button auswählen: 12 08 00 [btn_idx+1] 00
+    total_len = 1 + len(cmd_bytes)
+
+    # Write 1: button-select-Slot (byte42-Mechanismus)
+    pkt = make_packet(0x17, 0xAA, total_len, 0x00, action_type, *cmd_bytes)
     dev.write(EP_OUT, make_packet(0x12, 0x08, 0x00, button_idx + 1))
     try:
         _read(dev)
@@ -145,6 +166,7 @@ def _write_action(dev, button_idx, command):
         _read(dev)
     except usb.core.USBTimeoutError:
         pass
+
 
 ICON_IMG_SIZE = 10368  # 72×72 × 2 bytes (RGB565)
 MAIN_IMG_SIZE = 97920  # 240×204 × 2 bytes (RGB565)
@@ -386,8 +408,8 @@ def read_style():
         return "analog"
 
 def read_buttons():
-    """Returns list of 4 dicts: {icon: 0-8, action: str}"""
-    default = [{"icon": 7, "action": ""} for _ in range(4)]
+    """Returns list of 4 dicts: {icon: 0-8, action: str, type: shell|url|folder|none}"""
+    default = [{"icon": 7, "action": "", "type": "shell"} for _ in range(4)]
     try:
         with open(BUTTON_FILE) as f:
             data = json.load(f)
@@ -408,7 +430,7 @@ def save_buttons(buttons):
 def send_time(style=STYLE_ANALOG):
     dev = usb.core.find(idVendor=VID, idProduct=PID)
     if dev is None:
-        print("Keyboard nicht gefunden!", file=sys.stderr)
+        print("Keyboard not found!", file=sys.stderr)
         sys.exit(1)
     for _attempt in range(20):
         try:
@@ -448,7 +470,7 @@ def set_main_display_mode(mode, style=STYLE_ANALOG):
     """
     dev = usb.core.find(idVendor=VID, idProduct=PID)
     if dev is None:
-        print("Keyboard nicht gefunden!", file=sys.stderr)
+        print("Keyboard not found!", file=sys.stderr)
         sys.exit(1)
     # Retry claim up to 60s — kernel may auto-rebind HID driver during post-upload
     # flash write freeze (~32s) or after mode-switch EP_IN freeze (~32s)
@@ -516,7 +538,7 @@ def set_rgb(effect, speed=50, brightness=100, color1=(255, 0, 0), color2=(0, 0, 
     """Set keyboard RGB lighting effect via 0x14 0x2c command."""
     dev = usb.core.find(idVendor=VID, idProduct=PID)
     if dev is None:
-        print("Keyboard nicht gefunden!", file=sys.stderr)
+        print("Keyboard not found!", file=sys.stderr)
         sys.exit(1)
     for _attempt in range(5):
         try:
@@ -609,7 +631,7 @@ def set_custom_rgb(zone_colors, side_color=(0, 0, 0), brightness=100):
 
     dev = usb.core.find(idVendor=VID, idProduct=PID)
     if dev is None:
-        print("Keyboard nicht gefunden!", file=sys.stderr)
+        print("Keyboard not found!", file=sys.stderr)
         sys.exit(1)
     for _attempt in range(5):
         try:
@@ -671,7 +693,7 @@ def reset_dial_image():
     """Reset the dial image to the factory Mountain logo (protocol §3.4)."""
     dev = usb.core.find(idVendor=VID, idProduct=PID)
     if dev is None:
-        print("Keyboard nicht gefunden!", file=sys.stderr)
+        print("Keyboard not found!", file=sys.stderr)
         sys.exit(1)
     _claim(dev)
     try:
@@ -687,7 +709,7 @@ def upload_main_display(image_path, frame=0, activate=False):
     img_bytes = image_to_rgb565(image_path, size=(MAIN_DISPLAY_W, MAIN_DISPLAY_H), frame=frame)
     dev = usb.core.find(idVendor=VID, idProduct=PID)
     if dev is None:
-        print("Keyboard nicht gefunden!", file=sys.stderr)
+        print("Keyboard not found!", file=sys.stderr)
         sys.exit(1)
     _claim(dev)
     try:
@@ -702,7 +724,7 @@ def upload_icon(button_idx, image_path, frame=0):
     img_bytes = image_to_rgb565(image_path, frame=frame)
     dev = usb.core.find(idVendor=VID, idProduct=PID)
     if dev is None:
-        print("Keyboard nicht gefunden!", file=sys.stderr)
+        print("Keyboard not found!", file=sys.stderr)
         sys.exit(1)
     _claim(dev)
     try:
@@ -717,16 +739,16 @@ def upload_icon(button_idx, image_path, frame=0):
                 pass
         usb.util.dispose_resources(dev)
 
-def set_icon_once(button_idx, variant, action=None):
+def set_icon_once(button_idx, variant, action=None, action_type=0x04):
     dev = usb.core.find(idVendor=VID, idProduct=PID)
     if dev is None:
-        print("Keyboard nicht gefunden!", file=sys.stderr)
+        print("Keyboard not found!", file=sys.stderr)
         sys.exit(1)
     _claim(dev)
     try:
         _set_icon(dev, button_idx, variant)
         if action is not None:
-            _write_action(dev, button_idx, action)
+            _write_action(dev, button_idx, action, action_type=action_type)
     finally:
         _release(dev)
 
@@ -766,14 +788,14 @@ def _execute_obs_action(btn_cfg, obs_cfg, obs_holder):
         elif action_type == "stream":
             cl.toggle_stream()
     except Exception as e:
-        print(f"OBS Fehler: {e}", flush=True)
+        print(f"OBS error: {e}", flush=True)
         obs_holder[0] = None  # reconnect next time
 
 def controller_loop(style=STYLE_ANALOG):
     """Main loop: CPU display + time sync + numpad button monitoring."""
     dev = usb.core.find(idVendor=VID, idProduct=PID)
     if dev is None:
-        print("Keyboard nicht gefunden!", file=sys.stderr)
+        print("Keyboard not found!", file=sys.stderr)
         sys.exit(1)
     for _attempt in range(10):
         try:
@@ -791,14 +813,19 @@ def controller_loop(style=STYLE_ANALOG):
         dev.write(EP_OUT, make_packet(0x11, 0x14))
         _read(dev)
 
-        # Icons setzen und Original-BaseCamp-Aktionen deaktivieren
+        # Icons setzen und Aktionen in Keyboard-Flash schreiben
         buttons = read_buttons()
         obs_cfg_init = _load_obs_config()
         for i, btn in enumerate(buttons):
             _set_icon(dev, i, btn["icon"])
-            # Immer ":" in Flash schreiben: deaktiviert Original-BaseCamp-Befehle
-            # und stellt sicher dass byte42 korrekt gesetzt wird (byte42-Fix).
-            _write_action(dev, i, ":")
+            btype = btn.get("type", "shell")
+            action = btn.get("action", "").strip()
+            # Byte42-Fix: Tastatur muss etwas im Flash haben damit byte42 gesetzt wird.
+            # "none" oder leere Aktion: ":" schreiben (kein Effekt, aber byte42 aktiv).
+            if btype == "none" or not action:
+                _write_action(dev, i, ":", action_type=0x04)
+            else:
+                _write_action(dev, i, action, action_type=_action_type_byte(btype))
 
         last_time_sync = 0
         last_config_check = 0
@@ -847,18 +874,30 @@ def controller_loop(style=STYLE_ANALOG):
                             args=(obs_btn, obs_cfg, obs_holder),
                             daemon=True).start()
                     else:
+                        btype = buttons[i].get("type", "shell")
                         action = buttons[i].get("action", "").strip()
-                        if action:
+                        if action and btype != "none":
                             env = os.environ.copy()
-                            if os.environ.get("SUDO_USER"):
+                            sudo_user = os.environ.get("SUDO_USER")
+                            if sudo_user:
+                                uid = _pwd.getpwnam(sudo_user).pw_uid
                                 env.setdefault("DISPLAY", ":0")
                                 env.setdefault("DBUS_SESSION_BUS_ADDRESS",
-                                    f"unix:path=/run/user/{_pwd.getpwnam(os.environ['SUDO_USER']).pw_uid}/bus")
-                                subprocess.Popen(
-                                    ["sudo", "-u", os.environ["SUDO_USER"], "bash", "-c", action],
-                                    env=env)
+                                    f"unix:path=/run/user/{uid}/bus")
+                                env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{uid}")
+                                if btype in ("url", "folder"):
+                                    subprocess.Popen(
+                                        ["sudo", "-u", sudo_user, "xdg-open", action],
+                                        env=env)
+                                else:  # shell, app
+                                    subprocess.Popen(
+                                        ["sudo", "-u", sudo_user, "bash", "-c", action],
+                                        env=env)
                             else:
-                                subprocess.Popen(action, shell=True)
+                                if btype in ("url", "folder"):
+                                    subprocess.Popen(["xdg-open", action])
+                                else:  # shell, app
+                                    subprocess.Popen(action, shell=True)
                 last_btn_state = pressed  # None when byte42=0 (released)
 
             # Gather all metrics
@@ -931,6 +970,7 @@ if __name__ == "__main__":
     variant = None
 
     action_str        = None
+    action_type_str   = "shell"
     image_path        = None
     main_display_mode = "image"
     gif_frame         = 0
@@ -961,6 +1001,12 @@ if __name__ == "__main__":
             mode = "main-mode"
             main_display_mode = args[i + 1]  # "image" or "clock"
             i += 1
+        elif a == "write-action" and i + 1 < len(args):
+            mode = "write-action"
+            btn_idx = int(args[i + 1])
+            i += 1
+        elif a == "reset-buttons":
+            mode = "reset-buttons"
         elif a == "reset-dial":
             mode = "reset-dial"
         elif a == "rgb" and i + 6 < len(args):
@@ -984,6 +1030,9 @@ if __name__ == "__main__":
         elif a == "action" and i + 1 < len(args):
             action_str = args[i + 1]
             i += 1
+        elif a == "--type" and i + 1 < len(args):
+            action_type_str = args[i + 1]
+            i += 1
         i += 1
 
     if style_arg is None:
@@ -993,7 +1042,30 @@ if __name__ == "__main__":
     if mode == "cpu":
         controller_loop(style)
     elif mode == "icon":
-        set_icon_once(btn_idx, variant, action=action_str)
+        set_icon_once(btn_idx, variant, action=action_str,
+                      action_type=_action_type_byte(action_type_str))
+    elif mode == "write-action":
+        btns = read_buttons()
+        btn = btns[btn_idx]
+        btype = btn.get("type", "shell")
+        action = btn.get("action", "").strip()
+        dev = _get_claimed_device()
+        try:
+            cmd = ":" if (btype == "none" or not action) else action
+            _write_action(dev, btn_idx, cmd, action_type=_action_type_byte(btype))
+        finally:
+            _release(dev)
+    elif mode == "reset-buttons":
+        dev = _get_claimed_device()
+        try:
+            btns = read_buttons()
+            for i, btn in enumerate(btns):
+                btype = btn.get("type", "shell")
+                action = btn.get("action", "").strip()
+                cmd = ":" if (btype == "none" or not action) else action
+                _write_action(dev, i, cmd, action_type=_action_type_byte(btype))
+        finally:
+            _release(dev)
     elif mode == "upload":
         upload_icon(btn_idx, image_path, frame=gif_frame)
     elif mode == "upload-main":

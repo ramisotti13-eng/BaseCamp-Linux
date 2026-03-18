@@ -7,6 +7,7 @@ from PIL import Image, ImageTk
 import subprocess
 import datetime
 import threading
+import re
 import time
 import sys
 import os
@@ -97,28 +98,34 @@ def available_langs():
     return result
 
 
+_DESKTOP_EXEC_RE = re.compile(r"%[a-zA-Z]")
+_desktop_apps_cache = None
+
+
+def _run_as_sudouser(cmd):
+    """Run cmd as SUDO_USER (when launched via sudo) or directly."""
+    sudo_user = os.environ.get("SUDO_USER")
+    if sudo_user:
+        uid = _pwd.getpwnam(sudo_user).pw_uid
+        env = os.environ.copy()
+        env["DISPLAY"] = os.environ.get("DISPLAY", ":0")
+        env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path=/run/user/{uid}/bus"
+        env["XDG_RUNTIME_DIR"] = f"/run/user/{uid}"
+        cmd = ["sudo", "-u", sudo_user, "-E"] + cmd
+        return subprocess.run(cmd, capture_output=True, text=True, env=env)
+    return subprocess.run(cmd, capture_output=True, text=True)
+
+
 def native_open_image(title="Bild wählen"):
     import shutil
     desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").upper()
     filter_img = "*.png *.jpg *.jpeg *.bmp *.webp *.gif"
-    sudo_user = os.environ.get("SUDO_USER")
-
-    def _run_as_user(cmd):
-        if sudo_user:
-            uid = _pwd.getpwnam(sudo_user).pw_uid
-            env = os.environ.copy()
-            env["DISPLAY"] = os.environ.get("DISPLAY", ":0")
-            env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path=/run/user/{uid}/bus"
-            env["XDG_RUNTIME_DIR"] = f"/run/user/{uid}"
-            cmd = ["sudo", "-u", sudo_user, "-E"] + cmd
-            return subprocess.run(cmd, capture_output=True, text=True, env=env)
-        return subprocess.run(cmd, capture_output=True, text=True)
 
     if shutil.which("kdialog") and ("KDE" in desktop or "PLASMA" in desktop):
         try:
-            r = _run_as_user(["kdialog", "--getopenfilename",
-                               os.path.expanduser("~"),
-                               f"{filter_img} | Bilder", "--title", title])
+            r = _run_as_sudouser(["kdialog", "--getopenfilename",
+                                   os.path.expanduser("~"),
+                                   f"{filter_img} | Bilder", "--title", title])
             return r.stdout.strip() if r.returncode == 0 else ""
         except Exception:
             pass
@@ -126,16 +133,95 @@ def native_open_image(title="Bild wählen"):
     if shutil.which("zenity"):
         try:
             patterns = [f"--file-filter=Bilder | {filter_img}", "--file-filter=Alle | *"]
-            r = _run_as_user(["zenity", "--file-selection", f"--title={title}"] + patterns)
+            r = _run_as_sudouser(["zenity", "--file-selection", f"--title={title}"] + patterns)
             return r.stdout.strip() if r.returncode == 0 else ""
         except Exception:
             pass
 
-    from tkinter import filedialog
     return filedialog.askopenfilename(
         title=title,
         filetypes=[("PNG","*.png"),("JPEG","*.jpg *.jpeg"),
                    ("BMP","*.bmp"),("WebP","*.webp"),("GIF","*.gif"),("Alle","*.*")])
+
+
+def native_open_folder(title="Ordner wählen"):
+    import shutil
+    desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").upper()
+
+    if shutil.which("kdialog") and ("KDE" in desktop or "PLASMA" in desktop):
+        try:
+            r = _run_as_sudouser(["kdialog", "--getexistingdirectory",
+                                   os.path.expanduser("~"), "--title", title])
+            return r.stdout.strip() if r.returncode == 0 else ""
+        except Exception:
+            pass
+
+    if shutil.which("zenity"):
+        try:
+            r = _run_as_sudouser(["zenity", "--file-selection", "--directory",
+                                   f"--title={title}"])
+            return r.stdout.strip() if r.returncode == 0 else ""
+        except Exception:
+            pass
+
+    return filedialog.askdirectory(title=title)
+
+
+def parse_desktop_apps():
+    """Scan .desktop files and return sorted list of (name, exec_cmd) for all visible apps.
+    Result is cached for the lifetime of the process."""
+    global _desktop_apps_cache
+    if _desktop_apps_cache is not None:
+        return _desktop_apps_cache
+
+    search_dirs = [
+        "/usr/share/applications",
+        "/usr/local/share/applications",
+        os.path.expanduser("~/.local/share/applications"),
+    ]
+    xdg_data = os.environ.get("XDG_DATA_DIRS", "")
+    for d in xdg_data.split(":"):
+        path = os.path.join(d, "applications")
+        if path not in search_dirs and os.path.isdir(path):
+            search_dirs.append(path)
+
+    apps = {}
+    for d in search_dirs:
+        try:
+            entries = os.listdir(d)
+        except FileNotFoundError:
+            continue
+        for fname in entries:
+            if not fname.endswith(".desktop"):
+                continue
+            path = os.path.join(d, fname)
+            try:
+                name = exec_cmd = None
+                no_display = hidden = False
+                with open(path, encoding="utf-8", errors="replace") as f:
+                    in_entry = False
+                    for line in f:
+                        line = line.strip()
+                        if line == "[Desktop Entry]":
+                            in_entry = True
+                        elif line.startswith("[") and line != "[Desktop Entry]":
+                            in_entry = False
+                        if not in_entry:
+                            continue
+                        if line.startswith("Name=") and name is None:
+                            name = line[5:]
+                        elif line.startswith("Exec=") and exec_cmd is None:
+                            raw = line[5:]
+                            exec_cmd = _DESKTOP_EXEC_RE.sub("", raw).strip()
+                        elif line == "NoDisplay=true":
+                            no_display = True
+                        elif line == "Hidden=true":
+                            hidden = True
+                if name and exec_cmd and not no_display and not hidden:
+                    apps[name] = exec_cmd
+            except Exception:
+                continue
+    return sorted(apps.items(), key=lambda x: x[0].lower())
 
 
 def save_style(style_arg):
@@ -152,7 +238,7 @@ def load_style():
 
 
 def load_buttons():
-    default = [{"icon": 7, "action": ""} for _ in range(4)]
+    default = [{"icon": 7, "action": "", "type": "shell"} for _ in range(4)]
     try:
         with open(BUTTON_FILE) as f:
             data = json.load(f)
@@ -416,9 +502,11 @@ class App(ctk.CTk):
         self._cpu_proc = None
 
         self._btn_action = [tk.StringVar(value="") for _ in range(4)]
+        self._btn_type   = [tk.StringVar(value="shell") for _ in range(4)]
         buttons = load_buttons()
         for i, b in enumerate(buttons):
             self._btn_action[i].set(b.get("action", ""))
+            self._btn_type[i].set(b.get("type", "shell"))
 
         obs_cfg = load_obs_config()
         self._obs_host     = tk.StringVar(value=obs_cfg["host"])
@@ -500,6 +588,16 @@ class App(ctk.CTk):
                 internal = self._obs_btn_type_internal[i]
                 display  = self._obs_type_options.get(internal, obs_type_labels[0])
                 self._obs_btn_type[i].set(display)
+
+        if hasattr(self, "_btn_type_menus"):
+            new_labels = self._numpad_type_labels_fn()
+            for i, menu in enumerate(self._btn_type_menus):
+                menu.configure(values=new_labels)
+                cur = self._btn_type[i].get()
+                try:
+                    menu.set(new_labels[self._numpad_type_internal.index(cur)])
+                except (ValueError, IndexError):
+                    menu.set(new_labels[1])
 
     # ── UI ────────────────────────────────────────────────────────────────────
 
@@ -693,48 +791,109 @@ class App(ctk.CTk):
             "numpad_subtitle"
         ).pack(pady=(8, 4))
 
-        self._img_btns    = []
-        self._upload_bars = []
+        self._img_btns        = []
+        self._upload_btns     = []
+        self._upload_bars     = []
+        self._btn_type_menus  = []
+        self._folder_btns     = []
+
+        _TYPE_INTERNAL = ["none", "shell", "url", "folder", "app"]
+
+        def _type_labels():
+            return [self.T("action_type_none"),   self.T("action_type_shell"),
+                    self.T("action_type_url"),     self.T("action_type_folder"),
+                    self.T("action_type_app")]
+
+        _folder_pil = Image.open(os.path.join(_RES, "resources", "foldericon.png")).convert("RGBA")
+        self._folder_img = ctk.CTkImage(light_image=_folder_pil, dark_image=_folder_pil, size=(24, 24))
+        _folder_pil_dim = _folder_pil.copy()
+        _folder_pil_dim.putalpha(_folder_pil_dim.getchannel("A").point(lambda v: v // 3))
+        self._folder_img_dim = ctk.CTkImage(light_image=_folder_pil_dim, dark_image=_folder_pil_dim, size=(24, 24))
+        _folder_img     = self._folder_img
+        _folder_img_dim = self._folder_img_dim
 
         for i in range(4):
             card = ctk.CTkFrame(b3, fg_color=BG3, corner_radius=4)
             card.pack(fill="x", padx=12, pady=2)
 
-            row = ctk.CTkFrame(card, fg_color="transparent")
-            row.pack(fill="x", padx=4, pady=(6, 2))
+            # Header row
+            header_row = ctk.CTkFrame(card, fg_color="transparent")
+            header_row.pack(fill="x", padx=8, pady=(6, 0))
+            ctk.CTkLabel(header_row, text=f"D{i+1}", font=("Helvetica", 10, "bold"),
+                         text_color=YLW).pack(side="left")
 
-            tk.Frame(row, bg=YLW, width=3).pack(side="left", fill="y")
-
-            ctk.CTkLabel(row, text=f"D{i+1}", font=("Helvetica", 10, "bold"),
-                         text_color=YLW, width=30).pack(side="left", padx=(6, 2))
+            # Action row
+            action_row = ctk.CTkFrame(card, fg_color="transparent")
+            action_row.pack(fill="x", padx=4, pady=(2, 2))
 
             self._reg(
-                ctk.CTkLabel(row, text="", font=("Helvetica", 11), text_color=FG2),
+                ctk.CTkLabel(action_row, text="", font=("Helvetica", 10),
+                             text_color=FG2, width=50, anchor="w"),
                 "action_label"
-            ).pack(side="left", padx=(2, 2))
-
-            ctk.CTkEntry(row, textvariable=self._btn_action[i],
-                         fg_color=BG2, text_color=FG, border_color=BORDER,
-                         font=("Helvetica", 11), width=165, height=30,
-                         ).pack(side="left", padx=4)
+            ).pack(side="left", padx=(4, 2))
 
             idx = i
-            ctk.CTkButton(row, text="✓", width=36, height=30,
+            cur_internal = self._btn_type[i].get()
+            labels = _type_labels()
+            cur_label = labels[_TYPE_INTERNAL.index(cur_internal)] if cur_internal in _TYPE_INTERNAL else labels[1]
+
+            type_menu = ctk.CTkOptionMenu(
+                action_row, values=labels,
+                fg_color=BG2, button_color=BLUE, button_hover_color="#0884be",
+                text_color=FG, font=("Helvetica", 11), width=88, height=30,
+                dynamic_resizing=False,
+                command=lambda val, ix=idx: self._on_btn_type_change(val, ix)
+            )
+            type_menu.set(cur_label)
+            type_menu.pack(side="left", padx=(2, 2))
+            self._btn_type_menus.append(type_menu)
+
+            ctk.CTkEntry(action_row, textvariable=self._btn_action[i],
+                         fg_color=BG2, text_color=FG, border_color=BORDER,
+                         font=("Helvetica", 11), height=30,
+                         ).pack(side="left", padx=4, expand=True, fill="x")
+
+            cur_type = self._btn_type[i].get()
+            browse_active = cur_type in ("folder", "app")
+            folder_btn = ctk.CTkButton(
+                action_row, text="",
+                image=_folder_img if browse_active else _folder_img_dim,
+                width=30, height=30,
+                command=lambda ix=idx: self._browse_action(ix),
+                fg_color="transparent", hover_color=BG3, corner_radius=4,
+                state="normal" if browse_active else "disabled",
+            )
+            folder_btn.pack(side="left", padx=(0, 2))
+            self._folder_btns.append(folder_btn)
+
+            ctk.CTkButton(action_row, text="✓", width=36, height=30,
                           command=lambda ix=idx: self._apply_btn(ix),
                           fg_color=GRN, text_color=FG, hover_color="#18a348",
                           font=("Helvetica", 10, "bold"), corner_radius=4,
-                          ).pack(side="left", padx=2)
+                          ).pack(side="left", padx=(0, 4))
 
-            img_btn = self._reg(
-                ctk.CTkButton(row, text="", width=72, height=30,
-                              command=lambda ix=idx: self._upload_image(ix),
-                              fg_color=BLUE, text_color=FG, hover_color="#0884be",
-                              font=("Helvetica", 11, "bold"), corner_radius=4,
-                              border_width=0),
-                "image_btn"
+            # Image row
+            image_row = ctk.CTkFrame(card, fg_color="transparent")
+            image_row.pack(fill="x", padx=4, pady=(0, 4))
+
+            self._reg(
+                ctk.CTkLabel(image_row, text="", font=("Helvetica", 10),
+                             text_color=FG2, width=50, anchor="w"),
+                "image_label"
+            ).pack(side="left", padx=(4, 2))
+
+            upload_btn = self._reg(
+                ctk.CTkButton(
+                    image_row, text="",
+                    fg_color=BLUE, text_color=FG, hover_color="#0884be",
+                    font=("Helvetica", 11), height=30, corner_radius=4,
+                    command=lambda ix=idx: self._upload_image(ix),
+                ),
+                "main_display_upload"
             )
-            img_btn.pack(side="left", padx=(2, 6))
-            self._img_btns.append(img_btn)
+            upload_btn.pack(side="left", padx=(2, 4), expand=True)
+            self._upload_btns.append(upload_btn)
+            self._img_btns.append(upload_btn)
 
             bar = ctk.CTkProgressBar(card, mode="determinate",
                                      progress_color=BLUE, fg_color=BG3,
@@ -742,6 +901,19 @@ class App(ctk.CTk):
             bar.set(0)
             bar.pack(fill="x", padx=4, pady=(0, 4))
             self._upload_bars.append(bar)
+
+        self._numpad_type_internal = _TYPE_INTERNAL
+        self._numpad_type_labels_fn = _type_labels
+
+        reset_row = ctk.CTkFrame(b3, fg_color="transparent")
+        reset_row.pack(fill="x", padx=8, pady=(4, 0))
+        self._reg(
+            ctk.CTkButton(reset_row, text="", height=28, corner_radius=4,
+                          fg_color=RED, hover_color="#b91c1c", text_color=FG,
+                          font=("Helvetica", 11),
+                          command=self._reset_buttons_flash),
+            "reset_buttons_btn"
+        ).pack(fill="x")
 
         self._numpad_info = ctk.CTkLabel(b3, text="", font=("Helvetica", 11),
                                           text_color=GRN)
@@ -1065,12 +1237,7 @@ class App(ctk.CTk):
                 dropdown_hover_color=BG3)
             scene_combo.pack(side="left", padx=4)
             self._obs_scene_entries.append(scene_combo)
-
-            ctk.CTkButton(row, text="✓", width=36, height=30,
-                          command=lambda ix=idx: self._obs_save_btn(ix),
-                          fg_color=GRN, text_color=FG, hover_color="#18a348",
-                          font=("Helvetica", 10, "bold"), corner_radius=4,
-                          ).pack(side="left", padx=4)
+            self._obs_btn_scene[i].trace_add("write", lambda *_, ix=idx: self._obs_auto_save(ix))
 
         self._obs_info = ctk.CTkLabel(b4, text="", font=("Helvetica", 11),
                                        text_color=GRN)
@@ -1314,6 +1481,15 @@ class App(ctk.CTk):
                 self.after(0, lambda: callback(ok))
         threading.Thread(target=task, daemon=True).start()
 
+    def _stop_cpu_proc(self):
+        """Terminate CPU monitor if running. Returns True if it was running."""
+        if self._cpu_proc and self._cpu_proc.poll() is None:
+            self._cpu_proc.terminate()
+            self._cpu_proc.wait()
+            self._cpu_proc = None
+            return True
+        return False
+
     def _start_cpu_auto_clean(self):
         """First start: kill orphans from previous sessions in background, then start."""
         def run():
@@ -1433,16 +1609,114 @@ class App(ctk.CTk):
         self._obs_btn_type_internal[idx] = internal_val
         combo = self._obs_scene_entries[idx]
         combo.configure(state="normal" if internal_val == "scene" else "disabled")
+        self._obs_auto_save(idx)
 
-    def _obs_save_btn(self, idx):
+    def _obs_auto_save(self, idx):
         save_obs_config(self._obs_build_cfg())
         self._obs_info.configure(text=self.T("obs_saved", d=idx+1), text_color=GRN)
+
+    def _on_btn_type_change(self, label, idx):
+        labels = self._numpad_type_labels_fn()
+        try:
+            internal = self._numpad_type_internal[labels.index(label)]
+        except (ValueError, IndexError):
+            internal = "shell"
+        self._btn_type[idx].set(internal)
+        if hasattr(self, "_folder_btns") and idx < len(self._folder_btns):
+            btn = self._folder_btns[idx]
+            if internal in ("folder", "app"):
+                btn.configure(state="normal", image=self._folder_img)
+            else:
+                btn.configure(state="disabled", image=self._folder_img_dim)
+
+    def _browse_action(self, idx):
+        btype = self._btn_type[idx].get()
+        if btype == "folder":
+            path = native_open_folder()
+            if path:
+                self._btn_action[idx].set(path)
+        elif btype == "app":
+            self._show_app_picker(idx)
+
+    def _show_app_picker(self, idx):
+        apps = parse_desktop_apps()
+        if not apps:
+            return
+
+        dlg = ctk.CTkToplevel(self)
+        dlg.title(self.T("app_picker_title"))
+        dlg.configure(fg_color=BG)
+        dlg.resizable(False, False)
+        dlg.geometry("360x480")
+        dlg.update_idletasks()
+        dlg.grab_set()
+
+        search_var = tk.StringVar()
+        search_entry = ctk.CTkEntry(
+            dlg, textvariable=search_var, placeholder_text=self.T("app_picker_search"),
+            fg_color=BG2, text_color=FG, border_color=BORDER,
+            font=("Helvetica", 12), height=34,
+        )
+        search_entry.pack(fill="x", padx=12, pady=(12, 6))
+        search_entry.focus()
+
+        list_frame = ctk.CTkScrollableFrame(dlg, fg_color=BG2, corner_radius=6)
+        list_frame.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+
+        result = [None]
+        _btn_refs = []
+
+        def _select(name, exec_cmd):
+            result[0] = exec_cmd
+            self._btn_action[idx].set(exec_cmd)
+            dlg.destroy()
+
+        def _rebuild(filter_text=""):
+            for b in _btn_refs:
+                b.destroy()
+            _btn_refs.clear()
+            ft = filter_text.lower()
+            for name, exec_cmd in apps:
+                if ft and ft not in name.lower():
+                    continue
+                b = ctk.CTkButton(
+                    list_frame, text=name, anchor="w",
+                    fg_color="transparent", text_color=FG,
+                    hover_color=BG3, font=("Helvetica", 11),
+                    height=30, corner_radius=4,
+                    command=lambda n=name, e=exec_cmd: _select(n, e),
+                )
+                b.pack(fill="x", pady=1)
+                _btn_refs.append(b)
+
+        _rebuild()
+        search_var.trace_add("write", lambda *_: _rebuild(search_var.get()))
 
     def _apply_btn(self, idx):
         buttons = load_buttons()
         buttons[idx]["action"] = self._btn_action[idx].get().strip()
+        buttons[idx]["type"]   = self._btn_type[idx].get()
         save_buttons(buttons)
         self._numpad_info.configure(text=self.T("action_saved", d=idx+1), text_color=GRN)
+
+    def _reset_buttons_flash(self):
+        was_running = self._stop_cpu_proc()
+
+        self._numpad_info.configure(text=self.T("reset_buttons_running"), text_color=FG2)
+
+        def _run():
+            time.sleep(0.5)
+            r = subprocess.run(_cmd("reset-buttons"), capture_output=True)
+            if r.returncode == 0:
+                self.after(0, lambda: self._numpad_info.configure(
+                    text=self.T("reset_buttons_done"), text_color=GRN))
+            else:
+                self.after(0, lambda: self._numpad_info.configure(
+                    text=self.T("reset_buttons_error"), text_color=RED))
+            if was_running:
+                self.after(0, self._start_cpu_auto)
+
+        threading.Thread(target=_run, daemon=True).start()
 
     def _pick_gif_frame(self, path, n_frames):
         dlg = ctk.CTkToplevel(self)

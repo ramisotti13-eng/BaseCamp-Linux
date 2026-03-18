@@ -23,7 +23,7 @@ The GUI is split into a persistent **dashboard** at the top and six collapsible 
 - **Dashboard** — Live clock display with 24H/12H toggle, language switcher (DE/EN + custom), Analog/Digital display style, splash screen and autostart toggles
 - **Monitor Mode** — Start/stop live keyboard display with CPU%, GPU%, RAM%, HDD% and Network MB/s metrics
 - **Main Display** — Switch between image and clock mode, upload a custom 240×204 image to the keyboard's main display
-- **Numpad Keys** — Assign shell commands and custom 72×72 images (including GIF frame picker) to D1–D4
+- **Numpad Keys** — Assign actions (Shell, URL, Folder, App) and custom 72×72 images (including GIF frame picker) to D1–D4
 - **RGB Lighting** — Control keyboard RGB effects (Wave, Tornado, Reactive, Yeti, Matrix, and more) with speed, brightness, color and direction — settings saved automatically
 - **Custom RGB Mode (Beta)** — Set individual colors per keyboard zone (F Keys, Number Row, QWERTY, Home Row, Shift Row, Bottom Row, Numpad) plus the side ring LEDs — colors and brightness saved automatically
 - **OBS Integration** — Connect to OBS via WebSocket and trigger scene switches, recording or streaming from any D-button
@@ -35,12 +35,12 @@ The GUI is split into a persistent **dashboard** at the top and six collapsible 
 - **Display styles** — Switch between Analog and Digital clock on the keyboard display
 - **24H / 12H** — Toggle clock format
 - **Monitor mode** — Live metrics on the keyboard display: CPU%, GPU%, RAM%, HDD%, Network MB/s
-- **Button actions (D1–D4)** — Assign any shell command to the 4 numpad keys (open apps, scripts, etc.)
+- **Button actions (D1–D4)** — Assign Shell commands, URLs, folders or installed apps to D1–D4 — with native folder picker and searchable app picker
 - **Image upload (D1–D4)** — Upload custom 72×72 images to each button (GIF frame picker included)
 - **Main display upload** — Upload a custom 240×204 image to the keyboard's main display
 - **RGB Lighting** — Full RGB effect control: Wave, Tornado, Tornado Rainbow, Reactive, Yeti, Matrix, Off — with speed, brightness, color pickers and direction — settings saved to config
 - **Custom RGB Mode (Beta)** — Per-zone keyboard colors (7 zones) + side ring LED color and brightness — saved to config with reset-to-defaults button
-- **OBS integration** — Connect to OBS via WebSocket and trigger scene switches, recording or streaming from D1–D4
+- **OBS integration** — Connect to OBS via WebSocket and trigger scene switches, recording or streaming from D1–D4 — settings save automatically on change
 - **System tray** — Minimize to tray, runs in the background
 - **Internationalization** — UI language switchable at runtime via external JSON files (DE + EN included, add your own)
 

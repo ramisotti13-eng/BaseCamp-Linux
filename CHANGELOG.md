@@ -1,5 +1,26 @@
 # Changelog
 
+## [1.3.1] - 2026-03-18
+
+### Numpad Keys — Action Types
+- Added action type selector per D-button: Shell, URL, Folder, App, None
+- New folder picker: opens native file manager dialog to browse for a folder
+- New app picker: searchable list of installed `.desktop` applications
+- Actions are saved immediately to config when ✓ is pressed — no restart required
+- New **Reset Buttons Flash** button: writes all 4 button actions to keyboard flash at once
+
+### OBS Integration
+- Removed per-button ✓ save button — type and scene changes now save automatically
+
+### Bug Fixes
+- Fixed: D4 button press not detected (Write 2/3 in `_write_action` was disabling the flash slot before byte42 could activate)
+- Fixed: `XDG_RUNTIME_DIR` not set when launching apps/folders from D-button press as sudo user
+
+### Code Quality
+- All CLI error messages changed from German to English
+
+---
+
 ## [1.3.0] - 2026-03-17
 
 ### RGB Lighting
