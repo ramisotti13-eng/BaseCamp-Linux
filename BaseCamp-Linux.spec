@@ -5,7 +5,7 @@ a = Analysis(
     ['gui.py'],
     pathex=[],
     binaries=[],
-    datas=[('lang', 'lang'), ('logo.png', '.'), ('resources', 'resources')],
+    datas=[('lang', 'lang'), ('logo.png', '.'), ('resources', 'resources'), ('default_presets.json', '.')],
     hiddenimports=['PIL', 'PIL._tkinter_finder', 'PIL._imagingtk', 'psutil', 'pystray', 'obsws_python'],
     hookspath=[],
     hooksconfig={},
