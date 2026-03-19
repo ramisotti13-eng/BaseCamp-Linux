@@ -22,8 +22,8 @@ The GUI is split into a persistent **dashboard** at the top and six collapsible 
 
 - **Dashboard** — Live clock display with 24H/12H toggle, language switcher (DE/EN + custom), Analog/Digital display style, splash screen and autostart toggles
 - **Monitor Mode** — Start/stop live keyboard display with CPU%, GPU%, RAM%, HDD% and Network MB/s metrics
-- **Main Display** — Switch between image and clock mode, upload a custom 240×204 image to the keyboard's main display
-- **Numpad Keys** — Assign actions (Shell, URL, Folder, App) and custom 72×72 images (including GIF frame picker) to D1–D4
+- **Main Display** — Switch between image and clock mode, upload any image to the keyboard's main display — automatically converted to the correct format
+- **Numpad Keys** — Assign actions (Shell, URL, Folder, App) and custom button images (including GIF frame picker) to D1–D4 — automatically converted to the correct format
 - **RGB Lighting** — Control keyboard RGB effects (Wave, Tornado, Reactive, Yeti, Matrix, and more) with speed, brightness, color and direction — settings saved automatically
 - **Custom RGB Mode (Beta)** — Set individual colors per keyboard zone (F Keys, Number Row, QWERTY, Home Row, Shift Row, Bottom Row, Numpad) plus the side ring LEDs — colors and brightness saved automatically
 - **OBS Integration** — Connect to OBS via WebSocket and trigger scene switches, recording or streaming from any D-button
@@ -36,8 +36,8 @@ The GUI is split into a persistent **dashboard** at the top and six collapsible 
 - **24H / 12H** — Toggle clock format
 - **Monitor mode** — Live metrics on the keyboard display: CPU%, GPU%, RAM%, HDD%, Network MB/s
 - **Button actions (D1–D4)** — Assign Shell commands, URLs, folders or installed apps to D1–D4 — with native folder picker and searchable app picker. Use **Reset Buttons Flash** after first setup or when switching from Mountain Base Camp — BaseCamp may have stored its own actions in the keyboard's flash memory, which can cause two actions to fire on a single button press. Reset Buttons Flash overwrites all four slots with your configured actions, clearing any leftover BaseCamp data.
-- **Image upload (D1–D4)** — Upload custom 72×72 images to each button (GIF frame picker included)
-- **Main display upload** — Upload a custom 240×204 image to the keyboard's main display
+- **Image upload (D1–D4)** — Upload any image to the D-buttons — automatically converted and resized (GIF frame picker included)
+- **Main display upload** — Upload any image to the keyboard's main display — automatically converted and resized
 - **RGB Lighting** — Full RGB effect control: Wave, Tornado, Tornado Rainbow, Reactive, Yeti, Matrix, Off — with speed, brightness, color pickers and direction — settings saved to config
 - **Custom RGB Mode (Beta)** — Per-zone keyboard colors (7 zones) + side ring LED color and brightness — saved to config with reset-to-defaults button
 - **OBS integration** — Connect to OBS via WebSocket and trigger scene switches, recording or streaming from D1–D4 — settings save automatically on change
