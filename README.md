@@ -48,15 +48,6 @@ The GUI is split into a persistent **dashboard** at the top and six collapsible 
 
 ## Known Issues
 
-### Folder / App actions not working on Arch / CachyOS / KDE (AppImage)
-
-When a D-button is configured to open a folder or launch an app, pressing the button shows an "application chooser" dialog or produces the error `org.kde.dolphin was not found`.
-
-**Affected:** Arch, CachyOS, Manjaro — KDE Plasma — AppImage install only
-**Status:** Under investigation, fix coming soon
-
----
-
 ### Main display stuck on Mountain logo (rare)
 
 In rare cases the main display shows the original Mountain logo and cannot be overwritten with a new image — the upload appears to complete but the logo stays.

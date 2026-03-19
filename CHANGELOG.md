@@ -15,6 +15,7 @@
 ### Bug Fixes
 - Fixed: D4 button press not detected (Write 2/3 in `_write_action` was disabling the flash slot before byte42 could activate)
 - Fixed: `XDG_RUNTIME_DIR` not set when launching apps/folders from D-button press as sudo user
+- Fixed: Folder/App actions not working on Arch/CachyOS/KDE — controller now auto-detects Wayland vs X11 and sets the correct display environment (`WAYLAND_DISPLAY` or `DISPLAY`)
 
 ### Code Quality
 - All CLI error messages changed from German to English
