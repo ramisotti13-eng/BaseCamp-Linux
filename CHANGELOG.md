@@ -23,6 +23,8 @@
 
 ### Bug Fixes
 - Fixed: Direction dropdown visible on startup when Static effect was selected
+- Fixed: Custom RGB colors not applying to keyboard in AppImage — `basecamp-controller` was not rebuilt with `per-key-rgb` support
+- Fixed: Synthwave preset not loading side LED colors — wrong JSON key (`side_leds` → `side`)
 
 ---
 
