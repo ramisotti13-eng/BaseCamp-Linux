@@ -689,6 +689,58 @@ def set_custom_rgb(zone_colors, side_color=(0, 0, 0), brightness=100):
         _release(dev)
 
 
+def set_per_key_rgb(led_colors, side_colors=None, brightness=100):
+    """Set per-key RGB colors via custom mode (§5.11).
+    led_colors: list of (r,g,b) indexed by color index 0–125 (see §11.1).
+    side_colors: list of (r,g,b) for 45 side ring LEDs, or None for black.
+    """
+    leds = list(led_colors)[:126]
+    leds += [(0, 0, 0)] * max(0, 126 - len(leds))
+    leds += [(0, 0, 0)] * 26   # pad to 152 (8 packets × 19 slots)
+    side = list(side_colors or [])
+    side += [(0, 0, 0)] * max(0, 45 - len(side))
+    side = side[:45]
+
+    dev = _get_claimed_device()
+    try:
+        def _wr(pkt):
+            dev.write(EP_OUT, bytes(pkt))
+            try: dev.read(EP_IN, PKT_SIZE, timeout=200)
+            except Exception: pass
+            time.sleep(0.020)
+
+        pkt = bytearray(PKT_SIZE)
+        pkt[0] = 0x14; pkt[1] = 0x2c; pkt[2] = 0x0a
+        pkt[4] = 0xff; pkt[5] = brightness
+        _wr(pkt)
+        time.sleep(0.150)
+
+        for ix in range(8):
+            pkt = bytearray(PKT_SIZE)
+            pkt[0] = 0x14; pkt[1] = 0x2c; pkt[2] = 0x00; pkt[3] = 0x01
+            pkt[4] = ix; pkt[5] = brightness
+            for i in range(19):
+                r, g, b = leds[ix * 19 + i]
+                pkt[7 + i * 3] = r; pkt[7 + i * 3 + 1] = g; pkt[7 + i * 3 + 2] = b
+            _wr(pkt)
+
+        for ix, count in enumerate([19, 19, 7]):
+            pkt = bytearray(PKT_SIZE)
+            pkt[0] = 0x14; pkt[1] = 0x2d; pkt[2] = 0x0a
+            pkt[4] = ix; pkt[5] = 0xff
+            for i in range(count):
+                r, g, b = side[ix * 19 + i]
+                pkt[7 + i * 3] = r; pkt[7 + i * 3 + 1] = g; pkt[7 + i * 3 + 2] = b
+            _wr(pkt)
+
+        for chunk in range(3):
+            pkt = bytearray(PKT_SIZE)
+            pkt[0] = 0x14; pkt[1] = 0xa0; pkt[2] = chunk; pkt[3] = 0x01
+            _wr(pkt)
+    finally:
+        _release(dev)
+
+
 def reset_dial_image():
     """Reset the dial image to the factory Mountain logo (protocol §3.4)."""
     dev = usb.core.find(idVendor=VID, idProduct=PID)
@@ -988,6 +1040,8 @@ if __name__ == "__main__":
     gif_frame         = 0
     activate_custom   = False
     rgb_args          = []
+    per_key_json      = "{}"
+    per_key_persist   = False
     i = 0
     while i < len(args):
         a = args[i]
@@ -1034,6 +1088,12 @@ if __name__ == "__main__":
             # remaining args are zone:rrggbb pairs and optional brightness:N
             custom_rgb_args = args[i + 1:]
             i = len(args)
+        elif a == "per-key-rgb" and i + 1 < len(args):
+            mode = "per-key-rgb"
+            per_key_json = args[i + 1]
+            i += 1
+        elif a == "--persist":
+            per_key_persist = True
         elif a == "--activate-custom":
             activate_custom = True
         elif a == "--frame" and i + 1 < len(args):
@@ -1112,5 +1172,24 @@ if __name__ == "__main__":
                 else:
                     zone_colors[k] = rgb
         set_custom_rgb(zone_colors, side_color=side_color, brightness=brightness)
+    elif mode == "per-key-rgb":
+        import json as _json
+        data = _json.loads(per_key_json)
+        leds = [tuple(c) for c in data.get("leds", [])]
+        side_raw = data.get("side", [])
+        side = [tuple(c) for c in side_raw] if side_raw else None
+        bri = int(data.get("brightness", 100))
+        set_per_key_rgb(leds, side, bri)
+        if per_key_persist:
+            # §5.11.8: commit to slot 6 (Custom)
+            dev = _get_claimed_device()
+            try:
+                pkt = bytearray(PKT_SIZE)
+                pkt[0] = 0x13; pkt[1] = 0x55; pkt[4] = 0x06
+                dev.write(EP_OUT, bytes(pkt))
+                try: dev.read(EP_IN, PKT_SIZE, timeout=300)
+                except Exception: pass
+            finally:
+                _release(dev)
     else:
         send_time(style)

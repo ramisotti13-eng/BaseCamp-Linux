@@ -3,7 +3,7 @@
 import tkinter as tk
 from tkinter import filedialog
 import customtkinter as ctk
-from PIL import Image, ImageTk
+from PIL import Image, ImageTk, ImageEnhance
 import subprocess
 import datetime
 import threading
@@ -12,6 +12,8 @@ import time
 import sys
 import os
 import json
+import math
+import colorsys
 import psutil
 import pwd as _pwd
 
@@ -53,6 +55,8 @@ OBS_BACKUP_FILE = os.path.join(CONFIG_DIR, "obs_backup.json")
 MAIN_MODE_FILE  = os.path.join(CONFIG_DIR, "main_display_mode")
 ZONE_FILE       = os.path.join(CONFIG_DIR, "zone_colors.json")
 RGB_FILE        = os.path.join(CONFIG_DIR, "rgb_settings.json")
+PER_KEY_FILE    = os.path.join(CONFIG_DIR, "per_key_colors.json")
+RGB_PRESETS_FILE = os.path.join(CONFIG_DIR, "rgb_presets.json")
 
 OBS_INTERNAL_ORDER = ["none", "scene", "record", "stream"]
 
@@ -361,6 +365,1016 @@ def save_rgb_config(data):
     import json as _json
     with open(RGB_FILE, "w") as f:
         f.write(_json.dumps(data, indent=2))
+
+
+# ── Per-Key RGB ───────────────────────────────────────────────────────────────
+
+_SIDE_ZONE_INDICES = [
+    [13,14,15,7,6,5,4,3,2,1,0],           # main top   (11)
+    [9,8,10,11],                            # main right  (4)
+    [20,21,22,23,24,25,26,27,28,29,30,12], # main bottom(12)
+    [16,17,18,19],                          # main left   (4)
+    [31,44,43,42],                          # np top      (4)
+    [41,40,39],                             # np right    (3)
+    [35,36,37,38],                          # np bottom   (4)
+    [32,33,34],                             # np left     (3)
+]
+
+
+def _load_per_key():
+    import json as _j
+    default_side = [(255, 255, 255)] * 45
+    try:
+        d = _j.loads(open(PER_KEY_FILE).read())
+        leds = [tuple(c) for c in d.get("leds", [])]
+        leds = (leds + [(20, 20, 20)] * 126)[:126]
+        raw = d.get("side", [])
+        if isinstance(raw, list) and len(raw) == 45:
+            side = [tuple(c) for c in raw]
+        elif isinstance(raw, dict):
+            # backward compat: zone dict → expand to 45
+            side = list(default_side)
+            zone_map = {
+                "Top":    _SIDE_ZONE_INDICES[0], "Right":  _SIDE_ZONE_INDICES[1],
+                "Bottom": _SIDE_ZONE_INDICES[2], "Left":   _SIDE_ZONE_INDICES[3],
+                "NP": _SIDE_ZONE_INDICES[4] + _SIDE_ZONE_INDICES[5] +
+                      _SIDE_ZONE_INDICES[6] + _SIDE_ZONE_INDICES[7],
+            }
+            for z, idxs in zone_map.items():
+                c = tuple(raw.get(z, (255, 255, 255)))
+                for i in idxs:
+                    side[i] = c
+        else:
+            side = list(default_side)
+        bri = int(d.get("brightness", 100))
+        return leds, side, bri
+    except Exception:
+        return [(20, 20, 20)] * 126, list(default_side), 100
+
+
+def _save_per_key(leds, side, bri):
+    import json as _j
+    with open(PER_KEY_FILE, "w") as f:
+        f.write(_j.dumps({"leds": [list(c) for c in leds],
+                           "side": [list(c) for c in side],
+                           "brightness": bri}, indent=2))
+
+
+def _load_presets():
+    import json as _j
+    # Built-in presets shipped with the app
+    defaults = {}
+    _default_file = os.path.join(_RES, "default_presets.json")
+    try:
+        defaults = _j.loads(open(_default_file).read())
+    except Exception:
+        pass
+    # User presets (override built-ins if same name)
+    try:
+        user = _j.loads(open(RGB_PRESETS_FILE).read())
+        defaults.update(user)
+    except Exception:
+        pass
+    return defaults
+
+
+def _save_presets(presets):
+    import json as _j
+    with open(RGB_PRESETS_FILE, "w") as f:
+        f.write(_j.dumps(presets, indent=2))
+
+
+def _build_kb_layout():
+    """Return list of (label, led_idx_or_None, x, y, w, h) for all keys."""
+    SC = 0.82
+    KH = int(30 * SC)       # key height  ≈ 24px
+    RS = int(32 * SC)       # row stride  ≈ 26px
+    IW = int(510 * SC)      # onediv inner width ≈ 418px
+    FW = int(616 * SC)      # fn-row full inner width ≈ 505px
+    OX = 14 + int(26 * SC)  # onediv x-start ≈ 35px
+    OY = 14 + int(12 * SC)  # onediv y-start ≈ 23px
+    # numpad params
+    NP_X0 = 14 + int(642 * SC) + 32  # gap for side LEDs + visual separation
+    NPS   = int(33 * SC)              # ≈ 27px
+    NPG   = int(7 * SC)               # ≈ 5px
+    # mini-div (nav + arrow cluster): 3 cols, anchored to numpad left edge
+    # layout: col0=← only, col1=nav+↑+↓, col2=nav+→
+    MS  = 25                        # mini key width
+    MG  = 4                         # mini col gap
+    npx = NP_X0 + int(5 * SC)      # first numpad key x
+    MX  = OX + IW + 8              # col0 anchored 8px right of main keyboard
+    NPTAL = KH + RS                   # tall key height ≈ 50px
+
+    def sbet(specs, inner_w, y):
+        total = sum(int(w * SC) for _, _, w in specs)
+        gap   = (inner_w - total) / max(1, len(specs) - 1)
+        res, x = [], OX
+        for lbl, idx, cw in specs:
+            pw = int(cw * SC)
+            res.append((lbl, idx, int(x), y, pw, KH))
+            x += pw + gap
+        return res
+
+    L = []
+    # Row 0 — Fn (full width FW)
+    L += sbet([
+        ('ESC',0,30),('F1',9,30),('F2',18,30),('F3',27,30),
+        ('F4',36,30),('F5',45,30),('F6',54,30),('F7',63,30),
+        ('F8',72,30),('F9',81,30),('F10',90,30),('F11',99,30),
+        ('F12',108,30),('PrtSc',117,30),('ScrLk',114,30),('Pause',123,30),
+    ], FW, OY)
+
+    # Row 1 — Number row  + nav: Ins Del
+    y1 = OY + RS
+    L += sbet([
+        ('`',1,30),('1',10,30),('2',19,30),('3',28,30),('4',37,30),
+        ('5',46,30),('6',55,30),('7',64,30),('8',73,30),('9',82,30),
+        ('0',91,30),('-',100,30),('=',109,30),('⌫',87,68),
+    ], IW, y1)
+    L += [('Ins',96,MX+MS+MG,y1,MS,KH), ('Del',88,MX+2*(MS+MG),y1,MS,KH)]
+
+    # Row 2 — QWERTY  + Home PgUp
+    y2 = OY + 2 * RS
+    L += sbet([
+        ('Tab',2,50),('Q',11,30),('W',20,30),('E',29,30),('R',38,30),
+        ('T',47,30),('Y',56,30),('U',65,30),('I',74,30),('O',83,30),
+        ('P',92,30),('[',101,30),(']',110,30),('\\',119,50),
+    ], IW, y2)
+    L += [('Home',105,MX+MS+MG,y2,MS,KH), ('PgUp',115,MX+2*(MS+MG),y2,MS,KH)]
+
+    # Row 3 — Home row  + End PgDn
+    y3 = OY + 3 * RS
+    L += sbet([
+        ('Caps',3,60),('A',12,30),('S',21,30),('D',30,30),('F',39,30),
+        ('G',48,30),('H',57,30),('J',66,30),('K',75,30),('L',84,30),
+        (';',93,30),("'",102,30),('↵',120,73),
+    ], IW, y3)
+    L += [('End',97,MX+MS+MG,y3,MS,KH), ('PgDn',106,MX+2*(MS+MG),y3,MS,KH)]
+
+    # Row 4 — Shift  + ↑
+    y4 = OY + 4 * RS
+    L += sbet([
+        ('⇧',4,80),('Z',22,30),('X',31,30),('C',40,30),('V',49,30),
+        ('B',58,30),('N',67,30),('M',76,30),(',',85,30),('.',94,30),
+        ('/',103,30),('⇧',121,88),
+    ], IW, y4)
+    L.append(('↑', 124, MX + MS + MG, y4, MS, KH))  # col1, above ↓
+
+    # Row 5 — Bottom  + ← ↓ →
+    y5 = OY + 5 * RS
+    L += sbet([
+        ('Ctrl',5,42),('⊞',14,42),('Alt',23,42),(' ',41,210),
+        ('Alt',68,42),('⊞',77,42),('FN',86,42),('≡',None,42),('Ctrl',95,42),
+    ], IW, y5)
+    L += [
+        ('←',104,MX,y5,MS,KH),
+        ('↓',113,MX+MS+MG,y5,MS,KH),
+        ('→',122,MX+2*(MS+MG),y5,MS,KH),
+    ]
+
+    # Numpad
+    npx = NP_X0 + int(5 * SC)
+    npy = OY
+    for i, (lbl, idx) in enumerate([('NumLk',6),('/',24),('*',16),('-',15)]):
+        L.append((lbl, idx, npx + i*(NPS+NPG), npy, NPS, KH))
+    for i, (lbl, idx) in enumerate([('7',61),('8',69),('9',70)]):
+        L.append((lbl, idx, npx + i*(NPS+NPG), npy+RS, NPS, KH))
+    L.append(('+', 7, npx + 3*(NPS+NPG), npy+RS, NPS, NPTAL))
+    for i, (lbl, idx) in enumerate([('4',51),('5',52),('6',60)]):
+        L.append((lbl, idx, npx + i*(NPS+NPG), npy+2*RS, NPS, KH))
+    for i, (lbl, idx) in enumerate([('1',34),('2',42),('3',43)]):
+        L.append((lbl, idx, npx + i*(NPS+NPG), npy+3*RS, NPS, KH))
+    L.append(('↵', 33, npx + 3*(NPS+NPG), npy+3*RS, NPS, NPTAL))
+    L.append(('0', 78, npx, npy+4*RS, 2*NPS+NPG, KH))
+    L.append(('.', 79, npx + 2*NPS+2*NPG, npy+4*RS, NPS, KH))
+
+    return L
+
+
+_KB_LAYOUT    = _build_kb_layout()
+_KB_CANVAS_W  = 14 + int(642 * 0.82) + 32 + int(166 * 0.82) + 14  # gap=32 for side LEDs
+_KB_CANVAS_H  = (14 + int(12 * 0.82)) + 5 * int(32 * 0.82) + int(30 * 0.82) + 18 + 24  # +24 for side LED rows
+_SIDE_SZ      = 9   # side LED square pixel size
+_SIDE_OFFSET  = 12  # vertical canvas margin for top/bottom side LEDs
+
+_QUICK_COLORS = [
+    ("#ff0000", (255,0,0)), ("#ff8800", (255,136,0)),
+    ("#ffff00", (255,255,0)), ("#00ff00", (0,255,0)),
+    ("#00ffff", (0,255,255)), ("#0088ff", (0,136,255)),
+    ("#8800ff", (136,0,255)), ("#ff00ff", (255,0,255)),
+    ("#ffffff", (255,255,255)), ("#000000", (0,0,0)),
+]
+
+# Side LED render positions (§11.2).
+# Each tuple: (side_led_indices_in_order, x1, x2, y_or_x, orientation)
+# Defined dynamically in _draw_keys; stored here for profile compat only.
+# Individual LED index order (left→right or top→bottom per side):
+#   Main top(11):    13,14,15,7,6,5,4,3,2,1,0
+#   Main right(4):   9,8,10,11
+#   Main bottom(12): 20,21,22,23,24,25,26,27,28,29,30,12
+#   Main left(4):    16,17,18,19
+#   NP top(4):       31,44,43,42
+#   NP right(3):     41,40,39
+#   NP bottom(4):    35,36,37,38
+#   NP left(3):      32,33,34
+
+
+class CustomRGBWindow(ctk.CTkToplevel):
+    def __init__(self, app):
+        super().__init__(app)
+        self.title("Custom RGB — Per Key")
+        self.resizable(False, False)
+        self._app = app
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        self._leds, self._side_leds, self._bri = _load_per_key()
+        self._selected   = set()         # key idx 0-125; side idx 200-244
+        self._fill_rgb   = (255, 0, 0)   # current paint color
+        self._drag_rect  = None          # (x0,y0) start of drag
+        self._item_led   = {}            # canvas item_id → idx
+        self._led_item   = {}            # idx → canvas item_id
+        self._undo_stack = []            # list of (leds, side_leds) snapshots
+
+        self._build_ui()
+        self.after(50, self._draw_keys)  # wait for canvas to be ready
+
+    # ── UI ────────────────────────────────────────────────────────────────
+
+    def _build_ui(self):
+        PAD = 12
+        self.configure(fg_color=BG)
+
+        # ── keyboard canvas ───────────────────────────────────────────────
+        self._cv = tk.Canvas(self, width=_KB_CANVAS_W, height=_KB_CANVAS_H,
+                             bg="#111118", highlightthickness=0, bd=0)
+        self._cv.pack(padx=PAD, pady=(PAD, 4))
+        self._cv.bind("<Button-1>",         self._on_click)
+        self._cv.bind("<B1-Motion>",        self._on_drag)
+        self._cv.bind("<ButtonRelease-1>",  self._on_release)
+        self._cv.bind("<Double-Button-1>",  self._on_dbl)
+        self._cv.bind("<Button-3>",         self._on_rclick)
+        self._cv.bind("<Alt-Button-1>",     self._on_eyedrop)
+        self.bind("<Control-z>",            self._undo)
+        self.bind("<Control-Z>",            self._undo)
+
+        # ── color strip ───────────────────────────────────────────────────
+        strip = ctk.CTkFrame(self, fg_color=BG2, corner_radius=6)
+        strip.pack(fill="x", padx=PAD, pady=4)
+
+        # fill swatch + pick
+        self._fill_swatch = tk.Canvas(strip, width=28, height=28,
+                                      bg=_rgb_hex(self._fill_rgb),
+                                      highlightthickness=1,
+                                      highlightbackground="#555")
+        self._fill_swatch.pack(side="left", padx=(8, 2), pady=6)
+        ctk.CTkButton(strip, text="Pick", width=50, height=28,
+                      fg_color=BG3, hover_color="#2a2a3a", text_color=FG,
+                      font=("Helvetica", 11),
+                      command=self._pick_fill).pack(side="left", padx=(0, 8))
+
+        # quick swatches
+        for hex_c, rgb in _QUICK_COLORS:
+            btn = tk.Canvas(strip, width=20, height=20, bg=hex_c,
+                            highlightthickness=1, highlightbackground="#333",
+                            cursor="hand2")
+            btn.pack(side="left", padx=2, pady=8)
+            btn.bind("<Button-1>", lambda e, c=rgb: self._set_fill(c))
+
+        # spacer + sel label
+        self._sel_lbl = ctk.CTkLabel(strip, text="0 keys selected",
+                                     text_color=FG2, font=("Helvetica", 11))
+        self._sel_lbl.pack(side="right", padx=10)
+
+        # ── actions row ───────────────────────────────────────────────────
+        act = ctk.CTkFrame(self, fg_color="transparent")
+        act.pack(fill="x", padx=PAD, pady=4)
+
+        ctk.CTkButton(act, text="Fill Selected", width=110, height=30,
+                      fg_color=BLUE, hover_color="#0284c7", text_color=FG,
+                      font=("Helvetica", 11),
+                      command=self._fill_selected).pack(side="left", padx=(0,4))
+        ctk.CTkButton(act, text="Select All", width=90, height=30,
+                      fg_color=BG3, hover_color="#2a2a3a", text_color=FG,
+                      font=("Helvetica", 11),
+                      command=self._select_all).pack(side="left", padx=4)
+        ctk.CTkButton(act, text="Deselect", width=80, height=30,
+                      fg_color=BG3, hover_color="#2a2a3a", text_color=FG,
+                      font=("Helvetica", 11),
+                      command=self._deselect_all).pack(side="left", padx=4)
+        ctk.CTkButton(act, text="All Black", width=80, height=30,
+                      fg_color=BG3, hover_color="#2a2a3a", text_color=FG,
+                      font=("Helvetica", 11),
+                      command=lambda: self._fill_all((0,0,0))).pack(side="left", padx=4)
+        ctk.CTkButton(act, text="All White", width=80, height=30,
+                      fg_color=BG3, hover_color="#2a2a3a", text_color=FG,
+                      font=("Helvetica", 11),
+                      command=lambda: self._fill_all((255,255,255))).pack(side="left", padx=4)
+        ctk.CTkButton(act, text="↩ Undo", width=70, height=30,
+                      fg_color=BG3, hover_color="#2a2a3a", text_color=FG,
+                      font=("Helvetica", 11),
+                      command=self._undo).pack(side="right", padx=(4, 0))
+        ctk.CTkLabel(act, text="Alt+click = Eyedropper", text_color=FG2,
+                     font=("Helvetica", 10)).pack(side="right", padx=8)
+
+        # ── presets ───────────────────────────────────────────────────────
+        pre = ctk.CTkFrame(self, fg_color=BG2, corner_radius=6)
+        pre.pack(fill="x", padx=PAD, pady=(0, 4))
+
+        ctk.CTkLabel(pre, text="Presets:", text_color=FG2,
+                     font=("Helvetica", 11)).pack(side="left", padx=(8, 4), pady=6)
+        self._preset_var = tk.StringVar()
+        self._preset_combo = ctk.CTkComboBox(
+            pre, variable=self._preset_var, values=[], width=180, height=28,
+            fg_color=BG3, border_color=BORDER, button_color=BLUE,
+            dropdown_fg_color=BG2, text_color=FG, font=("Helvetica", 11))
+        self._preset_combo.pack(side="left", padx=(0, 4), pady=6)
+        ctk.CTkButton(pre, text="Load", width=60, height=28,
+                      fg_color=BLUE, hover_color="#0284c7", text_color=FG,
+                      font=("Helvetica", 11),
+                      command=self._preset_load).pack(side="left", padx=2)
+        ctk.CTkButton(pre, text="Save as…", width=80, height=28,
+                      fg_color="#166534", hover_color="#14532d", text_color=FG,
+                      font=("Helvetica", 11),
+                      command=self._preset_save_as).pack(side="left", padx=2)
+        ctk.CTkButton(pre, text="Delete", width=68, height=28,
+                      fg_color="#7f1d1d", hover_color="#6b1a1a", text_color=FG,
+                      font=("Helvetica", 11),
+                      command=self._preset_delete).pack(side="left", padx=2)
+        self._preset_status = ctk.CTkLabel(pre, text="", text_color=FG2,
+                                           font=("Helvetica", 10))
+        self._preset_status.pack(side="left", padx=8)
+        self._preset_refresh()
+
+        # ── brightness ────────────────────────────────────────────────────
+        bot = ctk.CTkFrame(self, fg_color="transparent")
+        bot.pack(fill="x", padx=PAD, pady=4)
+
+        ctk.CTkLabel(bot, text="Brightness:", text_color=FG2,
+                     font=("Helvetica", 11)).pack(side="left")
+        self._bri_val = ctk.CTkLabel(bot, text=str(self._bri), text_color=FG,
+                                     font=("Helvetica", 11), width=30)
+        self._bri_val.pack(side="right")
+        self._bri_sl = ctk.CTkSlider(bot, from_=10, to=100, number_of_steps=90,
+                                     fg_color=BG3, progress_color=BLUE,
+                                     button_color=BLUE, button_hover_color=BLUE,
+                                     width=160, height=16)
+        self._bri_sl.set(self._bri)
+        self._bri_sl.configure(command=lambda v: self._bri_val.configure(text=str(int(v))))
+        self._bri_sl.pack(side="right", padx=(0, 6))
+
+        # ── apply / persist / save / load ────────────────────────────────
+        btns = ctk.CTkFrame(self, fg_color="transparent")
+        btns.pack(fill="x", padx=PAD, pady=(4, PAD))
+
+        ctk.CTkButton(btns, text="Apply to Keyboard", width=140, height=32,
+                      fg_color=BLUE, hover_color="#0284c7", text_color=FG,
+                      font=("Helvetica", 11, "bold"),
+                      command=self._apply).pack(side="left", padx=(0, 4))
+        ctk.CTkButton(btns, text="Persist to Slot", width=120, height=32,
+                      fg_color="#166534", hover_color="#14532d", text_color=FG,
+                      font=("Helvetica", 11),
+                      command=self._persist).pack(side="left", padx=4)
+        ctk.CTkButton(btns, text="Save Profile", width=100, height=32,
+                      fg_color=BG3, hover_color="#2a2a3a", text_color=FG,
+                      font=("Helvetica", 11),
+                      command=self._save_profile).pack(side="left", padx=4)
+        ctk.CTkButton(btns, text="Load Profile", width=100, height=32,
+                      fg_color=BG3, hover_color="#2a2a3a", text_color=FG,
+                      font=("Helvetica", 11),
+                      command=self._load_profile).pack(side="left", padx=4)
+        self._status = ctk.CTkLabel(btns, text="", text_color=FG2,
+                                    font=("Helvetica", 11))
+        self._status.pack(side="left", padx=10)
+
+    # ── canvas drawing ────────────────────────────────────────────────────
+
+    def _draw_keys(self):
+        self._cv.delete("all")
+        self._item_led.clear()
+        self._led_item.clear()
+
+        SC  = 0.82
+        YO  = _SIDE_OFFSET   # vertical shift so top side LEDs fit above bezel
+        SZ  = _SIDE_SZ
+        GAP = 2
+
+        bx1  = 11;  by1 = 11 + YO
+        bx2  = 14 + int(642 * SC) + 4
+        by2  = _KB_CANVAS_H - YO - 6
+        npx  = 14 + int(642 * SC) + 32  # same gap as NP_X0
+        npbx1 = npx - 3
+        npbx2 = npx + int(166 * SC) + 3
+
+        self._cv.create_rectangle(bx1, by1, bx2, by2,
+                                  fill="#1a1a22", outline="#333", width=1)
+        self._cv.create_rectangle(npbx1, by1, npbx2, by2,
+                                  fill="#1a1a22", outline="#333", width=1)
+
+        # keyboard keys (y shifted by YO)
+        for (lbl, idx, x, y, w, h) in _KB_LAYOUT:
+            yo    = y + YO
+            color = _rgb_hex(self._leds[idx]) if idx is not None and 0 <= idx <= 125 else "#252530"
+            sel   = idx in self._selected
+            item  = self._cv.create_rectangle(
+                x, yo, x + w, yo + h,
+                fill=color,
+                outline="#00d4ff" if sel else "#111",
+                width=2 if sel else 1,
+            )
+            font_size = 6 if w < 22 else 7
+            self._cv.create_text(x + w // 2, yo + h // 2, text=lbl,
+                                 fill="#cccccc", font=("Helvetica", font_size),
+                                 anchor="center")
+            if idx is not None:
+                self._item_led[item] = idx
+                self._led_item[idx]  = item
+
+        # side LED squares
+        def hstrip(indices, x1, x2, y):
+            n = len(indices)
+            for i, si in enumerate(indices):
+                px = int(x1 + i * (x2 - x1 - SZ) / max(1, n - 1)) if n > 1 else (x1 + x2 - SZ) // 2
+                color = _rgb_hex(self._side_leds[si])
+                sel   = (200 + si) in self._selected
+                item  = self._cv.create_rectangle(px, y, px + SZ, y + SZ,
+                            fill=color,
+                            outline="#00d4ff" if sel else "#555",
+                            width=2 if sel else 1)
+                self._item_led[item]     = 200 + si
+                self._led_item[200 + si] = item
+
+        def vstrip(indices, y1, y2, x):
+            n = len(indices)
+            for i, si in enumerate(indices):
+                py = int(y1 + i * (y2 - y1 - SZ) / max(1, n - 1)) if n > 1 else (y1 + y2 - SZ) // 2
+                color = _rgb_hex(self._side_leds[si])
+                sel   = (200 + si) in self._selected
+                item  = self._cv.create_rectangle(x, py, x + SZ, py + SZ,
+                            fill=color,
+                            outline="#00d4ff" if sel else "#555",
+                            width=2 if sel else 1)
+                self._item_led[item]     = 200 + si
+                self._led_item[200 + si] = item
+
+        # main keyboard ring
+        hstrip([13,14,15,7,6,5,4,3,2,1,0],            bx1, bx2,   by1 - GAP - SZ)  # top  11
+        vstrip([9,8,10,11],                             by1, by2,   bx2 + GAP)       # right 4
+        hstrip([20,21,22,23,24,25,26,27,28,29,30,12],  bx1, bx2,   by2 + GAP)       # bottom 12
+        vstrip([16,17,18,19],                           by1, by2,   bx1 - GAP - SZ)  # left 4
+        # numpad ring — corners belong to left(31)/right(38), not top/bottom
+        hstrip([44,43,42],      npbx1, npbx2, by1 - GAP - SZ)  # top    3
+        vstrip([41,40,39,38],   by1,   by2,   npbx2 + GAP)      # right  4 (38=BR corner)
+        hstrip([35,36,37],      npbx1, npbx2, by2 + GAP)        # bottom 3
+        vstrip([31,32,33,34],   by1,   by2,   npbx1 - GAP - SZ) # left   4 (31=TL corner)
+
+    def _refresh_key(self, idx):
+        item = self._led_item.get(idx)
+        if item is None:
+            return
+        sel = idx in self._selected
+        if 200 <= idx <= 244:
+            color   = _rgb_hex(self._side_leds[idx - 200])
+            outline = "#00d4ff" if sel else "#555"
+        else:
+            color   = _rgb_hex(self._leds[idx]) if 0 <= idx <= 125 else "#252530"
+            outline = "#00d4ff" if sel else "#111"
+        self._cv.itemconfigure(item, fill=color, outline=outline, width=2 if sel else 1)
+
+    # ── mouse events ──────────────────────────────────────────────────────
+
+    def _key_at(self, ex, ey):
+        """Return led_idx of topmost key under (ex, ey), or None."""
+        items = self._cv.find_overlapping(ex, ey, ex, ey)
+        for item in reversed(items):
+            if item in self._item_led:
+                return self._item_led[item]
+        return None
+
+    def _on_click(self, e):
+        ctrl = (e.state & 0x0004) != 0
+        idx  = self._key_at(e.x, e.y)
+        self._drag_rect = (e.x, e.y)
+        if idx is None:
+            if not ctrl:
+                self._deselect_all()
+            return
+        if ctrl:
+            if idx in self._selected:
+                self._selected.discard(idx)
+            else:
+                self._selected.add(idx)
+            self._refresh_key(idx)
+        else:
+            old = set(self._selected)
+            self._selected = {idx}
+            for i in old:
+                self._refresh_key(i)
+            self._refresh_key(idx)
+        self._update_sel_lbl()
+
+    def _on_drag(self, e):
+        if self._drag_rect is None:
+            return
+        x0, y0 = self._drag_rect
+        self._cv.delete("drag_rect")
+        self._cv.create_rectangle(x0, y0, e.x, e.y,
+                                  outline="#4488ff", dash=(4, 2),
+                                  fill="", width=1, tags="drag_rect")
+
+    def _on_release(self, e):
+        if self._drag_rect is None:
+            return
+        x0, y0 = self._drag_rect
+        self._drag_rect = None
+        self._cv.delete("drag_rect")
+        dx, dy = abs(e.x - x0), abs(e.y - y0)
+        if dx < 5 and dy < 5:
+            return  # handled by _on_click
+        # rectangle selection
+        rx1, rx2 = min(x0, e.x), max(x0, e.x)
+        ry1, ry2 = min(y0, e.y), max(y0, e.y)
+        ctrl = (e.state & 0x0004) != 0
+        if not ctrl:
+            old = set(self._selected)
+            self._selected.clear()
+            for i in old:
+                self._refresh_key(i)
+        for item, idx in self._item_led.items():
+            coords = self._cv.coords(item)
+            if coords[0] < rx2 and coords[2] > rx1 and \
+               coords[1] < ry2 and coords[3] > ry1:
+                self._selected.add(idx)
+        for idx in self._selected:
+            self._refresh_key(idx)
+        self._update_sel_lbl()
+
+    def _on_dbl(self, e):
+        idx = self._key_at(e.x, e.y)
+        if idx is not None and idx not in self._selected:
+            self._selected.add(idx)
+            self._refresh_key(idx)
+        if self._selected:
+            self._pick_fill()
+
+    def _on_rclick(self, e):
+        idx = self._key_at(e.x, e.y)
+        if idx is None:
+            return
+        if idx in self._selected:
+            self._selected.discard(idx)
+        else:
+            self._selected.add(idx)
+        self._refresh_key(idx)
+        self._update_sel_lbl()
+
+    # ── color actions ─────────────────────────────────────────────────────
+
+    def _set_fill(self, rgb):
+        self._fill_rgb = rgb
+        self._fill_swatch.configure(bg=_rgb_hex(rgb))
+
+    def _pick_fill(self):
+        rgb = pick_color(self, initial_rgb=tuple(self._fill_rgb), title="Key Color")
+        if rgb is None:
+            return
+        self._set_fill(rgb)
+        if self._selected:
+            self._fill_selected()
+
+    def _fill_selected(self):
+        self._push_undo()
+        for idx in self._selected:
+            if 0 <= idx <= 125:
+                self._leds[idx] = self._fill_rgb
+            elif 200 <= idx <= 244:
+                self._side_leds[idx - 200] = self._fill_rgb
+            self._refresh_key(idx)
+
+    def _fill_all(self, rgb):
+        self._push_undo()
+        self._leds = [rgb] * 126
+        self._side_leds = [rgb] * 45
+        self._draw_keys()
+
+    def _select_all(self):
+        self._selected = {idx for _, idx, *_ in _KB_LAYOUT if idx is not None and 0 <= idx <= 125}
+        self._selected.update(200 + i for i in range(45))
+        self._draw_keys()
+        self._update_sel_lbl()
+
+    def _deselect_all(self):
+        old = set(self._selected)
+        self._selected.clear()
+        for i in old:
+            self._refresh_key(i)
+        self._update_sel_lbl()
+
+
+    def _update_sel_lbl(self):
+        n = len(self._selected)
+        self._sel_lbl.configure(text=f"{n} key{'s' if n != 1 else ''} selected")
+
+    # ── undo ──────────────────────────────────────────────────────────────
+
+    def _push_undo(self):
+        self._undo_stack.append((list(self._leds), list(self._side_leds)))
+        if len(self._undo_stack) > 20:
+            self._undo_stack.pop(0)
+
+    def _undo(self, event=None):
+        if not self._undo_stack:
+            return
+        self._leds, self._side_leds = self._undo_stack.pop()
+        self._draw_keys()
+
+    # ── eyedropper ────────────────────────────────────────────────────────
+
+    def _on_eyedrop(self, e):
+        """Alt+click: sample the clicked key/LED colour into the fill swatch."""
+        idx = self._key_at(e.x, e.y)
+        if idx is None:
+            return
+        if 200 <= idx <= 244:
+            col = self._side_leds[idx - 200]
+        elif 0 <= idx <= 125:
+            col = self._leds[idx]
+        else:
+            return
+        self._set_fill(col)
+
+    # ── presets ───────────────────────────────────────────────────────────
+
+    def _preset_refresh(self):
+        names = sorted(_load_presets().keys())
+        self._preset_combo.configure(values=names)
+        if names and not self._preset_var.get():
+            self._preset_combo.set(names[0])
+
+    def _preset_load(self):
+        name = self._preset_var.get().strip()
+        presets = _load_presets()
+        if name not in presets:
+            self._preset_status.configure(text="Not found", text_color=RED)
+            return
+        self._push_undo()
+        d = presets[name]
+        leds = [tuple(c) for c in d.get("leds", [])]
+        self._leds = (leds + [(20, 20, 20)] * 126)[:126]
+        raw = d.get("side", [])
+        if isinstance(raw, list) and len(raw) == 45:
+            self._side_leds = [tuple(c) for c in raw]
+        bri = int(d.get("brightness", 100))
+        self._bri_sl.set(bri)
+        self._bri_val.configure(text=str(bri))
+        self._draw_keys()
+        self._preset_status.configure(text=f'Loaded "{name}"', text_color=GRN)
+
+    def _preset_save_as(self):
+        dlg = ctk.CTkToplevel(self)
+        dlg.title("Save Preset")
+        dlg.resizable(False, False)
+        dlg.geometry("300x110")
+        dlg.grab_set()
+        dlg.configure(fg_color=BG)
+        ctk.CTkLabel(dlg, text="Preset name:", text_color=FG,
+                     font=("Helvetica", 12)).pack(pady=(14, 4))
+        var = tk.StringVar(value=self._preset_var.get())
+        entry = ctk.CTkEntry(dlg, textvariable=var, width=200, height=30,
+                             fg_color=BG2, text_color=FG, border_color=BORDER,
+                             font=("Helvetica", 12))
+        entry.pack()
+        entry.focus()
+        def _save():
+            name = var.get().strip()
+            if not name:
+                return
+            presets = _load_presets()
+            presets[name] = {"leds":  [list(c) for c in self._leds],
+                              "side":  [list(c) for c in self._side_leds],
+                              "brightness": self._current_bri()}
+            _save_presets(presets)
+            self._preset_refresh()
+            self._preset_combo.set(name)
+            self._preset_status.configure(text=f'Saved "{name}"', text_color=GRN)
+            dlg.destroy()
+        entry.bind("<Return>", lambda e: _save())
+        ctk.CTkButton(dlg, text="Save", width=80, height=28,
+                      fg_color=BLUE, text_color=FG, command=_save).pack(pady=8)
+
+    def _preset_delete(self):
+        name = self._preset_var.get().strip()
+        presets = _load_presets()
+        if name not in presets:
+            self._preset_status.configure(text="Not found", text_color=RED)
+            return
+        del presets[name]
+        _save_presets(presets)
+        self._preset_refresh()
+        remaining = sorted(presets.keys())
+        self._preset_combo.set(remaining[0] if remaining else "")
+        self._preset_status.configure(text=f'Deleted "{name}"', text_color=FG2)
+
+    # ── apply / persist / save / load ────────────────────────────────────
+
+    def _current_bri(self):
+        return int(self._bri_sl.get())
+
+    def _build_payload(self):
+        import json as _j
+        return _j.dumps({"leds":  [list(c) for c in self._leds],
+                          "side":  [list(c) for c in self._side_leds],
+                          "brightness": self._current_bri()})
+
+    def _apply(self):
+        self._status.configure(text="Sending…", text_color=YLW)
+        self.update_idletasks()
+        payload = self._build_payload()
+        was_running = self._app._stop_cpu_proc()
+        def run():
+            r = subprocess.run(_cmd("per-key-rgb", payload), capture_output=True)
+            ok = r.returncode == 0
+            err = (r.stderr.decode(errors="replace").strip().splitlines() or [""])[-1]
+            _save_per_key(self._leds, self._side_leds, self._current_bri())
+            def finish():
+                self._status.configure(
+                    text="Applied ✓" if ok else f"Error — {err}",
+                    text_color=GRN if ok else RED)
+                if was_running:
+                    self._app._start_cpu_auto()
+            self.after(0, finish)
+        threading.Thread(target=run, daemon=True).start()
+
+    def _persist(self):
+        """Apply + persist to slot 6 (Custom slot on dial)."""
+        self._status.configure(text="Persisting…", text_color=YLW)
+        self.update_idletasks()
+        payload = self._build_payload()
+        was_running = self._app._stop_cpu_proc()
+        def run():
+            r = subprocess.run(_cmd("per-key-rgb", payload, "--persist"), capture_output=True)
+            ok = r.returncode == 0
+            if ok:
+                _save_per_key(self._leds, self._side_leds, self._current_bri())
+            err = (r.stderr.decode(errors="replace").strip().splitlines() or [""])[-1]
+            def finish():
+                self._status.configure(
+                    text="Persisted ✓" if ok else f"Error — {err}",
+                    text_color=GRN if ok else RED)
+                if was_running:
+                    self._app._start_cpu_auto()
+            self.after(0, finish)
+        threading.Thread(target=run, daemon=True).start()
+
+    def _save_profile(self):
+        import tkinter.filedialog as _fd
+        import json as _j
+        path = _fd.asksaveasfilename(
+            parent=self, defaultextension=".json",
+            filetypes=[("JSON Profile", "*.json"), ("All", "*.*")],
+            title="Save RGB Profile")
+        if not path:
+            return
+        with open(path, "w") as f:
+            f.write(_j.dumps({"leds":  [list(c) for c in self._leds],
+                               "side":  [list(c) for c in self._side_leds],
+                               "brightness": self._current_bri()}, indent=2))
+        self._status.configure(text="Saved ✓", text_color=GRN)
+
+    def _load_profile(self):
+        import tkinter.filedialog as _fd
+        import json as _j
+        path = _fd.askopenfilename(
+            parent=self,
+            filetypes=[("JSON Profile", "*.json"), ("All", "*.*")],
+            title="Load RGB Profile")
+        if not path:
+            return
+        try:
+            d = _j.loads(open(path).read())
+            leds = [tuple(c) for c in d.get("leds", [])]
+            self._leds = (leds + [(20,20,20)] * 126)[:126]
+            raw = d.get("side", [])
+            if isinstance(raw, list) and len(raw) == 45:
+                self._side_leds = [tuple(c) for c in raw]
+            else:
+                self._side_leds = [(255, 255, 255)] * 45
+            self._bri_sl.set(int(d.get("brightness", 100)))
+            self._bri_val.configure(text=str(int(d.get("brightness", 100))))
+            self._draw_keys()
+            self._status.configure(text="Loaded ✓", text_color=GRN)
+        except Exception as ex:
+            self._status.configure(text=f"Load error: {ex}", text_color=RED)
+
+    def _on_close(self):
+        self.destroy()
+
+
+def _rgb_hex(rgb):
+    return "#{:02x}{:02x}{:02x}".format(*rgb)
+
+
+# ── Color Picker Dialog ────────────────────────────────────────────────────────
+
+_WHL = 220          # wheel diameter in pixels
+_WHL_R = _WHL // 2  # wheel radius
+_WHL_BG = (18, 18, 30)
+
+def _make_wheel_full():
+    """Build HSV colour wheel at V=1.0.  Called once per dialog open."""
+    R = _WHL_R
+    pixels = bytearray(_WHL * _WHL * 3)
+    off = 0
+    for y in range(_WHL):
+        dy = y - R
+        for x in range(_WHL):
+            dx = x - R
+            dist = math.sqrt(dx * dx + dy * dy)
+            if dist > R:
+                pixels[off:off+3] = _WHL_BG
+            else:
+                h = (math.atan2(dy, dx) / (2 * math.pi)) % 1.0
+                s = dist / R
+                r, g, b = colorsys.hsv_to_rgb(h, s, 1.0)
+                pixels[off]   = int(r * 255)
+                pixels[off+1] = int(g * 255)
+                pixels[off+2] = int(b * 255)
+            off += 3
+    return Image.frombytes("RGB", (_WHL, _WHL), bytes(pixels))
+
+
+class ColorPickerDialog(ctk.CTkToplevel):
+    """Modern HSV colour wheel dialog.  result is (r,g,b) or None."""
+
+    def __init__(self, parent, initial_rgb=(255, 255, 255), title="Pick Color"):
+        super().__init__(parent)
+        self.title(title)
+        self.resizable(False, False)
+        self.result = None
+
+        r, g, b = [x / 255.0 for x in initial_rgb]
+        h, s, v = colorsys.rgb_to_hsv(r, g, b)
+        self._h = h
+        self._s = s
+        self._v = max(v, 0.02)   # keep at least a sliver of brightness so wheel shows
+
+        self._initial_rgb = initial_rgb
+        self._wheel_full = _make_wheel_full()
+        self._wheel_photo = None  # ImageTk reference kept alive
+
+        self._build_ui()
+        self._refresh_wheel()
+        self._update_marker()
+
+        # Centre over parent
+        self.update_idletasks()
+        pw = parent.winfo_rootx() + parent.winfo_width() // 2
+        ph = parent.winfo_rooty() + parent.winfo_height() // 2
+        dw = self.winfo_width()
+        dh = self.winfo_height()
+        self.geometry(f"+{pw - dw//2}+{ph - dh//2}")
+
+        self.grab_set()
+        self.wait_window()
+
+    # ── UI construction ────────────────────────────────────────────────────────
+
+    def _build_ui(self):
+        PAD = 16
+        self.configure(fg_color=BG2)
+
+        # ── Wheel canvas ──────────────────────────────────────────────────────
+        self._canvas = tk.Canvas(self, width=_WHL, height=_WHL,
+                                 bg=_rgb_hex(_WHL_BG), highlightthickness=0,
+                                 cursor="crosshair")
+        self._canvas.pack(padx=PAD, pady=(PAD, 6))
+        self._wheel_item = self._canvas.create_image(0, 0, anchor="nw")
+        self._canvas.bind("<Button-1>",  self._on_wheel_click)
+        self._canvas.bind("<B1-Motion>", self._on_wheel_click)
+
+        # ── Brightness slider ─────────────────────────────────────────────────
+        bri_row = ctk.CTkFrame(self, fg_color="transparent")
+        bri_row.pack(fill="x", padx=PAD, pady=2)
+        ctk.CTkLabel(bri_row, text="☀", width=20, text_color=FG2).pack(side="left")
+        self._bri_var = tk.DoubleVar(value=self._v * 100)
+        ctk.CTkSlider(bri_row, from_=0, to=100, variable=self._bri_var,
+                      command=self._on_bri_change,
+                      button_color=BLUE, progress_color=BG3
+                      ).pack(side="left", fill="x", expand=True, padx=(6, 0))
+
+        # ── Hex input ─────────────────────────────────────────────────────────
+        hex_row = ctk.CTkFrame(self, fg_color="transparent")
+        hex_row.pack(fill="x", padx=PAD, pady=4)
+        ctk.CTkLabel(hex_row, text="#", width=14, text_color=FG2).pack(side="left")
+        self._hex_var = tk.StringVar()
+        hex_ent = ctk.CTkEntry(hex_row, textvariable=self._hex_var,
+                               width=90, height=30, fg_color=BG3,
+                               border_color=BORDER)
+        hex_ent.pack(side="left", padx=(0, 8))
+        hex_ent.bind("<Return>",   self._on_hex_commit)
+        hex_ent.bind("<FocusOut>", self._on_hex_commit)
+
+        # ── Before / After preview ────────────────────────────────────────────
+        self._swatch_before = tk.Canvas(hex_row, width=30, height=30,
+                                        highlightthickness=1,
+                                        highlightbackground="#444")
+        self._swatch_before.configure(bg=_rgb_hex(self._initial_rgb))
+        self._swatch_before.pack(side="left", padx=(0, 2))
+        self._swatch_after = tk.Canvas(hex_row, width=30, height=30,
+                                       highlightthickness=1,
+                                       highlightbackground="#666")
+        self._swatch_after.pack(side="left")
+
+        # ── OK / Cancel ───────────────────────────────────────────────────────
+        btn_row = ctk.CTkFrame(self, fg_color="transparent")
+        btn_row.pack(fill="x", padx=PAD, pady=(4, PAD))
+        ctk.CTkButton(btn_row, text="Cancel", width=90, height=32,
+                      fg_color=BG3, hover_color="#2a2a3a", text_color=FG,
+                      command=self.destroy).pack(side="right", padx=(4, 0))
+        ctk.CTkButton(btn_row, text="OK", width=90, height=32,
+                      fg_color=BLUE, hover_color="#0284c7",
+                      command=self._ok).pack(side="right")
+
+        self._sync_fields()
+
+    # ── Drawing ────────────────────────────────────────────────────────────────
+
+    def _refresh_wheel(self):
+        """Apply current V to the precomputed V=1.0 wheel and update canvas."""
+        img = ImageEnhance.Brightness(self._wheel_full).enhance(self._v)
+        self._wheel_photo = ImageTk.PhotoImage(img)
+        self._canvas.itemconfig(self._wheel_item, image=self._wheel_photo)
+
+    def _update_marker(self):
+        R = _WHL_R
+        angle = self._h * 2 * math.pi
+        dist  = self._s * R
+        mx = R + dist * math.cos(angle)
+        my = R + dist * math.sin(angle)
+        MR = 7
+        self._canvas.delete("marker")
+        # Outer white ring
+        self._canvas.create_oval(mx-MR, my-MR, mx+MR, my+MR,
+                                  outline="#ffffff", width=2, tags="marker")
+        # Inner black ring for contrast on light colours
+        self._canvas.create_oval(mx-MR+2, my-MR+2, mx+MR-2, my+MR-2,
+                                  outline="#000000", width=1, tags="marker")
+
+    # ── Events ─────────────────────────────────────────────────────────────────
+
+    def _on_wheel_click(self, e):
+        R = _WHL_R
+        dx, dy = e.x - R, e.y - R
+        dist = math.sqrt(dx * dx + dy * dy)
+        dist = min(dist, R)          # clamp to circle edge
+        self._h = (math.atan2(dy, dx) / (2 * math.pi)) % 1.0
+        self._s = dist / R
+        self._update_marker()
+        self._sync_fields()
+
+    def _on_bri_change(self, val):
+        self._v = max(float(val) / 100.0, 0.001)
+        self._refresh_wheel()
+        self._update_marker()
+        self._sync_fields()
+
+    def _on_hex_commit(self, _=None):
+        raw = self._hex_var.get().strip().lstrip("#")
+        if len(raw) != 6:
+            return
+        try:
+            r, g, b = int(raw[0:2], 16), int(raw[2:4], 16), int(raw[4:6], 16)
+        except ValueError:
+            return
+        h, s, v = colorsys.rgb_to_hsv(r/255, g/255, b/255)
+        self._h, self._s, self._v = h, s, max(v, 0.001)
+        self._bri_var.set(self._v * 100)
+        self._refresh_wheel()
+        self._update_marker()
+        self._update_swatches()
+
+    # ── Helpers ────────────────────────────────────────────────────────────────
+
+    def _current_rgb(self):
+        r, g, b = colorsys.hsv_to_rgb(self._h, self._s, self._v)
+        return (int(r * 255), int(g * 255), int(b * 255))
+
+    def _sync_fields(self):
+        rgb = self._current_rgb()
+        self._hex_var.set("{:02x}{:02x}{:02x}".format(*rgb))
+        self._update_swatches()
+
+    def _update_swatches(self):
+        self._swatch_after.configure(bg=_rgb_hex(self._current_rgb()))
+
+    def _ok(self):
+        self.result = self._current_rgb()
+        self.destroy()
+
+
+def pick_color(parent, initial_rgb=(255, 255, 255), title="Pick Color"):
+    """Open ColorPickerDialog and return (r,g,b) or None."""
+    dlg = ColorPickerDialog(parent, initial_rgb, title)
+    return dlg.result
 
 
 # ── Accordion ─────────────────────────────────────────────────────────────────
@@ -1053,102 +2067,20 @@ class App(ctk.CTk):
         self._sections.append(s6)
         c6 = s6.content
 
-        _ZONE_DEFS = [
-            ("fn",     "zone_fn",     (220,  60,  60)),
-            ("num",    "zone_num",    (255, 140,   0)),
-            ("qwerty", "zone_qwerty", (200, 200,  50)),
-            ("home",   "zone_home",   ( 60, 200,  60)),
-            ("shift",  "zone_shift",  ( 60, 120, 255)),
-            ("bottom", "zone_bottom", (160,  60, 240)),
-            ("numpad", "zone_numpad", ( 60, 210, 210)),
-        ]
-        # zone_key -> (r,g,b)
-        _zone_defaults_raw = {z[0]: z[2] for z in _ZONE_DEFS}
-        _zone_defaults_raw["side"] = (255, 255, 255)
-        self._zone_defaults = dict(_zone_defaults_raw)
-        self._zone_colors, _saved_bri = load_zone_config(_zone_defaults_raw)
-        self._zone_btns = {}
+        self._rgb_win = None   # reference to open CustomRGBWindow (if any)
 
-        def _hex(rgb):
-            return "#{:02x}{:02x}{:02x}".format(*rgb)
-
-        # Zone rows
-        zones_frame = ctk.CTkFrame(c6, fg_color=BG3, corner_radius=4)
-        zones_frame.pack(fill="x", padx=10, pady=(10, 4))
-
-        for zone_key, lang_key, _ in _ZONE_DEFS:
-            init_hex = _hex(self._zone_colors[zone_key])
-            row = ctk.CTkFrame(zones_frame, fg_color="transparent")
-            row.pack(fill="x", padx=6, pady=2)
-            self._reg(
-                ctk.CTkLabel(row, text="", text_color=FG2, font=("Helvetica", 11),
-                             width=150, anchor="w"),
-                lang_key
-            ).pack(side="left")
-            btn = ctk.CTkButton(
-                row, text="", width=44, height=26, corner_radius=4,
-                fg_color=init_hex, hover_color=init_hex,
-                command=lambda k=zone_key: self._pick_zone_color(k))
-            btn.pack(side="left")
-            self._zone_btns[zone_key] = btn
-
-        # Divider
-        ctk.CTkFrame(c6, fg_color=BG3, height=1).pack(fill="x", padx=10, pady=4)
-
-        # Side ring row
-        side_row = ctk.CTkFrame(c6, fg_color="transparent")
-        side_row.pack(fill="x", padx=10, pady=2)
-        self._reg(
-            ctk.CTkLabel(side_row, text="", text_color=FG2, font=("Helvetica", 11),
-                         width=150, anchor="w"),
-            "zone_side"
-        ).pack(side="left")
-        side_init = _hex(self._zone_colors["side"])
-        self._zone_btns["side"] = ctk.CTkButton(
-            side_row, text="", width=44, height=26, corner_radius=4,
-            fg_color=side_init, hover_color=side_init,
-            command=lambda: self._pick_zone_color("side"))
-        self._zone_btns["side"].pack(side="left")
-
-        # Brightness slider
-        bri_row = ctk.CTkFrame(c6, fg_color="transparent")
-        bri_row.pack(fill="x", padx=10, pady=(6, 2))
-        self._reg(
-            ctk.CTkLabel(bri_row, text="", text_color=FG2, font=("Helvetica", 11),
-                         width=150, anchor="w"),
-            "zone_brightness"
-        ).pack(side="left")
-        self._zone_bri_val = ctk.CTkLabel(bri_row, text="100", text_color=FG,
-                                          font=("Helvetica", 11), width=30)
-        self._zone_bri_val.pack(side="right")
-        self._zone_bri_sl = ctk.CTkSlider(
-            bri_row, from_=10, to=100, number_of_steps=90,
-            fg_color=BG3, progress_color=BLUE, button_color=BLUE,
-            button_hover_color=BLUE, width=160, height=16)
-        self._zone_bri_sl.set(_saved_bri)
-        self._zone_bri_val.configure(text=str(_saved_bri))
-        self._zone_bri_sl.pack(side="left", padx=(0, 4))
-        self._zone_bri_sl.configure(
-            command=lambda v: self._zone_bri_val.configure(text=str(int(v))))
-
-        # Apply + Reset buttons + status
-        zone_apply_row = ctk.CTkFrame(c6, fg_color="transparent")
-        zone_apply_row.pack(fill="x", padx=10, pady=(6, 12))
-        self._reg(
-            ctk.CTkButton(zone_apply_row, text="", font=("Helvetica", 11),
-                          fg_color=BLUE, hover_color="#0284c7", text_color=FG,
-                          width=120, height=32, command=self._apply_zones),
-            "zone_apply"
-        ).pack(side="left")
-        self._reg(
-            ctk.CTkButton(zone_apply_row, text="", font=("Helvetica", 11, "bold"),
-                          fg_color=RED, hover_color="#c03030", text_color=BG,
-                          width=80, height=32, command=self._reset_zones),
-            "zone_reset"
-        ).pack(side="left", padx=(6, 0))
-        self._zone_status = ctk.CTkLabel(zone_apply_row, text="", text_color=FG2,
+        # stub so old methods don't AttributeError if called
+        self._zone_status = ctk.CTkLabel(c6, text="", text_color=FG2,
                                          font=("Helvetica", 11))
-        self._zone_status.pack(side="left", padx=(10, 0))
+
+        open_row = ctk.CTkFrame(c6, fg_color="transparent")
+        open_row.pack(pady=(16, 16))
+        self._reg(
+            ctk.CTkButton(open_row, text="", font=("Helvetica", 12, "bold"),
+                          fg_color=BLUE, hover_color="#0284c7", text_color=FG,
+                          width=220, height=38, command=self._open_rgb_editor),
+            "zone_open_editor"
+        ).pack()
 
         # ── Section 5 (moved): OBS Integration ───────────────────────────────
         s4 = AccordionSection(scroll, self, "📡", "obs_title")
@@ -1291,8 +2223,7 @@ class App(ctk.CTk):
                 self._rgb_dir_row.pack(fill="x", padx=10, pady=2,
                                        before=self._rgb_apply_row)
         else:
-            if was_visible:
-                self._rgb_dir_row.pack_forget()
+            self._rgb_dir_row.pack_forget()
         # Remeasure section so accordion height adjusts
         if hasattr(self, "_rgb_section"):
             self.update_idletasks()
@@ -1303,14 +2234,11 @@ class App(ctk.CTk):
                 s._content.configure(height=s._natural_h)
 
     def _pick_rgb_color(self, which):
-        import tkinter.colorchooser as _cc
         initial = self._rgb_color1 if which == 1 else self._rgb_color2
-        init_hex = "#{:02x}{:02x}{:02x}".format(*initial)
-        result = _cc.askcolor(color=init_hex, title="Farbe wählen")
-        if result[0] is None:
+        rgb = pick_color(self, initial_rgb=initial, title="Farbe wählen")
+        if rgb is None:
             return
-        rgb = tuple(int(v) for v in result[0])
-        hex_color = "#{:02x}{:02x}{:02x}".format(*rgb)
+        hex_color = _rgb_hex(rgb)
         if which == 1:
             self._rgb_color1 = rgb
             self._rgb_c1_btn.configure(fg_color=hex_color, hover_color=hex_color)
@@ -1359,14 +2287,12 @@ class App(ctk.CTk):
         threading.Thread(target=run, daemon=True).start()
 
     def _pick_zone_color(self, zone_key):
-        import tkinter.colorchooser as _cc
-        init_hex = "#{:02x}{:02x}{:02x}".format(*self._zone_colors.get(zone_key, (0, 0, 0)))
-        result = _cc.askcolor(color=init_hex, title="Farbe wählen")
-        if result[0] is None:
+        initial = self._zone_colors.get(zone_key, (0, 0, 0))
+        rgb = pick_color(self, initial_rgb=initial, title="Farbe wählen")
+        if rgb is None:
             return
-        rgb = tuple(int(v) for v in result[0])
         self._zone_colors[zone_key] = rgb
-        hex_color = "#{:02x}{:02x}{:02x}".format(*rgb)
+        hex_color = _rgb_hex(rgb)
         self._zone_btns[zone_key].configure(fg_color=hex_color, hover_color=hex_color)
 
     def _reset_zones(self):
@@ -1480,6 +2406,13 @@ class App(ctk.CTk):
             if callback:
                 self.after(0, lambda: callback(ok))
         threading.Thread(target=task, daemon=True).start()
+
+    def _open_rgb_editor(self):
+        """Open the per-key RGB editor window (singleton)."""
+        if self._rgb_win is not None and self._rgb_win.winfo_exists():
+            self._rgb_win.focus()
+            return
+        self._rgb_win = CustomRGBWindow(self)
 
     def _stop_cpu_proc(self):
         """Terminate CPU monitor if running. Returns True if it was running."""

@@ -1,5 +1,31 @@
 # Changelog
 
+## [1.4.0] - 2026-03-19
+
+### Custom RGB Mode
+- Completely redesigned: new per-key color editor with a full keyboard canvas in a popup window
+- Click individual keys to select and color them
+- Rubber band (drag) selection across multiple keys
+- Ctrl+click and right-click for toggle selection
+- Alt+click eyedropper to sample a key's current color
+- Ctrl+Z / Undo button (up to 20 steps)
+- Side LEDs shown as individual clickable squares around both keyboard and numpad bezels (11 top, 4 right, 12 bottom, 4 left; numpad: 3 top, 4 right, 3 bottom, 4 left)
+- Fill selected, fill all, select all, deselect all controls
+- Preset system: save, load and delete named color presets
+- Built-in **Synthwave** sample preset included
+- Section renamed from "Custom RGB Mode (Beta)" to "Custom RGB Mode"
+
+### Color Picker
+- Replaced the system color dialog with a custom HSV color wheel
+- Circular picker: hue as angle, saturation as radius, brightness as slider
+- Before/after preview swatches and hex input field
+- Used everywhere colors are picked: Key Color Editor, RGB Lighting, Custom RGB zones
+
+### Bug Fixes
+- Fixed: Direction dropdown visible on startup when Static effect was selected
+
+---
+
 ## [1.3.1] - 2026-03-18
 
 ### Numpad Keys — Action Types

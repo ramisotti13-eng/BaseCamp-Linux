@@ -25,7 +25,7 @@ The GUI is split into a persistent **dashboard** at the top and six collapsible 
 - **Main Display** — Switch between image and clock mode, upload any image to the keyboard's main display — automatically converted to the correct format
 - **Numpad Keys** — Assign actions (Shell, URL, Folder, App) and custom button images (including GIF frame picker) to D1–D4 — automatically converted to the correct format
 - **RGB Lighting** — Control keyboard RGB effects (Wave, Tornado, Reactive, Yeti, Matrix, and more) with speed, brightness, color and direction — settings saved automatically
-- **Custom RGB Mode (Beta)** — Set individual colors per keyboard zone (F Keys, Number Row, QWERTY, Home Row, Shift Row, Bottom Row, Numpad) plus the side ring LEDs — colors and brightness saved automatically
+- **Custom RGB Mode** — Per-key color editor: click or drag-select keys, assign colors, use the eyedropper (Alt+click), undo (Ctrl+Z), and save/load named presets — side LEDs fully selectable around both keyboard and numpad bezels
 - **OBS Integration** — Connect to OBS via WebSocket and trigger scene switches, recording or streaming from any D-button
 
 ---
@@ -39,7 +39,7 @@ The GUI is split into a persistent **dashboard** at the top and six collapsible 
 - **Image upload (D1–D4)** — Upload any image to the D-buttons — automatically converted and resized (GIF frame picker included)
 - **Main display upload** — Upload any image to the keyboard's main display — automatically converted and resized
 - **RGB Lighting** — Full RGB effect control: Wave, Tornado, Tornado Rainbow, Reactive, Yeti, Matrix, Off — with speed, brightness, color pickers and direction — settings saved to config
-- **Custom RGB Mode (Beta)** — Per-zone keyboard colors (7 zones) + side ring LED color and brightness — saved to config with reset-to-defaults button
+- **Custom RGB Mode** — Per-key color editor with rubber band selection, eyedropper, undo, and named presets — side LEDs selectable individually around keyboard and numpad — includes built-in Synthwave preset
 - **OBS integration** — Connect to OBS via WebSocket and trigger scene switches, recording or streaming from D1–D4 — settings save automatically on change
 - **System tray** — Minimize to tray, runs in the background
 - **Internationalization** — UI language switchable at runtime via external JSON files (DE + EN included, add your own)
