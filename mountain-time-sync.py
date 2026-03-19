@@ -880,15 +880,23 @@ def controller_loop(style=STYLE_ANALOG):
                             sudo_user = os.environ.get("SUDO_USER")
                             if sudo_user:
                                 uid = _pwd.getpwnam(sudo_user).pw_uid
+                                runtime = f"/run/user/{uid}"
                                 env = {
-                                    "DISPLAY": os.environ.get("DISPLAY", ":0"),
-                                    "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{uid}/bus",
-                                    "XDG_RUNTIME_DIR": f"/run/user/{uid}",
+                                    "DBUS_SESSION_BUS_ADDRESS": f"unix:path={runtime}/bus",
+                                    "XDG_RUNTIME_DIR": runtime,
                                     "HOME": _pwd.getpwnam(sudo_user).pw_dir,
                                     "USER": sudo_user,
                                     "LOGNAME": sudo_user,
                                     "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
                                 }
+                                # Wayland oder X11 automatisch erkennen
+                                if os.path.exists(os.path.join(runtime, "wayland-0")):
+                                    env["WAYLAND_DISPLAY"] = "wayland-0"
+                                    env["XDG_SESSION_TYPE"] = "wayland"
+                                else:
+                                    env["DISPLAY"] = os.environ.get("DISPLAY", ":0")
+                                    env["XAUTHORITY"] = os.path.join(
+                                        _pwd.getpwnam(sudo_user).pw_dir, ".Xauthority")
                                 if btype in ("url", "folder"):
                                     subprocess.Popen(
                                         ["sudo", "-u", sudo_user, "-E", "xdg-open", action],
