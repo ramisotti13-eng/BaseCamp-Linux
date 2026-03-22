@@ -891,8 +891,64 @@ def controller_loop(style=STYLE_ANALOG):
         _net_prev_time = time.monotonic()
         _gpu_cache = 0
         _gpu_last = 0
+        _ram_cache = 0
+        _hdd_cache = 0
+        _slow_last = 0  # tracks last update time for RAM/HDD
         # Smoothed metric values (EMA, alpha=0.2)
         _smooth = {0: 0.0, 1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0}
+
+        def _handle_btn_resp(resp):
+            nonlocal last_btn_state, last_btn_action_time
+            if resp[0] != 0x01:
+                return
+            pressed = BTN_LOOKUP.get((42, resp[42]))
+            if pressed is not None and pressed != last_btn_state and (now - last_btn_action_time) >= 0.8:
+                i = pressed
+                last_btn_action_time = now
+                obs_btn = obs_cfg["buttons"][i] if i < len(obs_cfg["buttons"]) else {}
+                if obs_btn.get("type", "none") != "none":
+                    threading.Thread(
+                        target=_execute_obs_action,
+                        args=(obs_btn, obs_cfg, obs_holder),
+                        daemon=True).start()
+                else:
+                    btype = buttons[i].get("type", "shell")
+                    action = buttons[i].get("action", "").strip()
+                    if action and btype != "none":
+                        sudo_user = os.environ.get("SUDO_USER")
+                        if sudo_user:
+                            uid = _pwd.getpwnam(sudo_user).pw_uid
+                            runtime = f"/run/user/{uid}"
+                            env = {
+                                "DBUS_SESSION_BUS_ADDRESS": f"unix:path={runtime}/bus",
+                                "XDG_RUNTIME_DIR": runtime,
+                                "HOME": _pwd.getpwnam(sudo_user).pw_dir,
+                                "USER": sudo_user,
+                                "LOGNAME": sudo_user,
+                                "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                            }
+                            # Wayland oder X11 automatisch erkennen
+                            if os.path.exists(os.path.join(runtime, "wayland-0")):
+                                env["WAYLAND_DISPLAY"] = "wayland-0"
+                                env["XDG_SESSION_TYPE"] = "wayland"
+                            else:
+                                env["DISPLAY"] = os.environ.get("DISPLAY", ":0")
+                                env["XAUTHORITY"] = os.path.join(
+                                    _pwd.getpwnam(sudo_user).pw_dir, ".Xauthority")
+                            if btype in ("url", "folder"):
+                                subprocess.Popen(
+                                    ["sudo", "-u", sudo_user, "-E", "xdg-open", action],
+                                    env=env)
+                            else:  # shell, app
+                                subprocess.Popen(
+                                    ["sudo", "-u", sudo_user, "-E", "bash", "-c", action],
+                                    env=env)
+                        else:
+                            if btype in ("url", "folder"):
+                                subprocess.Popen(["xdg-open", action])
+                            else:  # shell, app
+                                subprocess.Popen(action, shell=True)
+            last_btn_state = pressed  # None when byte42=0 (released)
 
         while True:
             now = time.monotonic()
@@ -911,63 +967,16 @@ def controller_loop(style=STYLE_ANALOG):
                     last_clock_format = cur_fmt
                     last_time_sync = 0  # force immediate time sync
 
-            def _handle_btn_resp(resp):
-                nonlocal last_btn_state, last_btn_action_time
-                if resp[0] != 0x01:
-                    return
-                pressed = BTN_LOOKUP.get((42, resp[42]))
-                if pressed is not None and pressed != last_btn_state and (now - last_btn_action_time) >= 0.8:
-                    i = pressed
-                    last_btn_action_time = now
-                    obs_btn = obs_cfg["buttons"][i] if i < len(obs_cfg["buttons"]) else {}
-                    if obs_btn.get("type", "none") != "none":
-                        threading.Thread(
-                            target=_execute_obs_action,
-                            args=(obs_btn, obs_cfg, obs_holder),
-                            daemon=True).start()
-                    else:
-                        btype = buttons[i].get("type", "shell")
-                        action = buttons[i].get("action", "").strip()
-                        if action and btype != "none":
-                            sudo_user = os.environ.get("SUDO_USER")
-                            if sudo_user:
-                                uid = _pwd.getpwnam(sudo_user).pw_uid
-                                runtime = f"/run/user/{uid}"
-                                env = {
-                                    "DBUS_SESSION_BUS_ADDRESS": f"unix:path={runtime}/bus",
-                                    "XDG_RUNTIME_DIR": runtime,
-                                    "HOME": _pwd.getpwnam(sudo_user).pw_dir,
-                                    "USER": sudo_user,
-                                    "LOGNAME": sudo_user,
-                                    "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-                                }
-                                # Wayland oder X11 automatisch erkennen
-                                if os.path.exists(os.path.join(runtime, "wayland-0")):
-                                    env["WAYLAND_DISPLAY"] = "wayland-0"
-                                    env["XDG_SESSION_TYPE"] = "wayland"
-                                else:
-                                    env["DISPLAY"] = os.environ.get("DISPLAY", ":0")
-                                    env["XAUTHORITY"] = os.path.join(
-                                        _pwd.getpwnam(sudo_user).pw_dir, ".Xauthority")
-                                if btype in ("url", "folder"):
-                                    subprocess.Popen(
-                                        ["sudo", "-u", sudo_user, "-E", "xdg-open", action],
-                                        env=env)
-                                else:  # shell, app
-                                    subprocess.Popen(
-                                        ["sudo", "-u", sudo_user, "-E", "bash", "-c", action],
-                                        env=env)
-                            else:
-                                if btype in ("url", "folder"):
-                                    subprocess.Popen(["xdg-open", action])
-                                else:  # shell, app
-                                    subprocess.Popen(action, shell=True)
-                last_btn_state = pressed  # None when byte42=0 (released)
-
             # Gather all metrics
             cpu = psutil.cpu_percent(interval=None)
-            ram = int(psutil.virtual_memory().percent)
-            hdd = int(psutil.disk_usage('/').percent)
+
+            # RAM and HDD: update every 2s (values change slowly)
+            if now - _slow_last >= 2.0:
+                _ram_cache = int(psutil.virtual_memory().percent)
+                _hdd_cache = int(psutil.disk_usage('/').percent)
+                _slow_last = now
+            ram = _ram_cache
+            hdd = _hdd_cache
 
             # GPU: update every 2s via nvidia-smi
             if now - _gpu_last >= 2.0:

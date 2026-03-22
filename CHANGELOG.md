@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.5.1] - 2026-03-22
+
+### Internal
+
+- `mountain-time-sync.py`: fixed slow memory growth in the controller loop — `_handle_btn_resp` was redefined on every iteration (5×/s), creating constant function-object churn; moved to a single definition before the loop
+- `mountain-time-sync.py`: RAM and HDD metrics now polled every 2 s instead of every 0.2 s — values change slowly and the reduction in `virtual_memory()` / `disk_usage()` allocation pressure stops Python's memory allocator from retaining freed arenas
+
+---
+
 ## [1.5.0] - 2026-03-22
 
 ### Makalu 67 Mouse — Button Remap

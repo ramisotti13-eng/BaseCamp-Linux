@@ -1,6 +1,6 @@
 # Maintainer: ramisotti13-eng
 pkgname=basecamp-linux
-pkgver=1.5.0
+pkgver=1.5.1
 pkgrel=1
 pkgdesc="Unofficial Linux companion app for Mountain peripherals (Everest Max keyboard, Makalu 67 mouse)"
 arch=('x86_64')
