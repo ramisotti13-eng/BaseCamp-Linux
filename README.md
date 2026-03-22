@@ -12,16 +12,10 @@ Mountain Base Camp is only available on Windows — this project brings full dev
 
 ---
 
-## Screenshots
+## Screenshot
 
 <p align="center">
-  <img src="docs/gitgui.png" alt="BaseCamp Linux — Keyboard Panel" width="320"/>
-  &nbsp;&nbsp;
-  <img src="docs/gitguiMouse.png" alt="BaseCamp Linux — Mouse Panel" width="320"/>
-</p>
-
-<p align="center">
-  <img src="docs/customrgbMouse.png" alt="BaseCamp Linux — Mouse Custom RGB Editor" width="600"/>
+  <img src="docs/gitgui.png" alt="BaseCamp Linux GUI" width="320"/>
 </p>
 
 ---
