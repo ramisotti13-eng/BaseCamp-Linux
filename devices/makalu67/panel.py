@@ -93,7 +93,7 @@ class Makalu67Panel(ctk.CTkFrame):
                     self.after(0, lambda: on_done(ok, r.stdout.strip()))
             except Exception as e:
                 if on_done:
-                    self.after(0, lambda: on_done(False, str(e)))
+                    self.after(0, lambda e=e: on_done(False, str(e)))
         threading.Thread(target=_worker, daemon=True).start()
 
     # ── UI ────────────────────────────────────────────────────────────────────
@@ -286,11 +286,27 @@ class Makalu67Panel(ctk.CTkFrame):
     # ── DPI ───────────────────────────────────────────────────────────────────
 
     def _build_dpi_section(self, scroll):
-        s = _PlaceholderSection(scroll, self._app, "🎯", self.T("makalu_dpi_title"))
+        s = _PlaceholderSection(scroll, self._app, "🎯", self.T("makalu_dpi_title"),
+                                on_open=self._dpi_start_poll,
+                                on_close=self._dpi_stop_poll)
         self._sections.append(s)
         self._section_titles.append((s, "makalu_dpi_title"))
         self._dpi_section = s
+        self._dpi_poll_id = None
         self._build_dpi_content(s.content)
+
+    def _dpi_start_poll(self):
+        """Start DPI polling — called when DPI section is opened."""
+        if self._dpi_poll_id is not None:
+            return  # already running
+        self._dpi_load_from_device()
+        self._dpi_poll()
+
+    def _dpi_stop_poll(self):
+        """Stop DPI polling — called when DPI section is closed."""
+        if self._dpi_poll_id is not None:
+            self.after_cancel(self._dpi_poll_id)
+            self._dpi_poll_id = None
 
     def _build_dpi_content(self, parent):
         self._dpi_values = _load_makalu_dpi()
@@ -360,7 +376,6 @@ class Makalu67Panel(ctk.CTkFrame):
 
         self._dpi_update_btn_labels()
         self._dpi_load_from_device()
-        self._dpi_poll()
 
     def _dpi_update_btn_labels(self):
         for i, btn in enumerate(self._dpi_prof_btns):
@@ -429,11 +444,12 @@ class Makalu67Panel(ctk.CTkFrame):
         self._dpi_apply_loaded(list(DPI_DEFAULTS))
 
     def _dpi_poll(self):
+        self._dpi_poll_id = None  # consumed — will be reset by after() below
         def _on_result(_, active):
             if active != self._dpi_active:
                 self._dpi_select_profile(active)
         self._fetch_dpi(_on_result)
-        self.after(1500, self._dpi_poll)
+        self._dpi_poll_id = self.after(1500, self._dpi_poll)
 
     def _apply_dpi(self):
         self._on_dpi_entry()  # flush any typed value before reading _dpi_values
@@ -1557,10 +1573,12 @@ class MakaluCustomRGBWindow(ctk.CTkToplevel):
 class _PlaceholderSection:
     """Accordion section with a plain string title (not a lang key)."""
 
-    def __init__(self, parent, app, icon, title):
+    def __init__(self, parent, app, icon, title, on_open=None, on_close=None):
         self._app       = app
         self._open      = False
         self._natural_h = 0
+        self._on_open   = on_open
+        self._on_close  = on_close
 
         self._outer = ctk.CTkFrame(parent, fg_color="transparent", corner_radius=0)
         self._outer.pack(fill="x", pady=2)
@@ -1618,6 +1636,8 @@ class _PlaceholderSection:
         self._chevron.configure(text="▼")
         if self._natural_h > 0:
             self._content.configure(height=self._natural_h)
+        if self._on_open:
+            self._on_open()
 
     def close(self):
         if not self._open:
@@ -1625,6 +1645,8 @@ class _PlaceholderSection:
         self._open = False
         self._chevron.configure(text="▶")
         self._content.configure(height=0)
+        if self._on_close:
+            self._on_close()
 
     def _toggle(self, event=None):
         self.close() if self._open else self.open()

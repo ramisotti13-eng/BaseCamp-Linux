@@ -914,7 +914,20 @@ def controller_loop(style=STYLE_ANALOG):
                 else:
                     btype = buttons[i].get("type", "shell")
                     action = buttons[i].get("action", "").strip()
-                    if action and btype != "none":
+                    if btype == "obs" and action:
+                        obs_btn = {}
+                        if action.startswith("scene:"):
+                            obs_btn = {"type": "scene", "scene": action[6:]}
+                        elif action == "record":
+                            obs_btn = {"type": "record"}
+                        elif action == "stream":
+                            obs_btn = {"type": "stream"}
+                        if obs_btn:
+                            threading.Thread(
+                                target=_execute_obs_action,
+                                args=(obs_btn, obs_cfg, obs_holder),
+                                daemon=True).start()
+                    elif action and btype != "none":
                         sudo_user = os.environ.get("SUDO_USER")
                         if sudo_user:
                             uid = _pwd.getpwnam(sudo_user).pw_uid
@@ -1026,7 +1039,6 @@ def controller_loop(style=STYLE_ANALOG):
             if now - last_time_sync >= 60:
                 _send_time_packet(dev, style)
                 last_time_sync = now
-
             time.sleep(CPU_INTERVAL)
     except KeyboardInterrupt:
         pass  # Normal termination via SIGINT

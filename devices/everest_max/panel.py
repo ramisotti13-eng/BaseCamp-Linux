@@ -10,10 +10,9 @@ import customtkinter as ctk
 from PIL import Image, ImageTk
 
 from shared.config import (
-    CONFIG_DIR, MAIN_MODE_FILE, OBS_BACKUP_FILE,
+    CONFIG_DIR, MAIN_MODE_FILE,
     load_config as load_style, save_config as save_style,
     load_buttons, save_buttons,
-    load_obs_config, save_obs_config,
     load_autostart_enabled, save_autostart_enabled,
     load_splash_enabled, save_splash_enabled,
     load_rgb_settings as load_rgb_config, save_rgb_settings as save_rgb_config,
@@ -21,7 +20,6 @@ from shared.config import (
     _load_icon_last, _save_icon_last,
     _save_to_library, _save_to_main_library,
     _compute_lib_hash, _compute_main_lib_hash,
-    OBS_INTERNAL_ORDER,
 )
 from shared.ui_helpers import (
     BG, BG2, BG3, FG, FG2, BLUE, YLW, GRN, RED, BORDER,
@@ -58,26 +56,6 @@ class EverestMaxPanel(ctk.CTkFrame):
         for i, b in enumerate(buttons):
             self._btn_action[i].set(b.get("action", ""))
             self._btn_type[i].set(b.get("type", "shell"))
-
-        # OBS vars
-        obs_cfg = load_obs_config()
-        self._obs_host     = tk.StringVar(value=obs_cfg["host"])
-        self._obs_port     = tk.StringVar(value=str(obs_cfg["port"]))
-        self._obs_password = tk.StringVar(value=obs_cfg["password"])
-        self._rebuild_obs_type_map()
-        self._obs_btn_type_internal = [
-            obs_cfg["buttons"][i]["type"] for i in range(4)
-        ]
-        self._obs_btn_type = [
-            tk.StringVar(value=self._obs_type_options.get(
-                obs_cfg["buttons"][i]["type"],
-                self._obs_type_options.get("none", "")))
-            for i in range(4)
-        ]
-        self._obs_btn_scene = [
-            tk.StringVar(value=obs_cfg["buttons"][i].get("scene", ""))
-            for i in range(4)
-        ]
 
         # Clock format + style
         def _read_cfg(name, default):
@@ -120,17 +98,6 @@ class EverestMaxPanel(ctk.CTkFrame):
 
     def _cmd(self, *args):
         return self._app._cmd(*args)
-
-    # ── OBS helpers ───────────────────────────────────────────────────────────
-
-    def _rebuild_obs_type_map(self):
-        self._obs_type_options = {
-            internal: self._app.T(f"obs_{internal}")
-            for internal in OBS_INTERNAL_ORDER
-        }
-        self._obs_type_display_to_internal = {
-            v: k for k, v in self._obs_type_options.items()
-        }
 
     # ── UI build ──────────────────────────────────────────────────────────────
 
@@ -234,7 +201,6 @@ class EverestMaxPanel(ctk.CTkFrame):
         self._build_numpad_section(scroll)
         self._build_rgb_section(scroll)
         self._build_zone_section(scroll)
-        self._build_obs_section(scroll)
 
         # Apply i18n, then measure sections
         self._app._apply_lang()
@@ -348,13 +314,15 @@ class EverestMaxPanel(ctk.CTkFrame):
 
         self._btn_type_menus = []
         self._folder_btns    = []
+        self._action_entries = []
+        self._obs_combos     = []
 
-        _TYPE_INTERNAL = ["none", "shell", "url", "folder", "app"]
+        _TYPE_INTERNAL = ["none", "shell", "url", "folder", "app", "obs"]
 
         def _type_labels():
             return [self.T("action_type_none"),   self.T("action_type_shell"),
                     self.T("action_type_url"),     self.T("action_type_folder"),
-                    self.T("action_type_app")]
+                    self.T("action_type_app"),     "OBS"]
 
         _HERE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         _FROZEN = getattr(sys, "frozen", False)
@@ -402,12 +370,33 @@ class EverestMaxPanel(ctk.CTkFrame):
             type_menu.pack(side="left", padx=(2, 2))
             self._btn_type_menus.append(type_menu)
 
-            ctk.CTkEntry(action_row, textvariable=self._btn_action[i],
+            entry = ctk.CTkEntry(action_row, textvariable=self._btn_action[i],
                          fg_color=BG2, text_color=FG, border_color=BORDER,
-                         font=("Helvetica", 11), height=30,
-                         ).pack(side="left", padx=4, expand=True, fill="x")
+                         font=("Helvetica", 11), height=30)
+            entry.pack(side="left", padx=4, expand=True, fill="x")
+            self._action_entries.append(entry)
+
+            obs_combo = ctk.CTkComboBox(
+                action_row, values=[], width=140, height=30,
+                font=("Helvetica", 11),
+                fg_color=BG2, button_color=BLUE, border_color=BORDER,
+                text_color=FG, dropdown_fg_color=BG2, dropdown_text_color=FG,
+                dropdown_hover_color=BG3,
+                command=lambda val, ix=idx: self._on_obs_select(val, ix))
+            self._obs_combos.append(obs_combo)
 
             cur_type     = self._btn_type[i].get()
+            if cur_type == "obs":
+                entry.pack_forget()
+                obs_panel = self._app._obs_panel
+                scenes = obs_panel.get_scenes() if obs_panel.is_connected() else []
+                obs_combo.configure(values=scenes + ["— Record", "— Stream"])
+                cur_action = self._btn_action[i].get()
+                if cur_action.startswith("scene:"):
+                    obs_combo.set(cur_action[6:])
+                elif cur_action in ("record", "stream"):
+                    obs_combo.set(f"— {cur_action.capitalize()}")
+                obs_combo.pack(side="left", padx=4, expand=True, fill="x")
             browse_active = cur_type in ("folder", "app")
             folder_btn   = ctk.CTkButton(
                 action_row, text="",
@@ -417,14 +406,11 @@ class EverestMaxPanel(ctk.CTkFrame):
                 fg_color="transparent", hover_color=BG3, corner_radius=4,
                 state="normal" if browse_active else "disabled",
             )
-            folder_btn.pack(side="left", padx=(0, 2))
+            folder_btn.pack(side="left", padx=(0, 4))
             self._folder_btns.append(folder_btn)
 
-            ctk.CTkButton(action_row, text="✓", width=36, height=30,
-                          command=lambda ix=idx: self._apply_btn(ix),
-                          fg_color=GRN, text_color=FG, hover_color="#18a348",
-                          font=("Helvetica", 10, "bold"), corner_radius=4,
-                          ).pack(side="left", padx=(0, 4))
+            entry.bind("<Return>", lambda e, ix=idx: self._apply_btn(ix))
+            entry.bind("<FocusOut>", lambda e, ix=idx: self._apply_btn(ix))
 
         self._numpad_type_internal   = _TYPE_INTERNAL
         self._numpad_type_labels_fn  = _type_labels
@@ -590,104 +576,13 @@ class EverestMaxPanel(ctk.CTkFrame):
             "zone_open_editor"
         ).pack()
 
-    def _build_obs_section(self, scroll):
-        s4 = AccordionSection(scroll, self._app, "📡", "obs_title")
-        self._sections.append(s4)
-        b4 = s4.content
-
-        conn = ctk.CTkFrame(b4, fg_color=BG3, corner_radius=4)
-        conn.pack(fill="x", padx=12, pady=(10, 4))
-
-        obs_top = ctk.CTkFrame(conn, fg_color="transparent")
-        obs_top.pack(pady=(8, 2))
-        ctk.CTkLabel(obs_top, text="Host:", text_color=FG2,
-                     font=("Helvetica", 11)).pack(side="left")
-        ctk.CTkEntry(obs_top, textvariable=self._obs_host, width=120, height=30,
-                     fg_color=BG2, text_color=FG, border_color=BORDER,
-                     font=("Helvetica", 11)).pack(side="left", padx=(2, 8))
-        ctk.CTkLabel(obs_top, text="Port:", text_color=FG2,
-                     font=("Helvetica", 11)).pack(side="left")
-        ctk.CTkEntry(obs_top, textvariable=self._obs_port, width=62, height=30,
-                     fg_color=BG2, text_color=FG, border_color=BORDER,
-                     font=("Helvetica", 11)).pack(side="left", padx=2)
-
-        obs_pw = ctk.CTkFrame(conn, fg_color="transparent")
-        obs_pw.pack(pady=2)
-        self._reg(
-            ctk.CTkLabel(obs_pw, text="", text_color=FG2, font=("Helvetica", 11)),
-            "obs_password"
-        ).pack(side="left")
-        ctk.CTkEntry(obs_pw, textvariable=self._obs_password, width=180, height=30,
-                     fg_color=BG2, text_color=FG, border_color=BORDER,
-                     font=("Helvetica", 11), show="*").pack(side="left", padx=4)
-
-        obs_btn_row = ctk.CTkFrame(conn, fg_color="transparent")
-        obs_btn_row.pack(pady=(6, 8))
-        self._reg(
-            ctk.CTkButton(obs_btn_row, text="", command=self._obs_connect,
-                          fg_color=BLUE, text_color=FG, hover_color="#0884be",
-                          font=("Helvetica", 11, "bold"), height=34, corner_radius=6),
-            "obs_connect"
-        ).pack(side="left")
-        self._reg(
-            ctk.CTkButton(obs_btn_row, text="", command=self._obs_disconnect,
-                          fg_color=RED, text_color=BG, hover_color="#c03030",
-                          font=("Helvetica", 11, "bold"), height=34, corner_radius=6),
-            "obs_disconnect"
-        ).pack(side="left", padx=(6, 0))
-
-        self._obs_status = ctk.CTkLabel(conn, text="", font=("Helvetica", 11),
-                                         text_color=FG2, wraplength=300)
-        self._obs_status.pack(pady=(0, 8))
-
-        obs_btns_frame = ctk.CTkFrame(b4, fg_color="transparent")
-        obs_btns_frame.pack(padx=12, pady=(0, 4), fill="x")
-        self._obs_scene_entries = []
-        self._obs_type_combos   = []
-
-        obs_type_labels = [self._obs_type_options[k] for k in OBS_INTERNAL_ORDER]
-
-        for i in range(4):
-            row = ctk.CTkFrame(obs_btns_frame, fg_color=BG3, corner_radius=4)
-            row.pack(fill="x", pady=2)
-
-            tk.Frame(row, bg=BLUE, width=3).pack(side="left", fill="y")
-            ctk.CTkLabel(row, text=f"D{i+1}", font=("Helvetica", 10, "bold"),
-                         text_color=BLUE, width=30).pack(side="left", padx=(6, 4), pady=6)
-
-            idx = i
-            type_combo = ctk.CTkComboBox(
-                row, variable=self._obs_btn_type[i], values=obs_type_labels,
-                width=112, height=30, font=("Helvetica", 11),
-                fg_color=BG2, button_color=BLUE, border_color=BORDER,
-                text_color=FG, dropdown_fg_color=BG2, dropdown_text_color=FG,
-                dropdown_hover_color=BG3,
-                command=lambda val, ix=idx: self._on_obs_type_change(ix, val))
-            type_combo.pack(side="left", padx=4)
-            self._obs_type_combos.append(type_combo)
-
-            internal_val = self._obs_btn_type_internal[i]
-            scene_state  = "normal" if internal_val == "scene" else "disabled"
-            scene_combo  = ctk.CTkComboBox(
-                row, variable=self._obs_btn_scene[i],
-                values=[], width=155, height=30, state=scene_state,
-                font=("Helvetica", 11),
-                fg_color=BG2, button_color=BLUE, border_color=BORDER,
-                text_color=FG, dropdown_fg_color=BG2, dropdown_text_color=FG,
-                dropdown_hover_color=BG3)
-            scene_combo.pack(side="left", padx=4)
-            self._obs_scene_entries.append(scene_combo)
-            self._obs_btn_scene[i].trace_add("write",
-                                              lambda *_, ix=idx: self._obs_auto_save(ix))
-
-        self._obs_info = ctk.CTkLabel(b4, text="", font=("Helvetica", 11),
-                                       text_color=GRN)
-        self._obs_info.pack(pady=(4, 10))
 
     # ── Logic methods ─────────────────────────────────────────────────────────
 
     def _tick(self):
         import datetime
+        import threading
+        import resource
         now = datetime.datetime.now()
         if self._clock_format.get() == "12H":
             time_str = now.strftime("%I:%M:%S %p")
@@ -702,6 +597,7 @@ class EverestMaxPanel(ctk.CTkFrame):
              "July","August","September","October","November","December"])
         date_str = f"{days[now.weekday()]}, {now.day:02d}. {months[now.month-1]} {now.year}"
         self._date_label.configure(text=date_str)
+
         self._app.after(1000, self._tick)
 
     def _update_cpu_bar(self):
@@ -710,7 +606,7 @@ class EverestMaxPanel(ctk.CTkFrame):
             self._btn_cpu.configure(text=self.T("monitor_start"),
                                     fg_color=YLW, text_color="#0d0d14")
             self._cpu_status.configure(text=self.T("monitor_stopped"), text_color=RED)
-        self._app.after(2000, self._update_cpu_bar)
+        self._app.after(5000, self._update_cpu_bar)
 
     def _on_format_change(self):
         with open(os.path.join(CONFIG_DIR, "clock_format"), "w") as f:
@@ -942,6 +838,32 @@ class EverestMaxPanel(ctk.CTkFrame):
                 btn.configure(state="normal", image=self._folder_img)
             else:
                 btn.configure(state="disabled", image=self._folder_img_dim)
+        # Show/hide OBS combo vs entry+browse
+        if hasattr(self, "_obs_combos") and idx < len(self._obs_combos):
+            self._obs_combos[idx].pack_forget()
+            self._action_entries[idx].pack_forget()
+            self._folder_btns[idx].pack_forget()
+            if internal == "obs":
+                obs_panel = self._app._obs_panel
+                scenes = obs_panel.get_scenes() if obs_panel.is_connected() else []
+                self._obs_combos[idx].configure(values=scenes + ["— Record", "— Stream"])
+                if scenes:
+                    self._obs_combos[idx].set(scenes[0])
+                    self._btn_action[idx].set(f"scene:{scenes[0]}")
+                self._obs_combos[idx].pack(side="left", padx=4, expand=True, fill="x")
+            else:
+                self._action_entries[idx].pack(side="left", padx=4, expand=True, fill="x")
+                self._folder_btns[idx].pack(side="left", padx=(0, 4))
+            self._apply_btn(idx)
+
+    def _on_obs_select(self, val, idx):
+        if val == "— Record":
+            self._btn_action[idx].set("record")
+        elif val == "— Stream":
+            self._btn_action[idx].set("stream")
+        else:
+            self._btn_action[idx].set(f"scene:{val}")
+        self._apply_btn(idx)
 
     def _browse_action(self, idx):
         btype = self._btn_type[idx].get()
@@ -949,8 +871,9 @@ class EverestMaxPanel(ctk.CTkFrame):
             path = native_open_folder()
             if path:
                 self._btn_action[idx].set(path)
+                self._apply_btn(idx)
         elif btype == "app":
-            self._show_app_picker(idx)
+            self._show_app_picker(idx)  # auto-saves via _select
 
     def _show_app_picker(self, idx):
         apps = parse_desktop_apps()
@@ -984,6 +907,7 @@ class EverestMaxPanel(ctk.CTkFrame):
             result[0] = exec_cmd
             self._btn_action[idx].set(exec_cmd)
             dlg.destroy()
+            self._apply_btn(idx)
 
         def _rebuild(filter_text=""):
             for b in _btn_refs:
@@ -1205,112 +1129,10 @@ class EverestMaxPanel(ctk.CTkFrame):
 
         threading.Thread(target=do_upload, daemon=True).start()
 
-    # ── OBS ───────────────────────────────────────────────────────────────────
-
-    def _obs_connect(self):
-        self._obs_status.configure(text=self.T("obs_connecting"), text_color=BLUE)
-        cfg = self._obs_build_cfg()
-        save_obs_config(cfg)
-        if any(b["type"] != "none" for b in cfg["buttons"]):
-            with open(OBS_BACKUP_FILE, "w") as f:
-                json.dump(cfg, f, indent=2)
-
-        def connect():
-            import socket
-            import obsws_python as obs
-            old_timeout = socket.getdefaulttimeout()
-            try:
-                socket.setdefaulttimeout(4)
-                cl   = obs.ReqClient(host=cfg["host"], port=cfg["port"],
-                                     password=cfg.get("password", ""), timeout=4)
-                resp = cl.get_scene_list()
-                scenes = [s["sceneName"] for s in resp.scenes]
-                cl.disconnect()
-                self._app.after(0, lambda: self._obs_connected(scenes))
-            except ConnectionRefusedError:
-                self._app.after(0, lambda: self._obs_status.configure(
-                    text=self.T("obs_unreachable"), text_color=RED))
-            except Exception as e:
-                msg = str(e) or type(e).__name__
-                self._app.after(0, lambda: self._obs_status.configure(
-                    text=self.T("obs_error", msg=msg), text_color=RED))
-            finally:
-                socket.setdefaulttimeout(old_timeout)
-        threading.Thread(target=connect, daemon=True).start()
-
-    def _obs_disconnect(self):
-        cfg = self._obs_build_cfg()
-        with open(OBS_BACKUP_FILE, "w") as f:
-            json.dump(cfg, f, indent=2)
-        none_display = self._obs_type_options.get("none", "")
-        for i in range(4):
-            self._obs_btn_type_internal[i] = "none"
-            self._obs_btn_type[i].set(none_display)
-            self._obs_btn_scene[i].set("")
-            self._obs_scene_entries[i].configure(state="disabled", values=[])
-        save_obs_config(self._obs_build_cfg())
-        self._obs_status.configure(text=self.T("obs_disconnected"), text_color=FG2)
-
-    def _obs_connected(self, scenes):
-        try:
-            with open(OBS_BACKUP_FILE) as f:
-                backup = json.load(f)
-            for i, btn in enumerate(backup.get("buttons", [])):
-                internal_val = btn.get("type", "none")
-                self._obs_btn_type_internal[i] = internal_val
-                display = self._obs_type_options.get(
-                    internal_val, self._obs_type_options.get("none", ""))
-                self._obs_btn_type[i].set(display)
-                self._obs_btn_scene[i].set(btn.get("scene", ""))
-            save_obs_config(self._obs_build_cfg())
-        except (FileNotFoundError, json.JSONDecodeError):
-            pass
-        self._obs_status.configure(
-            text=self.T("obs_connected", n=len(scenes)), text_color=GRN)
-        for i, combo in enumerate(self._obs_scene_entries):
-            combo.configure(values=scenes)
-            if self._obs_btn_type_internal[i] == "scene":
-                combo.configure(state="normal")
-
-    def _obs_build_cfg(self):
-        return {
-            "host":     self._obs_host.get().strip(),
-            "port":     int(self._obs_port.get().strip() or "4455"),
-            "password": self._obs_password.get(),
-            "buttons": [
-                {"type":  self._obs_btn_type_internal[i],
-                 "scene": self._obs_btn_scene[i].get().strip()}
-                for i in range(4)
-            ]
-        }
-
-    def _on_obs_type_change(self, idx, display_val=None):
-        if display_val is None:
-            display_val = self._obs_btn_type[idx].get()
-        internal_val = self._obs_type_display_to_internal.get(display_val, "none")
-        self._obs_btn_type_internal[idx] = internal_val
-        combo = self._obs_scene_entries[idx]
-        combo.configure(state="normal" if internal_val == "scene" else "disabled")
-        self._obs_auto_save(idx)
-
-    def _obs_auto_save(self, idx):
-        save_obs_config(self._obs_build_cfg())
-        self._obs_info.configure(text=self.T("obs_saved", d=idx+1), text_color=GRN)
-
     # ── Public interface for App ───────────────────────────────────────────────
 
     def apply_lang(self):
-        """Called by App when language changes to refresh OBS type combos and
-        button type menus."""
-        self._rebuild_obs_type_map()
-        obs_type_labels = [self._obs_type_options[k] for k in OBS_INTERNAL_ORDER]
-        for i in range(4):
-            if hasattr(self, "_obs_type_combos"):
-                self._obs_type_combos[i].configure(values=obs_type_labels)
-                internal = self._obs_btn_type_internal[i]
-                display  = self._obs_type_options.get(internal, obs_type_labels[0])
-                self._obs_btn_type[i].set(display)
-
+        """Called by App when language changes to refresh button type menus."""
         if hasattr(self, "_btn_type_menus"):
             new_labels = self._numpad_type_labels_fn()
             for i, menu in enumerate(self._btn_type_menus):

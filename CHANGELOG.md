@@ -1,5 +1,55 @@
 # Changelog
 
+## [1.6.0] - 2026-03-25
+
+### Mountain DisplayPad — Full Support
+
+- **Button Images (K1–K12)**: Assign individual 102×102 images or animated GIFs to each of the 12 display buttons
+- **Fullscreen Image/GIF**: Upload a single image or animated GIF that spans across all 12 displays as one seamless picture
+- **Icon Library**: Built-in library with 39 bundled icons (Media, Social, System, Navigation, Numbers 1–12) plus user-uploaded images — all accessible via a grid picker
+- **Fullscreen Library**: Separate library for fullscreen images and GIFs, auto-saves uploaded files for quick reuse
+- **Button Actions (K1–K12)**: Assign actions to each button — Shell command, URL, Folder, App, OBS, or Page navigation
+- **Multi-Page System**: Create up to 12 sub-pages with customisable folder icons and text labels (DPFolder.png). K1 on sub-pages is always "Back". Fullscreen GIFs work on sub-pages with page navigation still functional underneath
+- **Key Event Detection**: Hardware button presses detected via HID (data[0]==0x01 filter, 0.8s debounce). Actions execute during GIF animation by reading key events between frame uploads
+- **Icon Rotation**: Rotate all button icons by 0°/90°/180°/270° for mounting the pad in any orientation (e.g. SimRacing setups). Preview thumbnails rotate live in the GUI
+- **Device Reconnect**: Automatically re-uploads saved images when the DisplayPad is reconnected or the app restarts
+- **Clear All**: Uploads blank (black) images to all buttons on the device, preserving page folder icons
+- **Auto-Upload**: Images upload automatically when assigned or when the image dialog is closed — no manual upload button needed
+- **GIF Animation**: Supports animated GIFs on individual buttons and fullscreen, with configurable minimum frame time (ms/frame)
+
+### OBS Studio — Global Integration
+
+- **New top-level OBS tab** in the switcher bar (alongside Keyboard, Mouse, DisplayPad)
+- OBS connection settings (Host, Port, Password) moved from Keyboard panel to dedicated OBS panel
+- Connect & Load Scenes / Disconnect with status indicator
+- **OBS switcher button turns green** when connected (visible from any tab)
+- **OBS actions available on all devices**: D1–D4 (Keyboard) and K1–K12 (DisplayPad) can be set to OBS type with Scene/Record/Stream selector
+- OBS actions execute via `obsws_python` in background threads
+
+### Keyboard (Everest Max) — Improvements
+
+- **OBS section removed** from Keyboard panel (moved to global OBS tab)
+- **D1–D4 actions**: Added "OBS" action type with scene/record/stream dropdown
+- **Auto-save**: D1–D4 action changes save immediately on type change, browse, or entry edit — green checkmark buttons removed
+
+### UI / UX
+
+- **Simplified DisplayPad layout**: Single scrollable panel (no accordion) with all controls directly visible
+- **Simplified OBS layout**: Direct content display without accordion
+- **Two-row switcher bar**: Keyboard/Mouse/DisplayPad on top, OBS Studio centered below
+- **Emoji-free switcher buttons**: Text-only buttons for better compatibility across platforms
+- **Window width** increased to 480px to accommodate 4 tabs
+- **Scroll speed** capped in all Library Picker dialogs (consistent with panel scroll behaviour)
+- **GIF frame picker skipped** for DisplayPad (device supports animation natively)
+
+### Internationalisation
+
+- Full DE/EN support for all new DisplayPad features (29+ new keys)
+- OBS panel and action type labels in both languages
+- Page system labels: Page selector, Back button, page name hints
+
+---
+
 ## [1.5.1] - 2026-03-22
 
 ### Internal

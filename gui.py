@@ -6,7 +6,6 @@ import customtkinter as ctk
 from PIL import Image, ImageTk
 import subprocess
 import datetime
-import threading
 import re
 import time
 import sys
@@ -82,6 +81,8 @@ from shared.ui_helpers import (
 )
 from devices.everest_max.panel import EverestMaxPanel
 from devices.makalu67.panel import Makalu67Panel
+from devices.displaypad.panel import DisplayPadPanel
+from devices.obs.panel import OBSPanel
 
 # ── Keep backward-compatible module-level names used by existing code ──────────
 
@@ -130,13 +131,25 @@ def available_langs():
 # USB presence detection helpers (non-blocking, best-effort)
 
 def _check_usb_presence(vid, pid):
-    """Return True if a USB device with given VID:PID is present (Linux lsusb)."""
+    """Return True if a USB device with given VID:PID is present.
+    Reads /sys/bus/usb/devices/ directly — no subprocess, no forking.
+    """
     try:
-        r = subprocess.run(
-            ["lsusb", "-d", f"{vid:04x}:{pid:04x}"],
-            capture_output=True, timeout=2)
-        return r.returncode == 0 and r.stdout.strip() != b""
-    except Exception:
+        target_vid = f"{vid:04x}"
+        target_pid = f"{pid:04x}"
+        for entry in os.listdir("/sys/bus/usb/devices/"):
+            base = f"/sys/bus/usb/devices/{entry}"
+            try:
+                with open(f"{base}/idVendor") as f:
+                    if f.read().strip() != target_vid:
+                        continue
+                with open(f"{base}/idProduct") as f:
+                    if f.read().strip() == target_pid:
+                        return True
+            except OSError:
+                continue
+        return False
+    except OSError:
         return False
 
 
@@ -144,17 +157,19 @@ def _check_usb_presence(vid, pid):
 
 class App(ctk.CTk):
     # VID/PID constants for supported devices
-    EVEREST_MAX_VID = 0x3282
-    EVEREST_MAX_PID = 0x0001
-    MAKALU67_VID    = 0x3282
-    MAKALU67_PID    = 0x0003
+    EVEREST_MAX_VID  = 0x3282
+    EVEREST_MAX_PID  = 0x0001
+    MAKALU67_VID     = 0x3282
+    MAKALU67_PID     = 0x0003
+    DISPLAYPAD_VID   = 0x3282
+    DISPLAYPAD_PID   = 0x0009
 
     def __init__(self):
         super().__init__()
         self.title("BaseCamp Linux")
         self.resizable(False, False)
         self.configure(fg_color=BG)
-        self.geometry("440x760")
+        self.geometry("480x760")
 
         try:
             _icon = ImageTk.PhotoImage(Image.open(
@@ -183,7 +198,7 @@ class App(ctk.CTk):
 
         self._lang_var = tk.StringVar()
 
-        self._active_device = None   # "everest_max" | "makalu67"
+        self._active_device = None   # "everest_max" | "makalu67" | "displaypad"
         self._panels        = {}     # populated in _build_ui
 
         self._build_ui()
@@ -355,36 +370,59 @@ class App(ctk.CTk):
                       font=("Helvetica", 14), command=self._quit).place(relx=1.0,
                       rely=0.5, anchor="e", x=-8)
 
-        # ── Device switcher bar ──
-        switcher = ctk.CTkFrame(self, fg_color=BG3, corner_radius=0, height=38)
+        # ── Device switcher bar (2 rows) ──
+        switcher = ctk.CTkFrame(self, fg_color=BG3, corner_radius=0)
         switcher.pack(fill="x")
-        switcher.pack_propagate(False)
+
+        row1 = ctk.CTkFrame(switcher, fg_color="transparent")
+        row1.pack(pady=(4, 0))
 
         self._sw_keyboard_btn = ctk.CTkButton(
-            switcher, text="⌨  Keyboard", font=("Helvetica", 11, "bold"),
+            row1, text="Keyboard", font=("Helvetica", 11, "bold"),
             fg_color=BLUE, hover_color="#0884be", text_color=FG,
-            width=160, height=28, corner_radius=4,
+            height=28, corner_radius=4,
             command=lambda: self._switch_device("everest_max"))
-        self._sw_keyboard_btn.pack(side="left", padx=(8, 4), pady=5)
+        self._sw_keyboard_btn.pack(side="left", padx=4)
 
         self._sw_mouse_btn = ctk.CTkButton(
-            switcher, text="🖱  Mouse", font=("Helvetica", 11, "bold"),
+            row1, text="Mouse", font=("Helvetica", 11, "bold"),
             fg_color=BG2, hover_color="#222232", text_color=FG2,
-            width=160, height=28, corner_radius=4,
+            height=28, corner_radius=4,
             command=lambda: self._switch_device("makalu67"))
-        self._sw_mouse_btn.pack(side="left", padx=4, pady=5)
+        self._sw_mouse_btn.pack(side="left", padx=4)
+
+        self._sw_displaypad_btn = ctk.CTkButton(
+            row1, text="DisplayPad", font=("Helvetica", 11, "bold"),
+            fg_color=BG2, hover_color="#222232", text_color=FG2,
+            height=28, corner_radius=4,
+            command=lambda: self._switch_device("displaypad"))
+        self._sw_displaypad_btn.pack(side="left", padx=4)
+
+        row2 = ctk.CTkFrame(switcher, fg_color="transparent")
+        row2.pack(pady=(2, 4))
+
+        self._sw_obs_btn = ctk.CTkButton(
+            row2, text="OBS Studio", font=("Helvetica", 11, "bold"),
+            fg_color=BG2, hover_color="#222232", text_color=FG2,
+            height=28, corner_radius=4, width=120,
+            command=lambda: self._switch_device("obs"))
+        self._sw_obs_btn.pack()
 
         # ── Panel area ──
         self._panel_area = ctk.CTkFrame(self, fg_color=BG, corner_radius=0)
         self._panel_area.pack(fill="both", expand=True)
 
-        # Instantiate both panels
-        self._everest_panel = EverestMaxPanel(self._panel_area, self)
-        self._makalu_panel  = Makalu67Panel(self._panel_area, self)
+        # Instantiate panels (OBS first — other panels reference it)
+        self._obs_panel         = OBSPanel(self._panel_area, self)
+        self._everest_panel     = EverestMaxPanel(self._panel_area, self)
+        self._makalu_panel      = Makalu67Panel(self._panel_area, self)
+        self._displaypad_panel  = DisplayPadPanel(self._panel_area, self)
 
         self._panels = {
             "everest_max": self._everest_panel,
             "makalu67":    self._makalu_panel,
+            "displaypad":  self._displaypad_panel,
+            "obs":         self._obs_panel,
         }
 
         # Show keyboard panel by default
@@ -403,12 +441,22 @@ class App(ctk.CTk):
         self._active_device = device_id
 
         # Update switcher button styles
-        if device_id == "everest_max":
-            self._sw_keyboard_btn.configure(fg_color=BLUE, text_color=FG)
-            self._sw_mouse_btn.configure(fg_color=BG2, text_color=FG2)
+        self._sw_keyboard_btn.configure(
+            fg_color=BLUE if device_id == "everest_max" else BG2,
+            text_color=FG  if device_id == "everest_max" else FG2)
+        self._sw_mouse_btn.configure(
+            fg_color=BLUE if device_id == "makalu67" else BG2,
+            text_color=FG  if device_id == "makalu67" else FG2)
+        self._sw_displaypad_btn.configure(
+            fg_color=BLUE if device_id == "displaypad" else BG2,
+            text_color=FG  if device_id == "displaypad" else FG2)
+        obs_connected = hasattr(self, "_obs_panel") and self._obs_panel.is_connected()
+        if device_id == "obs":
+            self._sw_obs_btn.configure(fg_color=BLUE, text_color=FG)
+        elif obs_connected:
+            self._sw_obs_btn.configure(fg_color=GRN, text_color=FG)
         else:
-            self._sw_mouse_btn.configure(fg_color=BLUE, text_color=FG)
-            self._sw_keyboard_btn.configure(fg_color=BG2, text_color=FG2)
+            self._sw_obs_btn.configure(fg_color=BG2, text_color=FG2)
 
     # ── Controller delegation ─────────────────────────────────────────────────
 
@@ -433,30 +481,27 @@ class App(ctk.CTk):
     # ── USB presence check ────────────────────────────────────────────────────
 
     def _check_devices(self):
-        """Periodic non-blocking USB presence check. Updates switcher appearance."""
-        def check():
-            kb_present    = _check_usb_presence(self.EVEREST_MAX_VID, self.EVEREST_MAX_PID)
-            mouse_present = _check_usb_presence(self.MAKALU67_VID, self.MAKALU67_PID)
-            self.after(0, lambda: self._update_device_status(kb_present, mouse_present))
-        threading.Thread(target=check, daemon=True).start()
+        """Periodic USB presence check (runs in main thread — /sys reads are <1ms)."""
+        kb_present  = _check_usb_presence(self.EVEREST_MAX_VID, self.EVEREST_MAX_PID)
+        mouse_present = _check_usb_presence(self.MAKALU67_VID, self.MAKALU67_PID)
+        dp_present  = _check_usb_presence(self.DISPLAYPAD_VID, self.DISPLAYPAD_PID)
+        self._update_device_status(kb_present, mouse_present, dp_present)
         self.after(5000, self._check_devices)
 
-    def _update_device_status(self, kb_present, mouse_present):
+    def _update_device_status(self, kb_present, mouse_present, dp_present=False):
         """Update switcher button appearance based on device presence."""
         # Keyboard button
-        if kb_present:
-            self._sw_keyboard_btn.configure(
-                text="⌨  Keyboard",
-                text_color=FG if self._active_device == "everest_max" else FG2)
-        else:
-            self._sw_keyboard_btn.configure(text="⌨  Keyboard ⚠")
+        self._sw_keyboard_btn.configure(
+            text="Keyboard" + ("" if kb_present else " ⚠"),
+            text_color=FG if self._active_device == "everest_max" else FG2)
         # Mouse button
-        if mouse_present:
-            self._sw_mouse_btn.configure(
-                text="🖱  Mouse",
-                text_color=FG if self._active_device == "makalu67" else FG2)
-        else:
-            self._sw_mouse_btn.configure(text="🖱  Mouse ⚠")
+        self._sw_mouse_btn.configure(
+            text="Mouse" + ("" if mouse_present else " ⚠"),
+            text_color=FG if self._active_device == "makalu67" else FG2)
+        # DisplayPad button
+        self._sw_displaypad_btn.configure(
+            text="DisplayPad" + ("" if dp_present else " ⚠"),
+            text_color=FG if self._active_device == "displaypad" else FG2)
         # Notify panels
         if hasattr(self, "_makalu_panel"):
             self._makalu_panel.set_connected(mouse_present)

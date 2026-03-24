@@ -1,5 +1,8 @@
-# Mountain Everest Max Keyboard + Makalu 67 Mouse — allow access without root
-# Keyboard: VID=0x3282, PID=0x0001
-# Mouse:    VID=0x3282, PID=0x0003
+# Mountain devices — allow access without root
+# Keyboard:   VID=0x3282, PID=0x0001
+# Mouse:      VID=0x3282, PID=0x0003
+# DisplayPad: VID=0x3282, PID=0x0009
 SUBSYSTEM=="usb", ATTRS{idVendor}=="3282", ATTRS{idProduct}=="0001", MODE="0666", TAG+="uaccess"
 SUBSYSTEM=="usb", ATTRS{idVendor}=="3282", ATTRS{idProduct}=="0003", MODE="0666", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="3282", ATTRS{idProduct}=="0009", MODE="0666", TAG+="uaccess"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="3282", ATTRS{idProduct}=="0009", MODE="0666", TAG+="uaccess"

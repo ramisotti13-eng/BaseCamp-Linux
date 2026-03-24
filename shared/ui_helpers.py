@@ -14,6 +14,7 @@ from PIL import Image, ImageTk, ImageEnhance
 
 from shared.config import (
     ICON_LIBRARY_DIR, MAIN_LIBRARY_DIR,
+    DISPLAYPAD_LIBRARY_DIR, DISPLAYPAD_FS_LIBRARY_DIR,
     _load_icon_last, _save_icon_last,
     _save_to_library, _compute_lib_hash,
 )
@@ -1064,13 +1065,15 @@ class CustomRGBWindow(ctk.CTkToplevel):
 class LibraryPickerDialog(ctk.CTkToplevel):
     """Show icon library thumbnails + Browse button. result=(src_path, gif_frame, thumb_fname)."""
 
-    def __init__(self, parent, app, lib_dir=None, thumb_w=64, thumb_h=64, cols=4):
+    def __init__(self, parent, app, lib_dir=None, thumb_w=64, thumb_h=64, cols=4,
+                 skip_gif_picker=False):
         super().__init__(parent)
         self._app      = app
         self._lib_dir  = lib_dir or ICON_LIBRARY_DIR
         self._thumb_w  = thumb_w
         self._thumb_h  = thumb_h
         self._cols     = cols
+        self._skip_gif = skip_gif_picker
         self._cell_w   = thumb_w + 14
         self._cell_h   = thumb_h + 22
         self.result    = None
@@ -1106,11 +1109,24 @@ class LibraryPickerDialog(ctk.CTkToplevel):
 
         scroll = ctk.CTkScrollableFrame(self, fg_color=BG2, corner_radius=6, height=300)
         scroll.pack(fill="both", expand=True, padx=12, pady=(4, 12))
+
+        # Cap scroll speed (same as panels)
+        _c = scroll._parent_canvas
+        _orig_yview = _c.yview
+        def _capped_yview(*args):
+            if args and args[0] == "scroll":
+                n    = max(-2, min(2, int(args[1])))
+                what = args[2] if len(args) > 2 else "units"
+                return _orig_yview("scroll", n, what)
+            return _orig_yview(*args)
+        _c.yview = _capped_yview
+
         self._load_grid(scroll)
 
     def _load_grid(self, container):
         try:
-            files = sorted(f for f in os.listdir(self._lib_dir) if f.endswith(".png"))
+            files = sorted(f for f in os.listdir(self._lib_dir)
+                          if f.lower().endswith((".png", ".gif", ".jpg", ".jpeg", ".bmp")))
         except FileNotFoundError:
             files = []
 
@@ -1171,7 +1187,7 @@ class LibraryPickerDialog(ctk.CTkToplevel):
             self.grab_set()
             return
         gif_frame = 0
-        if path.lower().endswith(".gif"):
+        if path.lower().endswith(".gif") and not self._skip_gif:
             try:
                 n = Image.open(path).n_frames
                 if n > 1:
@@ -1195,6 +1211,45 @@ def pick_main_library_image(parent, app):
     """Open LibraryPickerDialog for main display images (96×82, 3 cols). Returns (src_path, gif_frame, thumb_fname) or None."""
     dlg = LibraryPickerDialog(parent, app, lib_dir=MAIN_LIBRARY_DIR,
                               thumb_w=96, thumb_h=82, cols=3)
+    return dlg.result
+
+
+def _ensure_dp_bundled_icons():
+    """Copy bundled DisplayPad icons into the user library on first use."""
+    import sys, shutil
+    _HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _FROZEN = getattr(sys, "frozen", False)
+    _RES = getattr(sys, "_MEIPASS", _HERE) if _FROZEN else _HERE
+    src_dir = os.path.join(_RES, "resources", "dp_icons")
+    if not os.path.isdir(src_dir):
+        return
+    os.makedirs(DISPLAYPAD_LIBRARY_DIR, exist_ok=True)
+    marker = os.path.join(DISPLAYPAD_LIBRARY_DIR, ".bundled_v1")
+    if os.path.exists(marker):
+        return
+    for f in os.listdir(src_dir):
+        if f.endswith(".png"):
+            dst = os.path.join(DISPLAYPAD_LIBRARY_DIR, f)
+            if not os.path.exists(dst):
+                shutil.copy2(os.path.join(src_dir, f), dst)
+    open(marker, "w").write("1")
+
+
+def pick_dp_library_image(parent, app):
+    """Open LibraryPickerDialog for DisplayPad buttons (102×102, 4 cols). Returns (src_path, gif_frame, thumb_fname) or None."""
+    _ensure_dp_bundled_icons()
+    dlg = LibraryPickerDialog(parent, app, lib_dir=DISPLAYPAD_LIBRARY_DIR,
+                              thumb_w=48, thumb_h=48, cols=6,
+                              skip_gif_picker=True)
+    return dlg.result
+
+
+def pick_dp_fullscreen_image(parent, app):
+    """Open LibraryPickerDialog for DisplayPad fullscreen (153×51 thumbs, 3 cols). Returns (src_path, gif_frame, thumb_fname) or None."""
+    os.makedirs(DISPLAYPAD_FS_LIBRARY_DIR, exist_ok=True)
+    dlg = LibraryPickerDialog(parent, app, lib_dir=DISPLAYPAD_FS_LIBRARY_DIR,
+                              thumb_w=153, thumb_h=51, cols=3,
+                              skip_gif_picker=True)
     return dlg.result
 
 
@@ -1417,11 +1472,13 @@ class MultiUploadDialog(ctk.CTkToplevel):
 # ── Accordion ─────────────────────────────────────────────────────────────────
 
 class AccordionSection:
-    def __init__(self, parent, app, icon, title_key):
+    def __init__(self, parent, app, icon, title_key, on_open=None, on_close=None):
         self._app      = app
         self._open     = False
         self._natural_h = 0
         self._anim_id  = None
+        self._on_open  = on_open
+        self._on_close = on_close
 
         self._outer = ctk.CTkFrame(parent, fg_color="transparent", corner_radius=0)
         self._outer.pack(fill="x", pady=2)
@@ -1436,7 +1493,7 @@ class AccordionSection:
         ctk.CTkLabel(self._header, text=icon, font=("Helvetica", 14),
                      text_color=YLW, width=30).pack(side="left", padx=(8, 4))
 
-        self._title_lbl = ctk.CTkLabel(self._header, text="",
+        self._title_lbl = ctk.CTkLabel(self._header, text=app.T(title_key),
                                         font=("Helvetica", 11, "bold"),
                                         text_color=FG, anchor="w")
         self._title_lbl.pack(side="left", fill="x", expand=True, padx=4, pady=12)
@@ -1471,6 +1528,8 @@ class AccordionSection:
         self._chevron.configure(text="▼")
         if self._natural_h > 0:
             self._animate(self._content.winfo_height(), self._natural_h)
+        if self._on_open:
+            self._on_open()
 
     def close(self):
         if not self._open:
@@ -1478,6 +1537,8 @@ class AccordionSection:
         self._open = False
         self._chevron.configure(text="▶")
         self._animate(self._content.winfo_height(), 0)
+        if self._on_close:
+            self._on_close()
 
     def _toggle(self, event=None):
         self.close() if self._open else self.open()

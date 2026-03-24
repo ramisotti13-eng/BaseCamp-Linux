@@ -36,6 +36,13 @@ MAKALU_LED_FILE     = os.path.join(CONFIG_DIR, "makalu_leds.json")
 MAKALU_PRESET_FILE  = os.path.join(CONFIG_DIR, "makalu_presets.json")
 MAKALU_DPI_FILE     = os.path.join(CONFIG_DIR, "makalu_dpi.json")
 MAKALU_REMAP_FILE   = os.path.join(CONFIG_DIR, "makalu_remap.json")
+DISPLAYPAD_LIBRARY_DIR     = os.path.join(CONFIG_DIR, "displaypad_library")
+DISPLAYPAD_FS_LIBRARY_DIR  = os.path.join(CONFIG_DIR, "displaypad_fs_library")
+DISPLAYPAD_BTN_FILE        = os.path.join(CONFIG_DIR, "displaypad_buttons.json")
+DISPLAYPAD_FULLSCREEN_FILE = os.path.join(CONFIG_DIR, "displaypad_fullscreen.json")
+DISPLAYPAD_ACTIONS_FILE    = os.path.join(CONFIG_DIR, "displaypad_actions.json")
+DISPLAYPAD_PAGES_FILE      = os.path.join(CONFIG_DIR, "displaypad_pages.json")
+DISPLAYPAD_ROTATION_FILE   = os.path.join(CONFIG_DIR, "displaypad_rotation")
 
 # Keep these for backward compatibility in code that imports them by old names
 RGB_PRESETS_FILE = PRESET_FILE
@@ -375,6 +382,157 @@ def _load_makalu_remap():
 def _save_makalu_remap(assignments):
     with open(MAKALU_REMAP_FILE, "w") as f:
         f.write(json.dumps(assignments))
+
+
+# ── DisplayPad config ────────────────────────────────────────────────────────
+
+def _load_displaypad_buttons():
+    """Return dict {str(key_idx): image_path} for DisplayPad button images."""
+    try:
+        return json.load(open(DISPLAYPAD_BTN_FILE))
+    except Exception:
+        return {}
+
+
+def _save_displaypad_buttons(data):
+    with open(DISPLAYPAD_BTN_FILE, "w") as f:
+        f.write(json.dumps(data))
+
+
+def _load_displaypad_fullscreen():
+    try:
+        return json.load(open(DISPLAYPAD_FULLSCREEN_FILE)).get("gif_path")
+    except Exception:
+        return None
+
+
+def _save_displaypad_fullscreen(path):
+    with open(DISPLAYPAD_FULLSCREEN_FILE, "w") as f:
+        f.write(json.dumps({"gif_path": path}))
+
+
+def _clear_displaypad_fullscreen():
+    try:
+        os.remove(DISPLAYPAD_FULLSCREEN_FILE)
+    except Exception:
+        pass
+
+
+def _load_displaypad_actions():
+    """Return list of 12 dicts with 'type' and 'action' keys."""
+    default = [{"type": "none", "action": ""} for _ in range(12)]
+    try:
+        data = json.load(open(DISPLAYPAD_ACTIONS_FILE))
+        for i in range(12):
+            if i < len(data):
+                default[i].update(data[i])
+    except Exception:
+        pass
+    return default
+
+
+def _save_displaypad_actions(actions):
+    with open(DISPLAYPAD_ACTIONS_FILE, "w") as f:
+        json.dump(actions, f, indent=2)
+
+
+def _load_displaypad_pages():
+    """Return dict {str(page_num): {buttons: {}, actions: [...], fullscreen: None}}."""
+    try:
+        return json.load(open(DISPLAYPAD_PAGES_FILE))
+    except Exception:
+        return {}
+
+
+def _save_displaypad_pages(data):
+    with open(DISPLAYPAD_PAGES_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+
+def _load_displaypad_rotation():
+    try:
+        v = int(open(DISPLAYPAD_ROTATION_FILE).read().strip())
+        return v if v in (0, 90, 180, 270) else 0
+    except Exception:
+        return 0
+
+
+def _save_displaypad_rotation(deg):
+    with open(DISPLAYPAD_ROTATION_FILE, "w") as f:
+        f.write(str(deg))
+
+
+# ── DisplayPad library helpers ────────────────────────────────────────────────
+
+def _save_to_dp_library(path, gif_frame=0):
+    """Resize image to 102×102, save as PNG by content-hash. Returns filename or None."""
+    import hashlib
+    try:
+        img = Image.open(path)
+        try:
+            img.seek(gif_frame)
+        except Exception:
+            pass
+        img = img.convert("RGB").resize((102, 102), Image.LANCZOS)
+        buf = img.tobytes()
+        h = hashlib.md5(buf).hexdigest()[:16]
+        os.makedirs(DISPLAYPAD_LIBRARY_DIR, exist_ok=True)
+        out = os.path.join(DISPLAYPAD_LIBRARY_DIR, f"{h}.png")
+        if not os.path.exists(out):
+            img.save(out, "PNG")
+        return f"{h}.png"
+    except Exception:
+        return None
+
+
+def _list_dp_library():
+    """Return sorted list of PNG filenames in the DisplayPad library."""
+    try:
+        return sorted(f for f in os.listdir(DISPLAYPAD_LIBRARY_DIR) if f.endswith(".png"))
+    except FileNotFoundError:
+        return []
+
+
+def _compute_dp_lib_hash(path, gif_frame=0):
+    """Return the library filename (hash.png) for an image without saving it."""
+    import hashlib
+    try:
+        img = Image.open(path)
+        try:
+            img.seek(gif_frame)
+        except Exception:
+            pass
+        img = img.convert("RGB").resize((102, 102), Image.LANCZOS)
+        h = hashlib.md5(img.tobytes()).hexdigest()[:16]
+        return f"{h}.png"
+    except Exception:
+        return None
+
+
+def _save_to_dp_fs_library(path):
+    """Save fullscreen image/GIF to the DisplayPad fullscreen library. Returns filename or None."""
+    import hashlib, shutil
+    try:
+        os.makedirs(DISPLAYPAD_FS_LIBRARY_DIR, exist_ok=True)
+        with open(path, "rb") as f:
+            h = hashlib.md5(f.read()).hexdigest()[:16]
+        ext = os.path.splitext(path)[1].lower() or ".png"
+        out = os.path.join(DISPLAYPAD_FS_LIBRARY_DIR, f"{h}{ext}")
+        if not os.path.exists(out):
+            shutil.copy2(path, out)
+        return f"{h}{ext}"
+    except Exception:
+        return None
+
+
+def _list_dp_fs_library():
+    """Return sorted list of image filenames in the DisplayPad fullscreen library."""
+    try:
+        return sorted(f for f in os.listdir(DISPLAYPAD_FS_LIBRARY_DIR)
+                       if f.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".bmp")))
+    except FileNotFoundError:
+        return []
 
 
 # ── Icon library helpers ────────────────────────────────────────────────────────

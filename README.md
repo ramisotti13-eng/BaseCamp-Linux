@@ -6,9 +6,13 @@
 
 **Unofficial Linux companion app for Mountain peripherals.**
 
-Mountain Base Camp is only available on Windows — this project brings full device control for the **Everest Max keyboard** and **Makalu 67 mouse** to Linux: display control, RGB lighting, button actions, monitor metrics, DPI, button remapping and OBS integration.
+Mountain Base Camp is only available on Windows — this project brings full device control for the **Everest Max keyboard**, **Makalu 67 mouse** and **DisplayPad** to Linux: display control, RGB lighting, button actions, monitor metrics, DPI, button remapping, multi-page display management and OBS integration.
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue) ![Platform](https://img.shields.io/badge/Platform-Linux-black) ![License](https://img.shields.io/badge/License-GPL%20v3%20%2B%20Non--Commercial-red)
+
+<p align="center">
+  <a href="https://ko-fi.com/D1D61WIJRD"><img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Support me on Ko-fi" /></a>
+</p>
 
 ---
 
@@ -20,6 +24,61 @@ Mountain Base Camp is only available on Windows — this project brings full dev
 
 ---
 
+## DisplayPad
+
+<p align="center">
+  <img src="docs/Display.png" alt="DisplayPad — 12 Button Display" width="400"/>
+</p>
+
+The DisplayPad panel provides full control over all 12 display buttons (102×102 pixels each) with image upload, animated GIF support, multi-page navigation and button actions.
+
+### Button Images (K1–K12)
+
+- Assign individual images or animated GIFs to each of the 12 display buttons
+- **Icon Library** with 39 bundled icons (Media, Social, System, Navigation, Numbers 1–12) plus all previously uploaded images — pick with one click instead of browsing the file system
+- Images are automatically resized and converted to the device's BGR format
+
+### Fullscreen Image & GIF
+
+<p align="center">
+  <img src="docs/fullscreengifmode.png" alt="DisplayPad — Fullscreen GIF Mode" width="400"/>
+</p>
+
+Upload a single image or animated GIF that is **automatically split across all 12 displays** as one seamless picture — no manual tile preparation needed. The app handles splitting, resizing and frame synchronisation. Fullscreen images and GIFs are saved to a dedicated library for quick reuse.
+
+### Multi-Page System
+
+- Create up to **12 sub-pages** — assign any button as a page folder with a customisable text label
+- Pressing a folder button navigates to its sub-page, where all 12 buttons can be independently configured
+- **K1 on sub-pages is always "Back"** — returns to the main page
+- Fullscreen GIFs work on sub-pages with page navigation still functional underneath
+- Page switching re-uploads all 12 button images to the device automatically
+
+### Button Actions (K1–K12)
+
+- **Action types:** Shell command, URL, Folder, App, Page navigation, OBS (Scene/Record/Stream)
+- Actions save immediately on change — no confirmation button needed
+- Key events detected via HID with debounce, actions execute even during GIF animation
+
+### Icon Rotation
+
+- Rotate all button icons by **0° / 90° / 180° / 270°** for mounting the pad in any orientation (e.g. SimRacing setups)
+- Preview thumbnails rotate live in the GUI
+- Rotation setting persists across restarts
+
+---
+
+## OBS Studio — Global Integration
+
+OBS connection settings are managed in a dedicated **OBS Studio tab** — separate from any device panel. Once connected, OBS actions (Scene switch, Record, Stream) are available as an action type on **all devices**: D1–D4 (Keyboard) and K1–K12 (DisplayPad).
+
+- Host, Port, Password configuration
+- Connect & Load Scenes / Disconnect
+- OBS switcher button turns **green** when connected (visible from any tab)
+- Scene list auto-populated after connecting
+
+---
+
 ## Keyboard — Everest Max
 
 The keyboard panel is split into a persistent **dashboard** at the top and collapsible sections below:
@@ -27,23 +86,21 @@ The keyboard panel is split into a persistent **dashboard** at the top and colla
 - **Dashboard** — Live clock display with 24H/12H toggle, language switcher (DE/EN + custom), Analog/Digital display style, splash screen and autostart toggles
 - **Monitor Mode** — Start/stop live keyboard display with CPU%, GPU%, RAM%, HDD% and Network MB/s metrics
 - **Main Display** — Switch between image and clock mode, upload any image to the keyboard's main display — automatically converted to the correct format
-- **Numpad Keys** — Assign actions (Shell, URL, Folder, App) and custom button images (including GIF frame picker) to D1–D4 — automatically converted to the correct format
+- **Numpad Keys** — Assign actions (Shell, URL, Folder, App, OBS) and custom button images (including GIF frame picker) to D1–D4 — automatically converted to the correct format
 - **RGB Lighting** — Control keyboard RGB effects (Wave, Tornado, Reactive, Yeti, Matrix, and more) with speed, brightness, color and direction — settings saved automatically
 - **Custom RGB Mode** — Per-key color editor: click or drag-select keys, assign colors, use the eyedropper (Alt+click), undo (Ctrl+Z), and save/load named presets — side LEDs fully selectable around both keyboard and numpad bezels (see [Custom RGB Mode — Keyboard](#custom-rgb-mode--keyboard) below)
-- **OBS Integration** — Connect to OBS via WebSocket and trigger scene switches, recording or streaming from any D-button
 
 ### Features
 
 - **Display styles** — Switch between Analog and Digital clock on the keyboard display
 - **24H / 12H** — Toggle clock format
 - **Monitor mode** — Live metrics on the keyboard display: CPU%, GPU%, RAM%, HDD%, Network MB/s
-- **Button actions (D1–D4)** — Assign Shell commands, URLs, folders or installed apps to D1–D4 — with native folder picker and searchable app picker. Use **Reset Buttons Flash** after first setup or when switching from Mountain Base Camp — BaseCamp may have stored its own actions in the keyboard's flash memory, which can cause two actions to fire on a single button press. Reset Buttons Flash overwrites all four slots with your configured actions, clearing any leftover BaseCamp data.
+- **Button actions (D1–D4)** — Assign Shell commands, URLs, folders, installed apps or OBS actions to D1–D4 — with native folder picker, searchable app picker and OBS scene selector. Actions save immediately on change. Use **Reset Buttons Flash** after first setup or when switching from Mountain Base Camp — BaseCamp may have stored its own actions in the keyboard's flash memory, which can cause two actions to fire on a single button press. Reset Buttons Flash overwrites all four slots with your configured actions, clearing any leftover BaseCamp data.
 - **Image upload (D1–D4)** — Upload images to D-buttons via the **Upload Images** dialog or individual per-slot upload buttons — automatically converted and resized (GIF frame picker included). Images are saved to the **Image Library** for quick reuse.
 - **Image Library** — All uploaded images are stored locally as thumbnails. Pick from previously used images with one click instead of browsing the file system every time. Images can be deleted from the library individually.
 - **Main display upload** — Upload any image to the keyboard's main display — with Image Library support for quick reuse
 - **RGB Lighting** — Full RGB effect control: Wave, Tornado, Tornado Rainbow, Reactive, Yeti, Matrix, Off — with speed, brightness, color pickers and direction — settings saved to config
 - **Custom RGB Mode** — Per-key color editor with rubber band selection, eyedropper, undo, and named presets — side LEDs selectable individually around keyboard and numpad — includes built-in Synthwave preset
-- **OBS integration** — Connect to OBS via WebSocket and trigger scene switches, recording or streaming from D1–D4 — settings save automatically on change
 - **System tray** — Minimize to tray, runs in the background
 - **Internationalization** — UI language switchable at runtime via external JSON files (DE + EN included, add your own)
 
@@ -286,7 +343,7 @@ The udev rule is installed automatically. Just unplug and replug the keyboard af
 ```bash
 git clone https://github.com/ramisotti13-eng/BaseCamp-Linux.git
 cd BaseCamp-Linux
-pip install customtkinter pillow psutil obsws-python pystray
+pip install customtkinter pillow psutil obsws-python pystray hid pyusb
 python3 gui.py
 ```
 
@@ -296,7 +353,7 @@ python3 gui.py
 
 ### USB permissions (required once, AppImage + source installs)
 
-Both the keyboard (PID `0x0001`) and the Makalu 67 mouse (PID `0x0003`) need USB access. Add both rules in one step:
+The keyboard (PID `0x0001`), Makalu 67 mouse (PID `0x0003`) and DisplayPad (PID `0x0009`) all need USB access:
 
 #### Debian / Ubuntu / Linux Mint
 
@@ -304,12 +361,14 @@ Both the keyboard (PID `0x0001`) and the Makalu 67 mouse (PID `0x0003`) need USB
 sudo tee /etc/udev/rules.d/99-mountain.rules <<EOF
 SUBSYSTEM=="usb", ATTRS{idVendor}=="3282", ATTRS{idProduct}=="0001", MODE="0660", GROUP="plugdev", TAG+="uaccess"
 SUBSYSTEM=="usb", ATTRS{idVendor}=="3282", ATTRS{idProduct}=="0003", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="3282", ATTRS{idProduct}=="0009", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="3282", ATTRS{idProduct}=="0009", MODE="0660", GROUP="plugdev", TAG+="uaccess"
 EOF
 sudo udevadm control --reload-rules && sudo udevadm trigger
 sudo usermod -aG plugdev $USER
 ```
 
-> Log out and back in after adding the group, then unplug and replug the keyboard and mouse.
+> Log out and back in after adding the group, then unplug and replug all devices.
 
 #### Fedora / Nobara
 
@@ -317,11 +376,13 @@ sudo usermod -aG plugdev $USER
 sudo tee /etc/udev/rules.d/99-mountain.rules <<EOF
 SUBSYSTEM=="usb", ATTRS{idVendor}=="3282", ATTRS{idProduct}=="0001", MODE="0666"
 SUBSYSTEM=="usb", ATTRS{idVendor}=="3282", ATTRS{idProduct}=="0003", MODE="0666"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="3282", ATTRS{idProduct}=="0009", MODE="0666"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="3282", ATTRS{idProduct}=="0009", MODE="0666"
 EOF
 sudo udevadm control --reload-rules && sudo udevadm trigger
 ```
 
-> Unplug and replug the keyboard and mouse. No group changes needed.
+> Unplug and replug all devices. No group changes needed.
 
 #### Arch / CachyOS / Manjaro
 
@@ -330,11 +391,13 @@ bash   # switch to bash if using Fish
 sudo tee /etc/udev/rules.d/99-mountain.rules <<EOF
 SUBSYSTEM=="usb", ATTRS{idVendor}=="3282", ATTRS{idProduct}=="0001", MODE="0666"
 SUBSYSTEM=="usb", ATTRS{idVendor}=="3282", ATTRS{idProduct}=="0003", MODE="0666"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="3282", ATTRS{idProduct}=="0009", MODE="0666"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="3282", ATTRS{idProduct}=="0009", MODE="0666"
 EOF
 sudo udevadm control --reload-rules && sudo udevadm trigger
 ```
 
-> Unplug and replug the keyboard and mouse. No group changes needed.
+> Unplug and replug all devices. No group changes needed.
 
 ---
 
@@ -350,8 +413,19 @@ Copy `lang/en.json` to `lang/xx.json` (e.g. `lang/fr.json`), translate the value
 |--------|-----|-----|--------|
 | Mountain Everest Max (keyboard) | `0x3282` | `0x0001` | Fully supported |
 | Mountain Makalu 67 (mouse) | `0x3282` | `0x0003` | Fully supported |
+| Mountain DisplayPad | `0x3282` | `0x0009` | Fully supported |
 
 Other Mountain peripherals may work but are untested.
+
+---
+
+## Support
+
+If you find this project useful, consider supporting its development:
+
+<p align="center">
+  <a href="https://ko-fi.com/D1D61WIJRD"><img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Support me on Ko-fi" /></a>
+</p>
 
 ---
 
