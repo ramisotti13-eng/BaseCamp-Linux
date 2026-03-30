@@ -1,5 +1,52 @@
 # Changelog
 
+## [1.7.0] - 2026-03-29
+
+### Macro System — New Feature
+
+- **New top-level Macros tab** in the switcher bar — create, edit, and manage macros independently from any device
+- **Macro Editor**: Named macros with ordered action sequences, repeat modes (Once / N Times / Toggle), duplicate, delete, export/import as JSON
+- **Auto-naming**: New macros get unique names automatically (Macro, Macro 1, Macro 2, …)
+
+### Macro Actions
+
+- **Key Down / Key Up / Key Tap**: Keyboard input simulation with **Rec button** — press Rec, then press any key on your keyboard to capture it
+- **Mouse Click**: Left, right, middle, back, forward — with **Rec button** that opens a click-capture dialog (back/forward as quick-pick buttons for side mouse buttons)
+- **Mouse Move**: Absolute screen position (x, y)
+- **Mouse Path**: Saved mouse movement recordings — record once, reuse in any macro
+- **Mouse Scroll**: Up/down with configurable scroll amount
+- **Delay**: Configurable wait time in milliseconds
+- **Type Text**: Type a string character by character
+- **Shell / URL / Folder**: Run commands, open URLs, open folders
+
+### Mouse Recording
+
+- **Rec Mouse** button opens a fullscreen overlay with a screenshot of the desktop as background — see your screen while recording. This is needed because Wayland does not allow apps to track the mouse cursor across the screen; a fullscreen window with a desktop screenshot solves this by receiving mouse motion events while still showing you where you're pointing. The screenshot is taken locally, used only for the overlay background, never sent anywhere, and automatically deleted when recording stops
+- **Space to start/stop** recording — no mouse click needed (avoids recording the stop-click position)
+- Mouse movement captured via Motion events at ~50ms resolution — works on **X11 and Wayland**
+- Recordings saved as reusable JSON files in `~/.config/mountain-time-sync/mouse_recordings/`
+- **"Add left click at end"** checkbox (enabled by default) — automatically appends a click at the final position
+- Recordings manageable: pick from saved recordings via **"..."** button, delete with **✕** in the picker
+- Screenshot tools: `spectacle` (KDE), `grim` (Sway), `gnome-screenshot` (GNOME), `scrot` (X11)
+
+### Macro Assignment
+
+- New **"Macro"** action type available on **D1–D4** (Everest Max) and **K1–K12** (DisplayPad)
+- Macro picker dropdown shows all saved macros by name
+- Macros execute in a background thread when the assigned button is pressed
+
+### Input Tool Support
+
+- **Auto-detection**: Finds `xdotool` (X11) or `ydotool` (Wayland) automatically
+- **ydotool key mapping**: Full Linux input-event-codes mapping for all keys
+- **Clear error message** if no input tool is installed — shows install command for Fedora, Debian, and Arch
+
+### Internationalisation
+
+- Full DE/EN support for all Macro features (20+ new translation keys)
+
+---
+
 ## [1.6.3-beta] - 2026-03-29
 
 ### Mountain Everest 60 Keyboard — Full Support

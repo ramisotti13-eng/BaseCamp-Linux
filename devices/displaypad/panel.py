@@ -66,7 +66,7 @@ _KEY_MAP = (
     [(47, m) for m in (0x01, 0x02, 0x04, 0x08, 0x10)]
 )
 
-_ACTION_TYPES = ["none", "shell", "url", "folder", "app", "page", "obs"]
+_ACTION_TYPES = ["none", "shell", "url", "folder", "app", "page", "obs", "macro"]
 
 _DEFAULT_ACTIONS = [{"type": "none", "action": ""} for _ in range(12)]
 
@@ -728,9 +728,10 @@ class DisplayPadActionsDialog(ctk.CTkToplevel):
         self._act_type = [tk.StringVar() for _ in range(12)]
         self._act_cmd  = [tk.StringVar() for _ in range(12)]
         self._type_menus  = []
-        self._cmd_entries = []
-        self._browse_btns = []
-        self._obs_combos  = []
+        self._cmd_entries  = []
+        self._browse_btns  = []
+        self._obs_combos   = []
+        self._macro_combos = []
         self._cards       = []
 
         self._build_ui()
@@ -749,6 +750,7 @@ class DisplayPadActionsDialog(ctk.CTkToplevel):
         if include_page:
             labels.append(self._app.T("action_type_page"))
         labels.append("OBS")
+        labels.append(self._app.T("action_type_macro"))
         return labels
 
     def _load_page(self, page):
@@ -776,6 +778,7 @@ class DisplayPadActionsDialog(ctk.CTkToplevel):
             menu.configure(values=labels)
             # Always reset layout
             self._obs_combos[i].pack_forget()
+            self._macro_combos[i].pack_forget()
             self._cmd_entries[i].pack_forget()
             self._browse_btns[i].pack_forget()
             self._cmd_entries[i].pack(side="left", padx=4, expand=True, fill="x")
@@ -817,6 +820,12 @@ class DisplayPadActionsDialog(ctk.CTkToplevel):
                     elif scenes:
                         self._obs_combos[i].set(scenes[0])
                     self._obs_combos[i].pack(side="left", padx=4, expand=True, fill="x")
+                # "macro" type: show macro picker instead of entry
+                elif btype == "macro":
+                    self._cmd_entries[i].pack_forget()
+                    self._browse_btns[i].pack_forget()
+                    self._populate_macro_combo(self._macro_combos[i], cmd, btn_idx=i)
+                    self._macro_combos[i].pack(side="left", padx=4, expand=True, fill="x")
 
         # Update page selector
         self._page_selector.set(
@@ -886,7 +895,16 @@ class DisplayPadActionsDialog(ctk.CTkToplevel):
                 dropdown_hover_color=BG3,
                 command=lambda val, ix=i: self._on_obs_select(val, ix))
             self._obs_combos.append(obs_combo)
-            # not packed yet — shown only when obs type selected
+
+            macro_combo = ctk.CTkComboBox(
+                row, values=[], width=140, height=30,
+                font=("Helvetica", 11),
+                fg_color=BG2, button_color=BLUE, border_color=BORDER,
+                text_color=FG, dropdown_fg_color=BG2, dropdown_text_color=FG,
+                dropdown_hover_color=BG3,
+                command=lambda val, ix=i: self._on_macro_select(val, ix))
+            self._macro_combos.append(macro_combo)
+            # not packed yet — shown only when macro type selected
 
             folder_btn = ctk.CTkButton(
                 row, text="", image=self._folder_img_dim,
@@ -931,8 +949,9 @@ class DisplayPadActionsDialog(ctk.CTkToplevel):
         else:
             btn.configure(state="disabled", image=self._folder_img_dim)
 
-        # Show/hide OBS combo vs entry+browse
+        # Show/hide OBS combo / macro combo vs entry+browse
         self._obs_combos[idx].pack_forget()
+        self._macro_combos[idx].pack_forget()
         self._cmd_entries[idx].pack_forget()
         self._browse_btns[idx].pack_forget()
         if internal == "obs":
@@ -949,6 +968,9 @@ class DisplayPadActionsDialog(ctk.CTkToplevel):
             elif scenes:
                 self._obs_combos[idx].set(scenes[0])
                 self._act_cmd[idx].set(f"scene:{scenes[0]}")
+        elif internal == "macro":
+            self._populate_macro_combo(self._macro_combos[idx], self._act_cmd[idx].get(), btn_idx=idx)
+            self._macro_combos[idx].pack(side="left", padx=4, expand=True, fill="x")
         else:
             self._cmd_entries[idx].pack(side="left", padx=4, expand=True, fill="x")
             self._browse_btns[idx].pack(side="left", padx=(0, 4))
@@ -974,6 +996,34 @@ class DisplayPadActionsDialog(ctk.CTkToplevel):
             self._act_cmd[idx].set("stream")
         else:
             self._act_cmd[idx].set(f"scene:{val}")
+        self._apply(idx)
+
+    def _populate_macro_combo(self, combo, current_uuid="", btn_idx=None):
+        macro_panel = getattr(self._app, "_macro_panel", None)
+        names = macro_panel.get_macro_names() if macro_panel else {}
+        self._macro_uuid_list = list(names.keys())
+        display = list(names.values())
+        no_macros = self._app.T("macro_none_available")
+        combo.configure(values=display if display else [no_macros])
+        if current_uuid and current_uuid in names:
+            combo.set(names[current_uuid])
+        elif self._macro_uuid_list:
+            combo.set(display[0])
+            if btn_idx is not None:
+                self._act_cmd[btn_idx].set(self._macro_uuid_list[0])
+
+    def _on_macro_select(self, val, idx):
+        macro_panel = getattr(self._app, "_macro_panel", None)
+        if not macro_panel:
+            return
+        names = macro_panel.get_macro_names()
+        display = list(names.values())
+        uuids = list(names.keys())
+        try:
+            pos = display.index(val)
+            self._act_cmd[idx].set(uuids[pos])
+        except (ValueError, IndexError):
+            pass
         self._apply(idx)
 
     def _browse(self, idx):
@@ -1503,6 +1553,27 @@ class DisplayPadPanel(ctk.CTkFrame):
                 obs_panel.execute_action("record")
             elif action == "stream":
                 obs_panel.execute_action("stream")
+            return
+        # Macro action
+        if btype == "macro" and action:
+            import threading
+            from shared.macros import execute_macro
+            from shared.config import load_macros
+            if not hasattr(self, "_macro_toggle_events"):
+                self._macro_toggle_events = {}
+            macro = load_macros().get("macros", {}).get(action)
+            if macro:
+                if action in self._macro_toggle_events:
+                    self._macro_toggle_events[action].set()
+                    del self._macro_toggle_events[action]
+                else:
+                    stop_ev = None
+                    if macro.get("repeat_mode") == "toggle":
+                        stop_ev = threading.Event()
+                        self._macro_toggle_events[action] = stop_ev
+                    threading.Thread(
+                        target=execute_macro, args=(macro, stop_ev),
+                        daemon=True).start()
             return
         if btype == "none" or not action:
             return

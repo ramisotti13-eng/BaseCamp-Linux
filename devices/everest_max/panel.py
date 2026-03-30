@@ -316,13 +316,15 @@ class EverestMaxPanel(ctk.CTkFrame):
         self._folder_btns    = []
         self._action_entries = []
         self._obs_combos     = []
+        self._macro_combos   = []
 
-        _TYPE_INTERNAL = ["none", "shell", "url", "folder", "app", "obs"]
+        _TYPE_INTERNAL = ["none", "shell", "url", "folder", "app", "obs", "macro"]
 
         def _type_labels():
             return [self.T("action_type_none"),   self.T("action_type_shell"),
                     self.T("action_type_url"),     self.T("action_type_folder"),
-                    self.T("action_type_app"),     "OBS"]
+                    self.T("action_type_app"),     "OBS",
+                    self.T("action_type_macro")]
 
         _HERE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         _FROZEN = getattr(sys, "frozen", False)
@@ -385,6 +387,15 @@ class EverestMaxPanel(ctk.CTkFrame):
                 command=lambda val, ix=idx: self._on_obs_select(val, ix))
             self._obs_combos.append(obs_combo)
 
+            macro_combo = ctk.CTkComboBox(
+                action_row, values=[], width=140, height=30,
+                font=("Helvetica", 11),
+                fg_color=BG2, button_color=BLUE, border_color=BORDER,
+                text_color=FG, dropdown_fg_color=BG2, dropdown_text_color=FG,
+                dropdown_hover_color=BG3,
+                command=lambda val, ix=idx: self._on_macro_select(val, ix))
+            self._macro_combos.append(macro_combo)
+
             cur_type     = self._btn_type[i].get()
             if cur_type == "obs":
                 entry.pack_forget()
@@ -397,6 +408,10 @@ class EverestMaxPanel(ctk.CTkFrame):
                 elif cur_action in ("record", "stream"):
                     obs_combo.set(f"— {cur_action.capitalize()}")
                 obs_combo.pack(side="left", padx=4, expand=True, fill="x")
+            elif cur_type == "macro":
+                entry.pack_forget()
+                self._populate_macro_combo(macro_combo, self._btn_action[i].get(), btn_idx=i)
+                macro_combo.pack(side="left", padx=4, expand=True, fill="x")
             browse_active = cur_type in ("folder", "app")
             folder_btn   = ctk.CTkButton(
                 action_row, text="",
@@ -838,9 +853,10 @@ class EverestMaxPanel(ctk.CTkFrame):
                 btn.configure(state="normal", image=self._folder_img)
             else:
                 btn.configure(state="disabled", image=self._folder_img_dim)
-        # Show/hide OBS combo vs entry+browse
+        # Show/hide OBS combo / macro combo vs entry+browse
         if hasattr(self, "_obs_combos") and idx < len(self._obs_combos):
             self._obs_combos[idx].pack_forget()
+            self._macro_combos[idx].pack_forget()
             self._action_entries[idx].pack_forget()
             self._folder_btns[idx].pack_forget()
             if internal == "obs":
@@ -851,6 +867,9 @@ class EverestMaxPanel(ctk.CTkFrame):
                     self._obs_combos[idx].set(scenes[0])
                     self._btn_action[idx].set(f"scene:{scenes[0]}")
                 self._obs_combos[idx].pack(side="left", padx=4, expand=True, fill="x")
+            elif internal == "macro":
+                self._populate_macro_combo(self._macro_combos[idx], btn_idx=idx)
+                self._macro_combos[idx].pack(side="left", padx=4, expand=True, fill="x")
             else:
                 self._action_entries[idx].pack(side="left", padx=4, expand=True, fill="x")
                 self._folder_btns[idx].pack(side="left", padx=(0, 4))
@@ -863,6 +882,35 @@ class EverestMaxPanel(ctk.CTkFrame):
             self._btn_action[idx].set("stream")
         else:
             self._btn_action[idx].set(f"scene:{val}")
+        self._apply_btn(idx)
+
+    def _populate_macro_combo(self, combo, current_uuid="", btn_idx=None):
+        macro_panel = getattr(self._app, "_macro_panel", None)
+        names = macro_panel.get_macro_names() if macro_panel else {}
+        self._macro_uuid_list = list(names.keys())
+        display = list(names.values())
+        combo.configure(values=display if display else [self.T("macro_none_available")])
+        if current_uuid and current_uuid in names:
+            combo.set(names[current_uuid])
+        elif self._macro_uuid_list:
+            combo.set(display[0])
+            # Auto-set the first macro UUID so saving works immediately
+            if btn_idx is not None:
+                self._btn_action[btn_idx].set(self._macro_uuid_list[0])
+
+    def _on_macro_select(self, val, idx):
+        # Use the parallel UUID list to resolve by position (handles duplicate names)
+        macro_panel = getattr(self._app, "_macro_panel", None)
+        if not macro_panel:
+            return
+        names = macro_panel.get_macro_names()
+        display = list(names.values())
+        uuids = list(names.keys())
+        try:
+            pos = display.index(val)
+            self._btn_action[idx].set(uuids[pos])
+        except (ValueError, IndexError):
+            pass
         self._apply_btn(idx)
 
     def _browse_action(self, idx):

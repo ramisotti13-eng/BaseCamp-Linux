@@ -44,6 +44,8 @@ DISPLAYPAD_ACTIONS_FILE    = os.path.join(CONFIG_DIR, "displaypad_actions.json")
 DISPLAYPAD_PAGES_FILE      = os.path.join(CONFIG_DIR, "displaypad_pages.json")
 DISPLAYPAD_ROTATION_FILE    = os.path.join(CONFIG_DIR, "displaypad_rotation")
 DISPLAYPAD_BRIGHTNESS_FILE  = os.path.join(CONFIG_DIR, "displaypad_brightness")
+MACROS_FILE                 = os.path.join(CONFIG_DIR, "macros.json")
+MOUSE_RECORDINGS_DIR        = os.path.join(CONFIG_DIR, "mouse_recordings")
 
 # Keep these for backward compatibility in code that imports them by old names
 RGB_PRESETS_FILE = PRESET_FILE
@@ -695,3 +697,18 @@ def _list_main_library():
         return sorted(f for f in os.listdir(MAIN_LIBRARY_DIR) if f.endswith(".png"))
     except FileNotFoundError:
         return []
+
+
+# ── Macros ─────────────────────────────────────────────────────────────────────
+
+def load_macros():
+    """Return full macros dict: {"macros": {uuid: {name, actions, repeat_mode, repeat_count}}}."""
+    try:
+        return json.load(open(MACROS_FILE))
+    except Exception:
+        return {"macros": {}}
+
+
+def save_macros(data):
+    with open(MACROS_FILE, "w") as f:
+        json.dump(data, f, indent=2)

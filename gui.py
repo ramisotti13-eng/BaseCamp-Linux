@@ -85,6 +85,7 @@ from devices.everest60.panel import Everest60Panel
 from devices.makalu67.panel import Makalu67Panel
 from devices.displaypad.panel import DisplayPadPanel
 from devices.obs.panel import OBSPanel
+from devices.macros.panel import MacroPanel
 
 # ── Keep backward-compatible module-level names used by existing code ──────────
 
@@ -417,9 +418,16 @@ class App(ctk.CTk):
         self._sw_obs_btn = ctk.CTkButton(
             row2, text="OBS Studio", font=("Helvetica", 11, "bold"),
             fg_color=BG2, hover_color="#222232", text_color=FG2,
-            height=28, corner_radius=4, width=120,
+            height=28, corner_radius=4, width=110,
             command=lambda: self._switch_device("obs"))
-        self._sw_obs_btn.pack()
+        self._sw_obs_btn.pack(side="left", padx=4)
+
+        self._sw_macros_btn = ctk.CTkButton(
+            row2, text="Macros", font=("Helvetica", 11, "bold"),
+            fg_color=BG2, hover_color="#222232", text_color=FG2,
+            height=28, corner_radius=4, width=110,
+            command=lambda: self._switch_device("macros"))
+        self._sw_macros_btn.pack(side="left", padx=4)
 
         # ── Panel area ──
         self._panel_area = ctk.CTkFrame(self, fg_color=BG, corner_radius=0)
@@ -427,6 +435,7 @@ class App(ctk.CTk):
 
         # Instantiate panels (OBS first — other panels reference it)
         self._obs_panel         = OBSPanel(self._panel_area, self)
+        self._macro_panel       = MacroPanel(self._panel_area, self)
         self._everest_panel     = EverestMaxPanel(self._panel_area, self)
         self._everest60_panel   = Everest60Panel(self._panel_area, self)
         self._makalu_panel      = Makalu67Panel(self._panel_area, self)
@@ -438,6 +447,7 @@ class App(ctk.CTk):
             "makalu67":    self._makalu_panel,
             "displaypad":  self._displaypad_panel,
             "obs":         self._obs_panel,
+            "macros":      self._macro_panel,
         }
 
         # Show keyboard panel by default
@@ -542,6 +552,7 @@ class App(ctk.CTk):
             ("makalu67",   self._sw_mouse_btn),
             ("displaypad", self._sw_displaypad_btn),
             ("obs",        self._sw_obs_btn),
+            ("macros",     self._sw_macros_btn),
         ]:
             active  = self._active_device == dev_id
             present = self._dev_present.get(dev_id, False)

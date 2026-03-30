@@ -884,6 +884,7 @@ def controller_loop(style=STYLE_ANALOG):
         last_clock_format = None
         last_btn_state = None
         last_btn_action_time = 0
+        _macro_toggle_events = {}  # {macro_uuid: threading.Event} for toggle-mode macros
         obs_cfg = _load_obs_config()
         obs_holder = [None]
         psutil.cpu_percent()
@@ -927,6 +928,29 @@ def controller_loop(style=STYLE_ANALOG):
                                 target=_execute_obs_action,
                                 args=(obs_btn, obs_cfg, obs_holder),
                                 daemon=True).start()
+                    elif btype == "macro" and action:
+                        from shared.macros import execute_macro
+                        from shared.config import load_macros
+                        all_macros = load_macros().get("macros", {})
+                        macro = all_macros.get(action)
+                        if macro:
+                            # Toggle mode: stop if already running
+                            if action in _macro_toggle_events:
+                                _macro_toggle_events[action].set()
+                                del _macro_toggle_events[action]
+                                print(f"[Macro] Stopped toggle '{macro.get('name')}'")
+                            else:
+                                stop_ev = None
+                                if macro.get("repeat_mode") == "toggle":
+                                    stop_ev = threading.Event()
+                                    _macro_toggle_events[action] = stop_ev
+                                print(f"[Macro] Executing '{macro.get('name')}' ({len(macro.get('actions',[]))} actions)")
+                                threading.Thread(
+                                    target=execute_macro,
+                                    args=(macro, stop_ev),
+                                    daemon=True).start()
+                        else:
+                            print(f"[Macro] UUID '{action}' not found in {list(all_macros.keys())}")
                     elif action and btype != "none":
                         sudo_user = os.environ.get("SUDO_USER")
                         if sudo_user:
