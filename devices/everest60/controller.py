@@ -62,7 +62,7 @@ EFFECT_OFF       = 0x09
 
 # Color mode
 COLOR_SINGLE  = 0x00
-COLOR_RAINBOW = 0x01
+COLOR_RAINBOW = 0x02
 
 # Direction values (Wave/Tornado)
 DIR_WAVE    = {"L→R": 0x00, "T→B": 0x02, "R→L": 0x04, "B→T": 0x06}
@@ -141,25 +141,26 @@ def _speed_val(pct):
 def _send_mode(dev, effect, speed=50, brightness=100,
                r1=255, g1=255, b1=255, r2=0, g2=0, b2=0,
                color_mode=COLOR_SINGLE, direction=0):
-    # Step 1: Send mode details (cmd 0x17) — effect code in [5]
+    # Step 1: Switch mode (cmd 0x16) — activates the effect
+    buf = _make_buf(0x16)
+    buf[5] = 1
+    buf[9] = effect
+    _send(dev, buf)
+
+    # Step 2: Send mode details (cmd 0x17) — effect code in [5]
     buf = _make_buf(0x17)
     buf[5]  = effect
     buf[7]  = _speed_val(speed)
     buf[8]  = _brightness_val(brightness)
     buf[9]  = color_mode
     buf[10] = direction
-    buf[12] = r1 & 0xFF
-    buf[13] = g1 & 0xFF
-    buf[14] = b1 & 0xFF
-    buf[15] = r2 & 0xFF
-    buf[16] = g2 & 0xFF
-    buf[17] = b2 & 0xFF
-    _send(dev, buf)
-
-    # Step 2: Switch mode (cmd 0x16) — activates the effect
-    buf = _make_buf(0x16)
-    buf[5] = 1
-    buf[9] = effect
+    if color_mode != COLOR_RAINBOW:
+        buf[12] = r1 & 0xFF
+        buf[13] = g1 & 0xFF
+        buf[14] = b1 & 0xFF
+        buf[15] = r2 & 0xFF
+        buf[16] = g2 & 0xFF
+        buf[17] = b2 & 0xFF
     _send(dev, buf)
 
 
