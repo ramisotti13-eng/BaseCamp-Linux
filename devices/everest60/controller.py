@@ -20,7 +20,7 @@ SendModeDetails (cmd=0x17):
   [5]    = effect code
   [7]    = speed   × 25   (0/25/50/75/100)
   [8]    = brightness × 25
-  [9]    = color_mode (0=single, 1=rainbow cycle)
+  [9]    = color_mode (0=single, 2=rainbow cycle, 0x10 = dual)
   [10]   = direction
   [12..14] = color1 R,G,B
   [15..17] = color2 R,G,B
@@ -63,6 +63,7 @@ EFFECT_OFF       = 0x09
 # Color mode
 COLOR_SINGLE  = 0x00
 COLOR_RAINBOW = 0x02
+COLOR_DUAL    = 0x10
 
 # Direction values (Wave/Tornado)
 DIR_WAVE    = {"L→R": 0x00, "T→B": 0x02, "R→L": 0x04, "B→T": 0x06}
@@ -140,7 +141,7 @@ def _speed_val(pct):
 
 def _send_mode(dev, effect, speed=50, brightness=100,
                r1=255, g1=255, b1=255, r2=0, g2=0, b2=0,
-               color_mode=COLOR_SINGLE, direction=0):
+               color_mode=COLOR_DUAL, direction=0):
     # Step 1: Switch mode (cmd 0x16) — activates the effect
     buf = _make_buf(0x16)
     buf[5] = 1
@@ -158,9 +159,10 @@ def _send_mode(dev, effect, speed=50, brightness=100,
         buf[12] = r1 & 0xFF
         buf[13] = g1 & 0xFF
         buf[14] = b1 & 0xFF
-        buf[15] = r2 & 0xFF
-        buf[16] = g2 & 0xFF
-        buf[17] = b2 & 0xFF
+        if color_mode == COLOR_DUAL:
+            buf[15] = r2 & 0xFF
+            buf[16] = g2 & 0xFF
+            buf[17] = b2 & 0xFF
     _send(dev, buf)
 
 
@@ -175,7 +177,7 @@ def set_lighting_off(brightness=100):
 def set_lighting_static(r, g, b, brightness=100):
     dev = open_device()
     try:
-        _send_mode(dev, EFFECT_STATIC, brightness=brightness,
+        _send_mode(dev, EFFECT_STATIC, color_mode=COLOR_SINGLE, brightness=brightness,
                    r1=r, g1=g, b1=b)
     finally:
         dev.close()
@@ -221,7 +223,7 @@ def set_lighting_tornado(r=255, g=0, b=0, r2=0, g2=0, b2=0, brightness=100, spee
     dev = open_device()
     try:
         _send_mode(dev, EFFECT_TORNADO, speed=speed, brightness=brightness,
-                   r1=r, g1=g, b1=b, r2=r2, g2=g2, b2=b2, direction=direction)
+                   color_mode=COLOR_SINGLE, r1=r, g1=g, b1=b, direction=direction)
     finally:
         dev.close()
 
