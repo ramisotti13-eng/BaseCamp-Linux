@@ -11,7 +11,8 @@ Magic bytes [2..4] = 0x46 0x23 0xEA on every command.
 SetMode (cmd=0x16):
   [1]    = 0x16
   [2..4] = 0x46 0x23 0xEA
-  [5]    = effect code (activates the mode)
+  [5]    = 0x01
+  [9]    = effect code (activates the mode)
 
 SendModeDetails (cmd=0x17):
   [1]    = 0x17
@@ -75,6 +76,7 @@ def detect_model():
     global PID
     if not HID_AVAILABLE:
         return None, None
+
     for pid, name in [(PID_ANSI, "Everest 60"), (PID_ISO, "Everest 60 ISO")]:
         for d in hid.enumerate(VID, pid):
             if d.get('interface_number') == INTERFACE:
@@ -156,7 +158,8 @@ def _send_mode(dev, effect, speed=50, brightness=100,
 
     # Step 2: Switch mode (cmd 0x16) — activates the effect
     buf = _make_buf(0x16)
-    buf[5] = effect
+    buf[5] = 1
+    buf[9] = effect
     _send(dev, buf)
 
 
