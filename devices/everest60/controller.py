@@ -67,7 +67,7 @@ COLOR_DUAL    = 0x10
 
 # Direction values (Wave/Tornado)
 DIR_WAVE    = {"L→R": 0x00, "T→B": 0x02, "R→L": 0x04, "B→T": 0x06}
-DIR_TORNADO = {"CW": 0x00, "CCW": 0x01}
+DIR_TORNADO = {"CW": 0x0A, "CCW": 0x09}
 
 NUM_KEYS = 191
 
@@ -223,7 +223,7 @@ def set_lighting_tornado(r=255, g=0, b=0, r2=0, g2=0, b2=0, brightness=100, spee
     dev = open_device()
     try:
         _send_mode(dev, EFFECT_TORNADO, speed=speed, brightness=brightness,
-                   color_mode=COLOR_SINGLE, r1=r, g1=g, b1=b, direction=direction)
+                   color_mode=COLOR_SINGLE, r1=r, g1=g, b1=b, direction=10-direction)
     finally:
         dev.close()
 
@@ -232,7 +232,7 @@ def set_lighting_tornado_rainbow(brightness=100, speed=50, direction=0):
     dev = open_device()
     try:
         _send_mode(dev, EFFECT_TORNADO, speed=speed, brightness=brightness,
-                   color_mode=COLOR_RAINBOW, direction=direction)
+                   color_mode=COLOR_RAINBOW, direction=10-direction)
     finally:
         dev.close()
 
