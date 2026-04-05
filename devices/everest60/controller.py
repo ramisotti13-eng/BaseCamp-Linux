@@ -113,7 +113,7 @@ def _send(dev, buf, retries=3):
         time.sleep(0.05)
         resp = dev.get_feature_report(0x00, 65)
         time.sleep(0.05)
-        if resp and len(resp) >= 2 and resp[0] == cmd:
+        if resp and len(resp) >= 2 and resp[1] == cmd:
             return resp
     return resp if 'resp' in dir() else None
 
