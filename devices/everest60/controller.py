@@ -262,6 +262,7 @@ def set_lighting_custom(colors, brightness=100):
         colors.append((0, 0, 0))
 
     dev = open_device()
+    _send_mode(dev, EFFECT_CUSTOM, brightness=brightness, color_mode=0)
     try:
         # Begin
         buf = _make_buf(0x34)
@@ -275,7 +276,6 @@ def set_lighting_custom(colors, brightness=100):
         pkt_no = 0
         while idx < NUM_KEYS:
             buf = _make_buf(0x35)
-            buf[5] = 0x0E if pkt_no == 0 else 0x0A
             pos = 6
             count = 0
             while idx < NUM_KEYS and count < COLORS_PER_PKT:
@@ -283,10 +283,12 @@ def set_lighting_custom(colors, brightness=100):
                 buf[pos]     = r & 0xFF
                 buf[pos + 1] = g & 0xFF
                 buf[pos + 2] = b & 0xFF
-                buf[pos + 3] = 0xFF  # alpha/padding
+                buf[pos + 3] = idx
+                # buf[pos + 3] = 0xFF  # alpha/padding
                 pos += 4
                 idx += 1
                 count += 1
+            buf[5] = 0x0A if idx == NUM_KEYS else 0x0E # 0x0A indicates last packet
             _send(dev, buf)
             pkt_no += 1
 
