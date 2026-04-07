@@ -1,5 +1,30 @@
 # Changelog
 
+## [1.7.3-beta] - 2026-04-07
+
+### Everest 60 — Protocol overhaul (thanks to [@FransM](https://github.com/FransM) for reverse-engineering and testing!)
+
+- **SetMode (0x16) fix:** buf[5]=0x01, effect code moved to buf[9] — sent before SendModeDetails now
+- **SendModeDetails (0x17) fix:** Correct byte layout for colors, speed, brightness
+- **Response verification:** Echo check now reads resp[1] (was resp[0])
+- **COLOR_RAINBOW = 0x02** (was 0x01), new **COLOR_DUAL = 0x10** for dual-color effects
+- **Tornado direction fix:** CW=0x0A, CCW=0x09 with inversion formula (10-direction)
+- **Tornado is single-color only** — removed broken dual-color support for Tornado
+- **Breathing, Wave, Reactive, Yeti** now use COLOR_DUAL by default — both colors are sent correctly
+- **Custom RGB: LEDIDX hardware mapping** — byte 4 of each color entry is now the physical LED address instead of 0xFF. LED index table reverse-engineered by FransM (WIP, may need refinement)
+- **Custom RGB: packet flag fix** — 0x0E = more packets, 0x0A = last packet (was inverted)
+- **Custom RGB: mode activation** — `_send_mode(EFFECT_CUSTOM)` is now called before uploading per-key colors
+
+### Everest 60 — Layout fix
+
+- **Removed backtick/tilde key** — does not exist on the Everest 60 (64 keys, was 65)
+- **Equal row widths** — all rows now use proportional spacing (`sbet`), fixing rows 2+3 being shorter than the rest
+
+### New features
+
+- **Default presets for Everest 60** — Synthwave, Ocean, Ember, Forest, Arctic, Galaxy (auto-loaded on first use)
+- **"Shoreline" preset for Everest Max** — ocean wave gradient from deep navy to bright foam
+
 ## [1.7.2-beta] - 2026-04-02
 
 ### Everest 60 — Protocol Fixes (thanks to FransM for reverse-engineering)
