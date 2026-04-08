@@ -330,5 +330,5 @@
   "pluginmgr_install_ok": "Plugin installed! Restart to activate.",
   "pluginmgr_install_fail": "Installation failed: {err}",
   "pluginmgr_install_exists": "Plugin already exists: {pid}",
-  "pluginmgr_more": "More plugins: github.com/Ramisotti/basecamp-plugins"
+  "pluginmgr_more": "More plugins: github.com/ramisotti13-eng/basecamp-plugins"
 }
