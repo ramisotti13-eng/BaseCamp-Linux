@@ -70,10 +70,9 @@ COLOR_DUAL    = 0x10
 DIR_WAVE    = {"L→R": 0x00, "T→B": 0x02, "R→L": 0x04, "B→T": 0x06}
 DIR_TORNADO = {"CW": 0x0A, "CCW": 0x09}
 
-NUM_KEYS = 191
+NUM_KEYS = 64
 
 # LED hardware index mapping — maps logical key position to firmware LED address.
-# WIP: based on FransM's reverse-engineering, some indices may need correction.
 LEDIDX = [
     # Row 0: ESC  1    2    3    4    5    6    7    8    9    0    -    =   BSPC
     0,   22,  23,  24,  25,  26,  27,  28,  29,  30,  31,  32,  33,  34,
@@ -82,7 +81,7 @@ LEDIDX = [
     # Row 2: CAPS A    S    D    F    G    H    J    K    L    ;    '   ENTER
     63,  64,  65,  66,  67,  68,  69,  70,  71,  72,  73,  74,  76,
     # Row 3: LSFT Z    X    C    V    B    N    M    ,    .    /   RSFT  ↑   DEL
-    84,  85,  86,  87,  88,  89,  90,  91,  92,  93,  94,  97,  95,  56,
+    84,  85,  86,  87,  88,  89,  90,  91,  92,  93,  94,  97,  99,  56,
     # Row 4: LCTL LWIN LALT SPC  RALT FN   ←    ↓    →
     105, 106, 107, 110, 113, 115, 119, 120, 121,
 ]
@@ -131,7 +130,7 @@ def _send(dev, buf, retries=3):
         time.sleep(0.05)
         if resp and len(resp) >= 2 and resp[1] == cmd:
             return resp
-    return resp if 'resp' in dir() else None
+    return resp if 'resp' in locals() else None
 
 
 def _make_buf(cmd):
@@ -236,6 +235,7 @@ def set_lighting_wave_rainbow(brightness=100, speed=50, direction=0):
 
 
 def set_lighting_tornado(r=255, g=0, b=0, brightness=100, speed=50, direction=0):
+    direction = max(0, min(10, direction))
     dev = open_device()
     try:
         _send_mode(dev, EFFECT_TORNADO, speed=speed, brightness=brightness,
@@ -245,6 +245,7 @@ def set_lighting_tornado(r=255, g=0, b=0, brightness=100, speed=50, direction=0)
 
 
 def set_lighting_tornado_rainbow(brightness=100, speed=50, direction=0):
+    direction = max(0, min(10, direction))
     dev = open_device()
     try:
         _send_mode(dev, EFFECT_TORNADO, speed=speed, brightness=brightness,
@@ -288,19 +289,19 @@ def set_lighting_custom(colors, brightness=100):
         buf[6] = 0xC0
         _send(dev, buf)
 
-        # Map — 14 RGBI entries per packet (65 - 6 header bytes = 59, 59//4 = 14)
+        # Map — 14 IRGB entries per packet (65 - 9 header bytes = 56, 56//4 = 14)
         COLORS_PER_PKT = 14
         idx = 0
         while idx < num_keys:
             buf = _make_buf(0x35)
-            pos = 6
+            pos = 9
             count = 0
             while idx < num_keys and count < COLORS_PER_PKT:
                 r, g, b = colors[idx]
-                buf[pos]     = r & 0xFF
-                buf[pos + 1] = g & 0xFF
-                buf[pos + 2] = b & 0xFF
-                buf[pos + 3] = LEDIDX[idx]
+                buf[pos]     = LEDIDX[idx]
+                buf[pos + 1] = r & 0xFF
+                buf[pos + 2] = g & 0xFF
+                buf[pos + 3] = b & 0xFF
                 pos += 4
                 idx += 1
                 count += 1
