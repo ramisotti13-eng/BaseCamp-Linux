@@ -752,7 +752,10 @@ class DisplayPadActionsDialog(ctk.CTkToplevel):
         base = list(_ACTION_TYPES) if include_page else [t for t in _ACTION_TYPES if t != "page"]
         pm = getattr(self._app, "_plugin_manager", None)
         if pm:
-            base.extend(pm.get_action_type_ids())
+            plugin_ids = pm.get_action_type_ids()
+            if plugin_ids:
+                base.append("_separator")
+                base.extend(plugin_ids)
         return base
 
     def _type_labels(self, include_page=True):
@@ -764,11 +767,14 @@ class DisplayPadActionsDialog(ctk.CTkToplevel):
         labels.append("OBS")
         labels.append(self._app.T("action_type_macro"))
         labels.append(self._app.T("action_type_keypress"))
-        # Append plugin action labels
+        # Append plugin action labels with separator
         pm = getattr(self._app, "_plugin_manager", None)
         if pm:
-            for _tid, lbl in pm.get_action_type_labels():
-                labels.append(lbl)
+            plugin_labels = pm.get_action_type_labels()
+            if plugin_labels:
+                labels.append("── Plugins ──")
+                for _tid, lbl in plugin_labels:
+                    labels.append(lbl)
         return labels
 
     def _load_page(self, page):
@@ -987,6 +993,14 @@ class DisplayPadActionsDialog(ctk.CTkToplevel):
                 break
 
     def _on_type_change(self, label, idx):
+        # Ignore separator selection
+        if label == "── Plugins ──":
+            cur = self._act_type[idx].get()
+            labels = self._type_labels(include_page=self._page == 0)
+            types = self._get_action_types(include_page=self._page == 0)
+            if cur in types:
+                self._type_menus[idx].set(labels[types.index(cur)])
+            return
         is_sub = self._page != 0
         types = self._get_action_types(include_page=not is_sub)
         labels = self._type_labels(include_page=not is_sub)
@@ -2140,6 +2154,13 @@ class DisplayPadPanel(ctk.CTkFrame):
             _init_device(hid_dev)
 
             rot = self._rotation
+
+            # Clear unassigned buttons so stale images from previous
+            # sessions don't linger on the device.
+            _blank_bgr = b'\x00' * (ICON_SIZE * ICON_SIZE * 3)
+            for k in range(NUM_KEYS):
+                if k not in assigned:
+                    _upload_button(usb_dev, hid_dev, k, _blank_bgr)
 
             static   = {k: _image_to_bgr102(v, rot)
                         for k, v in assigned.items()

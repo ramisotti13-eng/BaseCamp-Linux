@@ -313,16 +313,31 @@ class PluginManagerPanel(ctk.CTkFrame):
                 text_color=RED, anchor="w", wraplength=400, justify="left"
             ).pack(fill="x", pady=(4, 0))
 
-        # Uninstall button (only for user-installed plugins, not bundled)
+        # Action buttons row
         plugin_path = info.get("_path", "")
+        btn_row = ctk.CTkFrame(parent, fg_color="transparent")
+        btn_row.pack(fill="x", pady=(6, 0))
+
+        # Reload button (for active plugins)
+        pm = self._app._plugin_manager
+        if pm.is_loaded(pid):
+            ctk.CTkButton(
+                btn_row, text=self.T("pluginmgr_reload"),
+                font=("Helvetica", 9, "bold"),
+                fg_color=BLUE, hover_color="#0284c7", text_color=FG,
+                height=22, width=80, corner_radius=4,
+                command=lambda p=pid: self._reload(p)
+            ).pack(side="left", padx=(0, 6))
+
+        # Uninstall button (only for user-installed plugins, not bundled)
         if plugin_path and _PLUGINS_DIR in plugin_path:
             ctk.CTkButton(
-                parent, text=self.T("pluginmgr_uninstall"),
+                btn_row, text=self.T("pluginmgr_uninstall"),
                 font=("Helvetica", 9, "bold"),
                 fg_color="#7f1d1d", hover_color="#991b1b", text_color="#fca5a5",
                 height=22, width=90, corner_radius=4,
                 command=lambda p=pid: self._uninstall(p)
-            ).pack(anchor="w", pady=(6, 0))
+            ).pack(side="left")
 
     def _load_icon(self, pid, info):
         if pid in self._icon_cache:
@@ -365,6 +380,15 @@ class PluginManagerPanel(ctk.CTkFrame):
             del self._app._plugin_sw_btns[pid]
         pm.disable_plugin(pid)
         self._restart_lbl.configure(text=self.T("pluginmgr_restart"))
+        self._populate()
+
+    def _reload(self, pid):
+        """Reload a plugin: stop, reimport, restart."""
+        pm = self._app._plugin_manager
+        if pm.reload_plugin(pid):
+            self._restart_lbl.configure(text=self.T("pluginmgr_reloaded"))
+        else:
+            self._restart_lbl.configure(text=self.T("pluginmgr_error"))
         self._populate()
 
     def _uninstall(self, pid):

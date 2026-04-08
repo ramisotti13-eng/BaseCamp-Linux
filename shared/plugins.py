@@ -124,6 +124,48 @@ class PluginManager:
             for tid in to_remove:
                 del self._action_types[tid]
 
+    def reload_plugin(self, pid):
+        """Stop, reimport, and restart a plugin without full app restart."""
+        info = self._manifests.get(pid)
+        if not info:
+            return False
+        # Stop the running instance
+        inst = self._instances.pop(pid, None)
+        if inst:
+            if hasattr(inst, "stop"):
+                try:
+                    inst.stop()
+                except Exception:
+                    pass
+            # Remove action types registered by old instance
+            to_remove = [tid for tid, d in self._action_types.items()
+                         if getattr(d.get("handler"), "__self__", None) is inst]
+            for tid in to_remove:
+                del self._action_types[tid]
+        # Clear cached module so importlib re-reads the source
+        mod_key = f"plugins.{pid}"
+        sys.modules.pop(mod_key, None)
+        # Clear __pycache__ in plugin dir
+        cache_dir = os.path.join(info["_path"], "__pycache__")
+        if os.path.isdir(cache_dir):
+            import shutil
+            shutil.rmtree(cache_dir, ignore_errors=True)
+        # Re-load
+        if not self._load_one(pid, info, self._context):
+            return False
+        # Re-start service if applicable
+        new_inst = self._instances.get(pid)
+        if new_inst:
+            ptypes = info.get("type", "")
+            if isinstance(ptypes, str):
+                ptypes = [ptypes]
+            if "service" in ptypes and hasattr(new_inst, "start"):
+                try:
+                    new_inst.start()
+                except Exception as e:
+                    print(f"[Plugin] Failed to start {pid}: {e}")
+        return True
+
     def enable_plugin(self, pid):
         """Enable a plugin. Loads it immediately if possible."""
         self._disabled.discard(pid)

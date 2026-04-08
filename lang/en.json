@@ -327,6 +327,8 @@
   "pluginmgr_loading": "Loading...",
   "pluginmgr_installed": "Installed",
   "pluginmgr_uninstall": "Uninstall",
+  "pluginmgr_reload": "Reload",
+  "pluginmgr_reloaded": "Plugin reloaded ✓",
   "pluginmgr_manual_install": "\u25B6 Manual install (URL / folder)",
   "pluginmgr_install": "Install Plugin",
   "pluginmgr_install_hint": "Paste a GitHub URL or browse to a plugin folder",
