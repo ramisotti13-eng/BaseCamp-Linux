@@ -13,12 +13,14 @@ from shared.ui_helpers import BG, BG2, BG3, FG, FG2, BLUE, GRN, RED, YLW, BORDER
 from shared.config import CONFIG_DIR
 
 _PLUGINS_DIR = os.path.join(CONFIG_DIR, "plugins")
+_PLUGINS_INDEX_URL = "https://raw.githubusercontent.com/ramisotti13-eng/basecamp-plugins/main/plugins.json"
+_REPO_BASE = "https://github.com/ramisotti13-eng/basecamp-plugins/tree/main/"
 
 # Type badge colors
 _TYPE_COLORS = {
-    "panel":   ("#0ea5e9", "#0c4a6e"),   # blue fg, blue bg
-    "service": ("#22c55e", "#14532d"),    # green fg, green bg
-    "action":  ("#f59e0b", "#78350f"),    # amber fg, amber bg
+    "panel":   ("#0ea5e9", "#0c4a6e"),
+    "service": ("#22c55e", "#14532d"),
+    "action":  ("#f59e0b", "#78350f"),
 }
 
 
@@ -27,9 +29,10 @@ class PluginManagerPanel(ctk.CTkFrame):
     def __init__(self, parent, app):
         super().__init__(parent, fg_color=BG, corner_radius=0)
         self._app = app
-        self._rows = {}  # pid -> dict of widgets
-        self._expanded = set()  # pids that are expanded
-        self._icon_cache = {}  # pid -> CTkImage
+        self._rows = {}
+        self._expanded = set()
+        self._icon_cache = {}
+        self._available = []  # fetched from plugins.json
         self._build_ui()
 
     def T(self, key, **kw):
@@ -57,35 +60,57 @@ class PluginManagerPanel(ctk.CTkFrame):
             font=("Helvetica", 10), text_color=FG2, justify="left")
         self._hint_lbl.pack(fill="x", padx=16, pady=(0, 8))
 
-        # Plugin list
+        # Installed plugins list
         self._list_frame = ctk.CTkFrame(self, fg_color="transparent")
         self._list_frame.pack(fill="x", padx=8, pady=(0, 8))
 
-        # Restart hint (shown after enable/disable/install)
+        # Restart hint
         self._restart_lbl = ctk.CTkLabel(
             self, text="", font=("Helvetica", 10, "bold"),
             text_color=YLW)
         self._restart_lbl.pack(fill="x", padx=16, pady=(0, 4))
 
-        # Install section
-        install_frame = ctk.CTkFrame(self, fg_color=BG2, corner_radius=6)
-        install_frame.pack(fill="x", padx=16, pady=(4, 4))
+        # ── Available Plugins (from GitHub) ──────────────────────────────────
+        avail_frame = ctk.CTkFrame(self, fg_color=BG2, corner_radius=6)
+        avail_frame.pack(fill="x", padx=16, pady=(4, 4))
 
-        install_hdr = ctk.CTkFrame(install_frame, fg_color="transparent")
-        install_hdr.pack(fill="x", padx=10, pady=(8, 4))
+        avail_hdr = ctk.CTkFrame(avail_frame, fg_color="transparent")
+        avail_hdr.pack(fill="x", padx=10, pady=(8, 4))
 
-        self._install_title = ctk.CTkLabel(
-            install_hdr, text=self.T("pluginmgr_install"),
+        self._avail_title = ctk.CTkLabel(
+            avail_hdr, text=self.T("pluginmgr_available"),
             font=("Helvetica", 11, "bold"), text_color=FG)
-        self._install_title.pack(side="left")
+        self._avail_title.pack(side="left")
 
-        self._install_hint = ctk.CTkLabel(
-            install_frame, text=self.T("pluginmgr_install_hint"),
+        self._refresh_btn = ctk.CTkButton(
+            avail_hdr, text="\u21BB", font=("Helvetica", 12),
+            fg_color="transparent", hover_color=BG3, text_color=FG2,
+            width=28, height=24, corner_radius=4,
+            command=self._fetch_available)
+        self._refresh_btn.pack(side="right")
+
+        self._avail_list = ctk.CTkFrame(avail_frame, fg_color="transparent")
+        self._avail_list.pack(fill="x", padx=6, pady=(0, 8))
+
+        self._avail_status = ctk.CTkLabel(
+            self._avail_list, text=self.T("pluginmgr_loading"),
             font=("Helvetica", 9), text_color=FG2)
-        self._install_hint.pack(fill="x", padx=10, pady=(0, 4))
+        self._avail_status.pack(pady=8)
 
-        input_row = ctk.CTkFrame(install_frame, fg_color="transparent")
-        input_row.pack(fill="x", padx=10, pady=(0, 8))
+        # ── Manual install (collapsed, for advanced users) ───────────────────
+        self._manual_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self._manual_frame.pack(fill="x", padx=16, pady=(2, 4))
+
+        manual_toggle = ctk.CTkLabel(
+            self._manual_frame, text=self.T("pluginmgr_manual_install"),
+            font=("Helvetica", 9), text_color=FG2, cursor="hand2")
+        manual_toggle.pack(anchor="w")
+
+        self._manual_body = ctk.CTkFrame(self._manual_frame, fg_color="transparent")
+        # Initially hidden
+
+        input_row = ctk.CTkFrame(self._manual_body, fg_color="transparent")
+        input_row.pack(fill="x", pady=(4, 0))
 
         self._install_entry = ctk.CTkEntry(
             input_row, placeholder_text=self.T("pluginmgr_install_url"),
@@ -109,8 +134,11 @@ class PluginManagerPanel(ctk.CTkFrame):
         self._install_btn.pack(side="left")
 
         self._install_status = ctk.CTkLabel(
-            install_frame, text="", font=("Helvetica", 9), text_color=FG2)
-        self._install_status.pack(fill="x", padx=10, pady=(0, 6))
+            self._manual_body, text="", font=("Helvetica", 9), text_color=FG2)
+        self._install_status.pack(fill="x", pady=(4, 0))
+
+        self._manual_open = False
+        manual_toggle.bind("<Button-1>", lambda e: self._toggle_manual())
 
         # More plugins link
         self._more_lbl = ctk.CTkLabel(
@@ -119,9 +147,19 @@ class PluginManagerPanel(ctk.CTkFrame):
         self._more_lbl.pack(fill="x", padx=16, pady=(2, 10))
 
         self._populate()
+        # Fetch available plugins in background
+        self._fetch_available()
+
+    def _toggle_manual(self):
+        if self._manual_open:
+            self._manual_body.pack_forget()
+        else:
+            self._manual_body.pack(fill="x")
+        self._manual_open = not self._manual_open
+
+    # ── Installed plugins list ───────────────────────────────────────────────
 
     def _populate(self):
-        """Build one card per discovered plugin."""
         for w in self._list_frame.winfo_children():
             w.destroy()
         self._rows.clear()
@@ -149,11 +187,9 @@ class PluginManagerPanel(ctk.CTkFrame):
     def _build_card(self, pid, info):
         pm = self._app._plugin_manager
         disabled = pm.is_disabled(pid)
-        loaded = pm.is_loaded(pid)
         error = pm.get_error(pid)
         is_open = pid in self._expanded
 
-        # Accent color
         if disabled:
             accent = FG2
         elif error:
@@ -161,29 +197,24 @@ class PluginManagerPanel(ctk.CTkFrame):
         else:
             accent = GRN
 
-        # Card — use border_color for accent
         card = ctk.CTkFrame(self._list_frame, fg_color=BG3, corner_radius=6,
                             border_width=2, border_color=accent)
         card.pack(fill="x", padx=4, pady=3)
 
-        # ── Header (always visible) ──────────────────────────────────────────
         hdr = ctk.CTkFrame(card, fg_color="transparent")
         hdr.pack(fill="x", padx=(8, 10), pady=(6, 6))
 
-        # Expand arrow
         arrow = "\u25BC" if is_open else "\u25B6"
         arrow_lbl = ctk.CTkLabel(
             hdr, text=arrow, font=("Helvetica", 9), text_color=FG2,
             width=14, cursor="hand2")
         arrow_lbl.pack(side="left", padx=(0, 4))
 
-        # Plugin icon
         icon_img = self._load_icon(pid, info)
         if icon_img:
             icon_lbl = ctk.CTkLabel(hdr, image=icon_img, text="", cursor="hand2")
             icon_lbl.pack(side="left", padx=(0, 6))
 
-        # Name + version
         name = info.get("name", pid)
         ver = info.get("version", "")
         name_lbl = ctk.CTkLabel(
@@ -197,7 +228,6 @@ class PluginManagerPanel(ctk.CTkFrame):
                 text_color=FG2, cursor="hand2")
             ver_lbl.pack(side="left")
 
-        # Type badges inline (compact, always visible)
         ptypes = info.get("type", "")
         if isinstance(ptypes, str):
             ptypes = [ptypes] if ptypes else []
@@ -210,7 +240,6 @@ class PluginManagerPanel(ctk.CTkFrame):
                 height=16, padx=3, cursor="hand2")
             badge.pack(side="left", padx=(6, 0))
 
-        # Toggle button (always visible, right side)
         if disabled:
             btn_text = self.T("pluginmgr_enable")
             btn_color = GRN
@@ -229,13 +258,11 @@ class PluginManagerPanel(ctk.CTkFrame):
             command=btn_cmd)
         toggle_btn.pack(side="right", padx=(8, 0))
 
-        # ── Detail area (only when expanded) ──────────────────────────────────
         if is_open:
             detail = ctk.CTkFrame(card, fg_color="transparent")
             detail.pack(fill="x", padx=(8, 10), pady=(0, 6))
             self._fill_detail(detail, info, error)
 
-        # ── Click binding for expand/collapse ─────────────────────────────────
         def toggle_expand(_e=None, p=pid):
             if p in self._expanded:
                 self._expanded.discard(p)
@@ -243,7 +270,6 @@ class PluginManagerPanel(ctk.CTkFrame):
                 self._expanded.add(p)
             self._populate()
 
-        # Bind click on all header widgets (not the toggle button)
         for w in (arrow_lbl, name_lbl, hdr):
             w.bind("<Button-1>", toggle_expand)
         if icon_img:
@@ -257,8 +283,6 @@ class PluginManagerPanel(ctk.CTkFrame):
         self._rows[pid] = {"card": card, "toggle": toggle_btn}
 
     def _fill_detail(self, parent, info, error):
-        """Build the expanded detail content."""
-        # Description
         desc = info.get("description", "")
         if desc:
             ctk.CTkLabel(
@@ -266,7 +290,6 @@ class PluginManagerPanel(ctk.CTkFrame):
                 text_color=FG2, anchor="w", justify="left"
             ).pack(fill="x", pady=(0, 4))
 
-        # Help text
         help_text = info.get("help", "")
         if help_text:
             help_frame = ctk.CTkFrame(parent, fg_color=BG2, corner_radius=4)
@@ -277,7 +300,6 @@ class PluginManagerPanel(ctk.CTkFrame):
                 anchor="w", justify="left", wraplength=400
             ).pack(fill="x", padx=8, pady=4)
 
-        # Author
         author = info.get("author", "")
         if author:
             ctk.CTkLabel(
@@ -285,7 +307,6 @@ class PluginManagerPanel(ctk.CTkFrame):
                 font=("Helvetica", 9), text_color=FG2, anchor="w"
             ).pack(fill="x")
 
-        # Error detail
         if error:
             ctk.CTkLabel(
                 parent, text=error, font=("Helvetica", 9),
@@ -293,7 +314,6 @@ class PluginManagerPanel(ctk.CTkFrame):
             ).pack(fill="x", pady=(4, 0))
 
     def _load_icon(self, pid, info):
-        """Load icon.png from plugin folder if it exists. Returns CTkImage or None."""
         if pid in self._icon_cache:
             return self._icon_cache[pid]
         pdir = info.get("_path", "")
@@ -311,7 +331,7 @@ class PluginManagerPanel(ctk.CTkFrame):
             self._icon_cache[pid] = None
             return None
 
-    # ── Actions ───────────────────────────────────────────────────────────────
+    # ── Enable / Disable ─────────────────────────────────────────────────────
 
     def _enable(self, pid):
         pm = self._app._plugin_manager
@@ -326,19 +346,131 @@ class PluginManagerPanel(ctk.CTkFrame):
 
     def _disable(self, pid):
         pm = self._app._plugin_manager
-
         if pid in self._app._panels:
             self._app._panels[pid].pack_forget()
             del self._app._panels[pid]
         if pid in self._app._plugin_sw_btns:
             self._app._plugin_sw_btns[pid].destroy()
             del self._app._plugin_sw_btns[pid]
-
         pm.disable_plugin(pid)
         self._restart_lbl.configure(text=self.T("pluginmgr_restart"))
         self._populate()
 
-    # ── Install ──────────────────────────────────────────────────────────────
+    # ── Available Plugins Browser ────────────────────────────────────────────
+
+    def _fetch_available(self):
+        """Fetch plugins.json from GitHub and build the available list."""
+        self._refresh_btn.configure(state="disabled")
+        threading.Thread(target=self._do_fetch_available, daemon=True).start()
+
+    def _do_fetch_available(self):
+        try:
+            req = urllib.request.Request(_PLUGINS_INDEX_URL)
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                data = json.loads(resp.read())
+            plugins = data.get("plugins", [])
+            self.after(0, lambda: self._show_available(plugins))
+        except Exception as e:
+            self.after(0, lambda: self._show_available_error(str(e)))
+
+    def _show_available(self, plugins):
+        self._refresh_btn.configure(state="normal")
+        self._available = plugins
+
+        for w in self._avail_list.winfo_children():
+            w.destroy()
+
+        pm = self._app._plugin_manager
+        installed_ids = set(pm._manifests.keys())
+
+        if not plugins:
+            ctk.CTkLabel(
+                self._avail_list, text=self.T("pluginmgr_no_available"),
+                font=("Helvetica", 9), text_color=FG2
+            ).pack(pady=8)
+            return
+
+        for pinfo in plugins:
+            pid = pinfo.get("id", "")
+            name = pinfo.get("name", pid)
+            desc = pinfo.get("description", "")
+            ver = pinfo.get("version", "")
+            author = pinfo.get("author", "")
+            is_installed = pid in installed_ids
+
+            row = ctk.CTkFrame(self._avail_list, fg_color=BG3, corner_radius=4)
+            row.pack(fill="x", pady=2)
+
+            # Name + version
+            ctk.CTkLabel(
+                row, text=name, font=("Helvetica", 11, "bold"),
+                text_color=FG
+            ).pack(side="left", padx=(8, 0), pady=4)
+
+            if ver:
+                ctk.CTkLabel(
+                    row, text=f"  v{ver}", font=("Helvetica", 9),
+                    text_color=FG2
+                ).pack(side="left", pady=4)
+
+            if author:
+                ctk.CTkLabel(
+                    row, text=f"  by {author}", font=("Helvetica", 8),
+                    text_color=FG2
+                ).pack(side="left", pady=4)
+
+            # Install / Installed button
+            if is_installed:
+                btn = ctk.CTkButton(
+                    row, text=self.T("pluginmgr_installed"),
+                    font=("Helvetica", 9), fg_color=BG2, hover_color=BG2,
+                    text_color=FG2, height=22, width=80, corner_radius=4,
+                    state="disabled")
+            else:
+                btn = ctk.CTkButton(
+                    row, text=self.T("pluginmgr_install_btn"),
+                    font=("Helvetica", 9, "bold"),
+                    fg_color=BLUE, hover_color="#0284c7", text_color=FG,
+                    height=22, width=80, corner_radius=4,
+                    command=lambda p=pinfo, b=None: self._install_available(p))
+                # Store ref so we can update it
+                btn._pinfo = pinfo
+            btn.pack(side="right", padx=(4, 8), pady=4)
+
+            # Description below name
+            if desc:
+                ctk.CTkLabel(
+                    row, text=desc, font=("Helvetica", 8),
+                    text_color=FG2, anchor="w", wraplength=300
+                ).pack(side="left", padx=(12, 4), pady=4)
+
+    def _show_available_error(self, err):
+        self._refresh_btn.configure(state="normal")
+        for w in self._avail_list.winfo_children():
+            w.destroy()
+        ctk.CTkLabel(
+            self._avail_list, text=f"Could not load plugins: {err}",
+            font=("Helvetica", 9), text_color=RED
+        ).pack(pady=8)
+
+    def _install_available(self, pinfo):
+        """Install a plugin from the available list."""
+        url = pinfo.get("url", "")
+        if not url:
+            return
+        self._restart_lbl.configure(text="")
+
+        # Find and disable the button
+        for child in self._avail_list.winfo_children():
+            for w in child.winfo_children():
+                if isinstance(w, ctk.CTkButton) and hasattr(w, "_pinfo") and w._pinfo is pinfo:
+                    w.configure(text="...", state="disabled")
+                    break
+
+        threading.Thread(target=self._install_from_github,
+                         args=(url, pinfo), daemon=True).start()
+
+    # ── Install logic ────────────────────────────────────────────────────────
 
     def _browse_folder(self):
         from tkinter import filedialog
@@ -355,10 +487,8 @@ class PluginManagerPanel(ctk.CTkFrame):
         self._install_status.configure(text="Installing...", text_color=YLW)
 
         if os.path.isdir(src):
-            # Local folder
             self._install_from_folder(src)
         elif "github.com" in src:
-            # GitHub URL — download in background
             threading.Thread(target=self._install_from_github, args=(src,),
                              daemon=True).start()
         else:
@@ -367,64 +497,58 @@ class PluginManagerPanel(ctk.CTkFrame):
                 text=self.T("pluginmgr_install_fail", err="Not a folder or GitHub URL"),
                 text_color=RED)
 
-    def _install_from_folder(self, src):
-        """Install plugin from a local folder."""
+    def _install_from_folder(self, src, from_browser=False):
         try:
             manifest_path = os.path.join(src, "plugin.json")
             if not os.path.isfile(manifest_path):
-                self._install_status.configure(
-                    text=self.T("pluginmgr_install_fail", err="No plugin.json found"),
-                    text_color=RED)
-                self._install_btn.configure(state="normal")
-                return
+                msg = self.T("pluginmgr_install_fail", err="No plugin.json found")
+                if not from_browser:
+                    self._install_status.configure(text=msg, text_color=RED)
+                    self._install_btn.configure(state="normal")
+                return False
 
             with open(manifest_path) as f:
                 manifest = json.load(f)
             pid = manifest.get("id", "")
             if not pid:
-                self._install_status.configure(
-                    text=self.T("pluginmgr_install_fail", err="No id in plugin.json"),
-                    text_color=RED)
-                self._install_btn.configure(state="normal")
-                return
+                msg = self.T("pluginmgr_install_fail", err="No id in plugin.json")
+                if not from_browser:
+                    self._install_status.configure(text=msg, text_color=RED)
+                    self._install_btn.configure(state="normal")
+                return False
 
             dest = os.path.join(_PLUGINS_DIR, pid)
             if os.path.exists(dest):
-                # Overwrite existing (update)
                 shutil.rmtree(dest)
 
             shutil.copytree(src, dest)
-            # Remove __pycache__ if copied
             cache = os.path.join(dest, "__pycache__")
             if os.path.isdir(cache):
                 shutil.rmtree(cache)
 
-            self._install_status.configure(
-                text=self.T("pluginmgr_install_ok"), text_color=GRN)
-            self._restart_lbl.configure(text=self.T("pluginmgr_restart"))
-            self._install_btn.configure(state="normal")
+            self._restart_lbl.configure(text=self.T("pluginmgr_install_ok"))
+            if not from_browser:
+                self._install_status.configure(
+                    text=self.T("pluginmgr_install_ok"), text_color=GRN)
+                self._install_btn.configure(state="normal")
 
-            # Re-discover to show the new plugin in the list
             self._app._plugin_manager.discover()
             self._populate()
+            # Refresh available list to show "Installed"
+            self._show_available(self._available)
+            return True
 
         except Exception as e:
-            self._install_status.configure(
-                text=self.T("pluginmgr_install_fail", err=str(e)),
-                text_color=RED)
-            self._install_btn.configure(state="normal")
+            if not from_browser:
+                self._install_status.configure(
+                    text=self.T("pluginmgr_install_fail", err=str(e)),
+                    text_color=RED)
+                self._install_btn.configure(state="normal")
+            return False
 
-    def _install_from_github(self, url):
-        """Download plugin from GitHub and install. Runs in background thread."""
+    def _install_from_github(self, url, pinfo=None):
         try:
-            # Convert GitHub URL to zip download URL
-            # Supports: github.com/user/repo/tree/branch/path/to/plugin
-            #           github.com/user/repo
             url = url.rstrip("/")
-            if "github.com" not in url:
-                raise ValueError("Not a GitHub URL")
-
-            # Parse owner/repo and optional path
             parts = url.split("github.com/", 1)[1].split("/")
             owner = parts[0]
             repo = parts[1] if len(parts) > 1 else ""
@@ -435,7 +559,6 @@ class PluginManagerPanel(ctk.CTkFrame):
                 branch = parts[3]
                 subpath = "/".join(parts[4:]) if len(parts) > 4 else ""
 
-            # Download repo as zip
             zip_url = f"https://github.com/{owner}/{repo}/archive/refs/heads/{branch}.zip"
             tmp = tempfile.mkdtemp()
             zip_path = os.path.join(tmp, "repo.zip")
@@ -445,20 +568,16 @@ class PluginManagerPanel(ctk.CTkFrame):
                 with open(zip_path, "wb") as f:
                     f.write(resp.read())
 
-            # Extract
             with zipfile.ZipFile(zip_path) as zf:
                 zf.extractall(tmp)
 
-            # Find the plugin folder
             extracted_root = os.path.join(tmp, f"{repo}-{branch}")
             if subpath:
                 plugin_dir = os.path.join(extracted_root, subpath)
             else:
-                # Look for plugin.json in root or first subfolder
                 if os.path.isfile(os.path.join(extracted_root, "plugin.json")):
                     plugin_dir = extracted_root
                 else:
-                    # Check subfolders
                     plugin_dir = None
                     for d in os.listdir(extracted_root):
                         candidate = os.path.join(extracted_root, d)
@@ -469,10 +588,9 @@ class PluginManagerPanel(ctk.CTkFrame):
                     if not plugin_dir:
                         raise FileNotFoundError("No plugin.json found in repository")
 
-            # Install from the found folder
-            self.after(0, lambda: self._install_from_folder(plugin_dir))
+            from_browser = pinfo is not None
+            self.after(0, lambda: self._install_from_folder(plugin_dir, from_browser))
 
-            # Cleanup temp dir after a delay
             def _cleanup():
                 try:
                     shutil.rmtree(tmp, ignore_errors=True)
@@ -481,21 +599,25 @@ class PluginManagerPanel(ctk.CTkFrame):
             self.after(5000, _cleanup)
 
         except Exception as e:
-            self.after(0, lambda: [
-                self._install_status.configure(
-                    text=self.T("pluginmgr_install_fail", err=str(e)),
-                    text_color=RED),
-                self._install_btn.configure(state="normal")
-            ])
+            self.after(0, lambda: self._on_github_fail(str(e), pinfo))
+
+    def _on_github_fail(self, err, pinfo=None):
+        if pinfo is None:
+            self._install_status.configure(
+                text=self.T("pluginmgr_install_fail", err=err), text_color=RED)
+            self._install_btn.configure(state="normal")
+        else:
+            self._restart_lbl.configure(
+                text=self.T("pluginmgr_install_fail", err=err))
 
     # ── i18n ──────────────────────────────────────────────────────────────────
 
     def apply_lang(self):
         self._title_lbl.configure(text=self.T("pluginmgr_title"))
         self._hint_lbl.configure(text=self.T("pluginmgr_hint"))
-        self._install_title.configure(text=self.T("pluginmgr_install"))
-        self._install_hint.configure(text=self.T("pluginmgr_install_hint"))
+        self._avail_title.configure(text=self.T("pluginmgr_available"))
         self._install_btn.configure(text=self.T("pluginmgr_install_btn"))
         self._browse_btn.configure(text=self.T("pluginmgr_install_browse"))
         self._more_lbl.configure(text=self.T("pluginmgr_more"))
         self._populate()
+        self._show_available(self._available)
