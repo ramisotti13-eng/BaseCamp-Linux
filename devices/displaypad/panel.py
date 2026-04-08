@@ -32,6 +32,7 @@ from shared.config import (
     _load_displaypad_pages, _save_displaypad_pages,
     _load_displaypad_rotation, _save_displaypad_rotation,
     _load_displaypad_brightness, _save_displaypad_brightness,
+    _load_displaypad_debounce, _save_displaypad_debounce,
 )
 
 try:
@@ -1144,6 +1145,7 @@ class DisplayPadPanel(ctk.CTkFrame):
         self._fullscreen_group = set()   # key indices that form a synced fullscreen GIF
         self._rotation         = _load_displaypad_rotation()
         self._brightness       = _load_displaypad_brightness()
+        self._debounce         = _load_displaypad_debounce()
         # GUI preview animation
         self._gui_frames_sm  = {}
         self._gui_fidx       = {}
@@ -1275,6 +1277,17 @@ class DisplayPadPanel(ctk.CTkFrame):
         ctk.CTkLabel(head_row, text="☀", font=("Helvetica", 12),
                      text_color=FG2, fg_color="transparent").pack(side="right")
 
+        self._deb_menu = ctk.CTkOptionMenu(
+            head_row, values=["0.2s", "0.4s", "0.6s", "0.8s", "1.0s"],
+            fg_color=BG2, button_color=BG3, button_hover_color=BORDER,
+            text_color=FG, font=("Helvetica", 10), width=72, height=24,
+            command=self._on_debounce_change)
+        self._deb_menu.set(f"{self._debounce}s")
+        self._deb_menu.pack(side="right", padx=(4, 0))
+
+        ctk.CTkLabel(head_row, text="⏱", font=("Helvetica", 12),
+                     text_color=FG2, fg_color="transparent").pack(side="right")
+
         # Page indicator bar
         page_bar = ctk.CTkFrame(content, fg_color="transparent")
         page_bar.pack(padx=16, pady=(4, 0))
@@ -1387,6 +1400,11 @@ class DisplayPadPanel(ctk.CTkFrame):
             except Exception:
                 pass
         threading.Thread(target=_apply, daemon=True).start()
+
+    def _on_debounce_change(self, val):
+        sec = float(val.replace("s", ""))
+        self._debounce = sec
+        _save_displaypad_debounce(sec)
 
     def _on_rotation_change(self, val):
         deg = int(val.replace("°", ""))
@@ -1665,7 +1683,6 @@ class DisplayPadPanel(ctk.CTkFrame):
     def _key_event_loop(self):
         """Persistent key-event listener. Runs for the lifetime of the panel,
         pauses while upload/animation is active, retries on device errors."""
-        _DEBOUNCE = 0.8
         last_fire = {}  # key_index -> monotonic time of last action
 
         while not self._key_stop.is_set():
@@ -1708,7 +1725,7 @@ class DisplayPadPanel(ctk.CTkFrame):
                     for k, (bi, mask) in enumerate(_KEY_MAP):
                         if bi < len(data):
                             if (data[bi] & mask) and not (prev[bi] & mask):
-                                if now - last_fire.get(k, 0) >= _DEBOUNCE:
+                                if now - last_fire.get(k, 0) >= self._debounce:
                                     last_fire[k] = now
                                     self.after(0, lambda k=k: self._execute_action_k(k))
                     prev = data

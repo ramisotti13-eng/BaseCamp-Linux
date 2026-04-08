@@ -49,6 +49,7 @@ DISPLAYPAD_ACTIONS_FILE    = os.path.join(CONFIG_DIR, "displaypad_actions.json")
 DISPLAYPAD_PAGES_FILE      = os.path.join(CONFIG_DIR, "displaypad_pages.json")
 DISPLAYPAD_ROTATION_FILE    = os.path.join(CONFIG_DIR, "displaypad_rotation")
 DISPLAYPAD_BRIGHTNESS_FILE  = os.path.join(CONFIG_DIR, "displaypad_brightness")
+DISPLAYPAD_DEBOUNCE_FILE    = os.path.join(CONFIG_DIR, "displaypad_debounce")
 MACROS_FILE                 = os.path.join(CONFIG_DIR, "macros.json")
 MOUSE_RECORDINGS_DIR        = os.path.join(CONFIG_DIR, "mouse_recordings")
 PLUGINS_DIR                 = os.path.join(CONFIG_DIR, "plugins")
@@ -565,6 +566,22 @@ def _load_displaypad_brightness():
 
 def _save_displaypad_brightness(val):
     with open(DISPLAYPAD_BRIGHTNESS_FILE, "w") as f:
+        f.write(str(val))
+
+
+_DEBOUNCE_VALUES = [0.2, 0.4, 0.6, 0.8, 1.0]
+
+def _load_displaypad_debounce():
+    try:
+        with open(DISPLAYPAD_DEBOUNCE_FILE) as f:
+            v = float(f.read().strip())
+        return v if v in _DEBOUNCE_VALUES else 0.8
+    except Exception:
+        return 0.8
+
+
+def _save_displaypad_debounce(val):
+    with open(DISPLAYPAD_DEBOUNCE_FILE, "w") as f:
         f.write(str(val))
 
 

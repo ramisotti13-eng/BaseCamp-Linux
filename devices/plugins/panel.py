@@ -206,6 +206,17 @@ class PluginManagerPanel(ctk.CTkFrame):
                 text_color=FG2, anchor="w", justify="left"
             ).pack(fill="x", pady=(0, 4))
 
+        # Help text
+        help_text = info.get("help", "")
+        if help_text:
+            help_frame = ctk.CTkFrame(parent, fg_color=BG2, corner_radius=4)
+            help_frame.pack(fill="x", pady=(0, 4))
+            ctk.CTkLabel(
+                help_frame, text=f"\u2139  {help_text}",
+                font=("Helvetica", 9), text_color=FG,
+                anchor="w", justify="left", wraplength=400
+            ).pack(fill="x", padx=8, pady=4)
+
         # Author
         author = info.get("author", "")
         if author:

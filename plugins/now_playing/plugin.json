@@ -4,6 +4,7 @@
   "version": "1.0",
   "author": "BaseCamp Linux",
   "description": "Shows what's playing in your browser (YouTube, Spotify, etc.) via MPRIS",
+  "help": "Assign the 'Now Playing (Play/Pause)' action to a DisplayPad button via the Actions dialog. The plugin auto-detects which button it's on and pushes live album art. Requires playerctl (sudo dnf/apt install playerctl).",
   "type": ["panel", "service", "action"],
   "entry": "__init__",
   "requires": ["subprocess"]
