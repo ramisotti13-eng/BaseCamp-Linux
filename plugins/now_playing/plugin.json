@@ -1,0 +1,10 @@
+{
+  "id": "now_playing",
+  "name": "Now Playing",
+  "version": "1.0",
+  "author": "BaseCamp Linux",
+  "description": "Shows what's playing in your browser (YouTube, Spotify, etc.) via MPRIS",
+  "type": ["panel", "service", "action"],
+  "entry": "__init__",
+  "requires": ["subprocess"]
+}

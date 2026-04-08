@@ -55,6 +55,30 @@ PLUGINS_DIR                 = os.path.join(CONFIG_DIR, "plugins")
 PLUGINS_DISABLED_FILE       = os.path.join(CONFIG_DIR, "plugins_disabled.json")
 os.makedirs(PLUGINS_DIR, exist_ok=True)
 
+# ── Auto-copy bundled plugins on first run ───────────────────────────────────
+
+def _copy_bundled_plugins():
+    """Copy bundled example plugins to user plugins dir if not already present."""
+    import shutil
+    # Find the bundled plugins/ directory next to the app
+    if getattr(sys, "frozen", False):
+        # AppImage / PyInstaller: plugins/ is in _internal/
+        base = sys._MEIPASS
+    else:
+        # Running from source
+        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    bundled = os.path.join(base, "plugins")
+    if not os.path.isdir(bundled):
+        return
+    for name in os.listdir(bundled):
+        src = os.path.join(bundled, name)
+        dst = os.path.join(PLUGINS_DIR, name)
+        if os.path.isdir(src) and not os.path.exists(dst):
+            shutil.copytree(src, dst)
+            print(f"[Plugin] Installed bundled plugin: {name}")
+
+_copy_bundled_plugins()
+
 # Keep these for backward compatibility in code that imports them by old names
 RGB_PRESETS_FILE = PRESET_FILE
 

@@ -5,7 +5,7 @@ a = Analysis(
     ['gui.py'],
     pathex=[],
     binaries=[],
-    datas=[('lang', 'lang'), ('logo.png', '.'), ('resources', 'resources'), ('default_presets.json', '.'), ('default_makalu_presets.json', '.'), ('default_presets_60.json', '.')],
+    datas=[('lang', 'lang'), ('logo.png', '.'), ('resources', 'resources'), ('default_presets.json', '.'), ('default_makalu_presets.json', '.'), ('default_presets_60.json', '.'), ('plugins', 'plugins')],
     hiddenimports=['PIL', 'PIL._tkinter_finder', 'PIL._imagingtk', 'psutil', 'pystray', 'obsws_python',
                    'devices.macros', 'devices.macros.panel', 'shared.macros',
                    'devices.plugins', 'devices.plugins.panel', 'shared.plugins', 'shared.plugin_api'],
