@@ -191,7 +191,8 @@ class App(ctk.CTk):
 
         def _read_cfg(name, default):
             try:
-                return open(os.path.join(CONFIG_DIR, name)).read().strip()
+                with open(os.path.join(CONFIG_DIR, name)) as f:
+                    return f.read().strip()
             except FileNotFoundError:
                 return default
 
@@ -219,12 +220,13 @@ class App(ctk.CTk):
         if hasattr(self, "_everest_panel"):
             self._everest_panel._lang_combo.configure(values=lang_names)
 
+        self._restore_debounce_id = None
+        self._was_withdrawn = False
         self._setup_tray()
         self.protocol("WM_DELETE_WINDOW", self._hide_window)
         self.bind("<Unmap>", lambda e: self._hide_window() if self.state() == "iconic" else None)
-        # Recover from display sleep — force refresh on re-map/focus
+        # Recover from display sleep — force refresh only after withdraw/deiconify
         self.bind("<Map>", self._on_window_restore)
-        self.bind("<FocusIn>", self._on_window_restore)
         self.after(500, self._start_cpu_auto_clean)
         # Run first device check immediately so the correct panel is shown
         self._check_devices()
@@ -600,14 +602,32 @@ class App(ctk.CTk):
         self._tray_proc = subprocess.Popen(cmd, env=env)
 
     def _on_window_restore(self, event=None):
-        """Force UI refresh after display sleep/wake or window re-map."""
+        """Force UI refresh after withdraw/deiconify (tray restore or display sleep)."""
+        if not self._was_withdrawn:
+            return
+        self._was_withdrawn = False
+        if self._restore_debounce_id is not None:
+            self.after_cancel(self._restore_debounce_id)
+        self._restore_debounce_id = self.after(200, self._do_window_restore)
+
+    def _do_window_restore(self):
+        """Actual restore logic, called once after debounce settles."""
+        self._restore_debounce_id = None
         try:
+            geo = self.geometry()
+            self.geometry(geo)
             self.update_idletasks()
+            self._refresh_switcher_colors()
+            if self._active_device and self._active_device in self._panels:
+                panel = self._panels[self._active_device]
+                panel.pack_forget()
+                panel.pack(fill="both", expand=True)
             self.lift()
         except Exception:
             pass
 
     def _hide_window(self):
+        self._was_withdrawn = True
         self.withdraw()
 
     def _show_window(self):
@@ -618,6 +638,15 @@ class App(ctk.CTk):
         self.destroy()
 
     def destroy(self):
+        # Signal all background HID threads to stop
+        if hasattr(self, "_displaypad_panel"):
+            p = self._displaypad_panel
+            if hasattr(p, "_monitor_stop"):
+                p._monitor_stop.set()
+            if hasattr(p, "_key_stop"):
+                p._key_stop.set()
+            if hasattr(p, "_anim_stop"):
+                p._anim_stop.set()
         # Stop Everest panel CPU proc if running
         if hasattr(self, "_everest_panel"):
             if self._everest_panel._cpu_proc and \
@@ -625,6 +654,9 @@ class App(ctk.CTk):
                 self._everest_panel._cpu_proc.terminate()
         if hasattr(self, "_tray_proc") and self._tray_proc.poll() is None:
             self._tray_proc.terminate()
+        # Give HID threads time to close their devices before tearing down
+        import time
+        time.sleep(0.4)
         super().destroy()
 
 
@@ -669,7 +701,7 @@ def _install_desktop_entry():
         f.write(f"""[Desktop Entry]
 Name=BaseCamp Linux
 Comment=Unofficial Linux companion app for the Mountain Everest Max keyboard
-Exec={appimage_path}
+Exec="{appimage_path}"
 Icon=basecamp-linux
 Type=Application
 Categories=Utility;
@@ -677,6 +709,30 @@ Categories=Utility;
     os.chmod(desktop_path, 0o755)
     print(f"Installed: {desktop_path}")
     print(f"Installed: {icon_dst}")
+
+    # Update autostart .desktop if it exists
+    if os.path.exists(AUTOSTART_FILE):
+        with open(AUTOSTART_FILE, "w") as f:
+            f.write(
+                "[Desktop Entry]\n"
+                "Type=Application\n"
+                "Name=BaseCamp Linux\n"
+                "Comment=Mountain Everest Max display control\n"
+                f'Exec="{appimage_path}" --minimized\n'
+                "Icon=basecamp-linux\n"
+                "Hidden=false\n"
+                "NoDisplay=false\n"
+                "X-GNOME-Autostart-enabled=true\n"
+            )
+        print(f"Updated:   {AUTOSTART_FILE}")
+
+    # Refresh desktop cache so the launcher picks up the new .desktop immediately
+    try:
+        subprocess.run(["update-desktop-database", desktop_dir],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except FileNotFoundError:
+        pass
+
     print("Done. BaseCamp Linux should now appear in your app menu.")
 
 
@@ -685,7 +741,11 @@ if __name__ == "__main__":
         _install_desktop_entry()
         sys.exit(0)
     psutil.cpu_percent()
-    if load_splash_enabled():
+    _start_minimized = "--minimized" in sys.argv
+    if not _start_minimized and load_splash_enabled():
         show_splash()
     app = App()
+    if _start_minimized:
+        app._was_withdrawn = True
+        app.withdraw()
     app.mainloop()

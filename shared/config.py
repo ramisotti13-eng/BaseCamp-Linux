@@ -5,6 +5,11 @@ import json
 import pwd as _pwd
 from PIL import Image
 
+
+def _read_json(path):
+    with open(path) as f:
+        return json.load(f)
+
 # ── Path setup ─────────────────────────────────────────────────────────────────
 
 _real_home = (
@@ -129,11 +134,12 @@ def save_obs_config(cfg):
 def _autostart_exec():
     _FROZEN = getattr(sys, "frozen", False)
     if _FROZEN:
-        return os.environ.get("APPIMAGE", sys.executable)
+        p = os.environ.get("APPIMAGE", sys.executable)
+        return f'"{p}" --minimized'
     # __file__ would refer to this module; we need the gui entry point.
     # Callers that know the gui path can override; fall back to gui.py sibling.
     gui_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "gui.py")
-    return f"{sys.executable} {gui_path}"
+    return f'"{sys.executable}" "{gui_path}" --minimized'
 
 
 def load_autostart_enabled():
@@ -166,7 +172,8 @@ def save_autostart_enabled(val):
 
 def load_splash_enabled():
     try:
-        return open(SPLASH_FILE).read().strip() != "0"
+        with open(SPLASH_FILE) as f:
+            return f.read().strip() != "0"
     except FileNotFoundError:
         return True
 
@@ -182,7 +189,7 @@ def load_zone_colors(defaults):
     """Load zone color dict and brightness from ZONE_FILE.
     Returns (colors_dict, brightness_int)."""
     try:
-        data = json.loads(open(ZONE_FILE).read())
+        data = _read_json(ZONE_FILE)
         colors = dict(defaults)
         for k in colors:
             if k in data and len(data[k]) == 3:
@@ -212,7 +219,7 @@ save_zone_config = save_zone_colors
 
 def load_rgb_settings():
     try:
-        return json.loads(open(RGB_FILE).read())
+        return _read_json(RGB_FILE)
     except Exception:
         return {}
 
@@ -247,7 +254,7 @@ _SIDE_ZONE_INDICES = [
 def _load_per_key():
     default_side = [(255, 255, 255)] * 45
     try:
-        d = json.loads(open(PER_KEY_FILE).read())
+        d = _read_json(PER_KEY_FILE)
         leds = [tuple(c) for c in d.get("leds", [])]
         leds = (leds + [(20, 20, 20)] * 126)[:126]
         raw = d.get("side", [])
@@ -292,11 +299,11 @@ def _load_presets():
     defaults = {}
     _default_file = os.path.join(_RES, "default_presets.json")
     try:
-        defaults = json.loads(open(_default_file).read())
+        defaults = _read_json(_default_file)
     except Exception:
         pass
     try:
-        user = json.loads(open(PRESET_FILE).read())
+        user = _read_json(PRESET_FILE)
         defaults.update(user)
     except Exception:
         pass
@@ -316,7 +323,7 @@ PRESET_60_FILE  = os.path.join(CONFIG_DIR, "rgb60_presets.json")
 
 def _load_per_key_60():
     try:
-        d = json.loads(open(PER_KEY_60_FILE).read())
+        d = _read_json(PER_KEY_60_FILE)
         leds = [tuple(c) for c in d.get("leds", [])]
         leds = (leds + [(20, 20, 20)] * 64)[:64]
         bri  = int(d.get("brightness", 100))
@@ -339,11 +346,11 @@ def _load_presets_60():
     _RES = getattr(sys, "_MEIPASS", _HERE) if _FROZEN else _HERE
     defaults = {}
     try:
-        defaults = json.loads(open(os.path.join(_RES, "default_presets_60.json")).read())
+        defaults = _read_json(os.path.join(_RES, "default_presets_60.json"))
     except Exception:
         pass
     try:
-        user = json.loads(open(PRESET_60_FILE).read())
+        user = _read_json(PRESET_60_FILE)
         defaults.update(user)
     except Exception:
         pass
@@ -359,7 +366,7 @@ def _save_presets_60(presets):
 
 def _load_makalu_leds():
     try:
-        d = json.loads(open(MAKALU_LED_FILE).read())
+        d = _read_json(MAKALU_LED_FILE)
         leds = [tuple(c) for c in d.get("leds", [])]
         leds = (leds + [(255, 255, 255)] * 8)[:8]
         bri    = int(d.get("brightness", 100))
@@ -380,11 +387,11 @@ def _load_makalu_presets():
     _RES = getattr(sys, "_MEIPASS", _HERE) if _FROZEN else _HERE
     defaults = {}
     try:
-        defaults = json.loads(open(os.path.join(_RES, "default_makalu_presets.json")).read())
+        defaults = _read_json(os.path.join(_RES, "default_makalu_presets.json"))
     except Exception:
         pass
     try:
-        user = json.loads(open(MAKALU_PRESET_FILE).read())
+        user = _read_json(MAKALU_PRESET_FILE)
         defaults.update(user)
     except Exception:
         pass
@@ -401,7 +408,7 @@ DPI_DEFAULTS = [400, 800, 1600, 3200, 6400]
 
 def _load_makalu_dpi():
     try:
-        d = json.loads(open(MAKALU_DPI_FILE).read())
+        d = _read_json(MAKALU_DPI_FILE)
         values = [int(v) for v in d.get("levels", DPI_DEFAULTS)]
         if len(values) == 5:
             return values
@@ -427,7 +434,7 @@ def _load_makalu_remap(defaults=None):
     if defaults is None:
         defaults = REMAP_DEFAULTS
     try:
-        d = json.loads(open(MAKALU_REMAP_FILE).read())
+        d = _read_json(MAKALU_REMAP_FILE)
         result = dict(defaults)
         result.update({k: v for k, v in d.items() if k in defaults})
         return result
@@ -445,7 +452,7 @@ def _save_makalu_remap(assignments):
 def _load_displaypad_buttons():
     """Return dict {str(key_idx): image_path} for DisplayPad button images."""
     try:
-        return json.load(open(DISPLAYPAD_BTN_FILE))
+        return _read_json(DISPLAYPAD_BTN_FILE)
     except Exception:
         return {}
 
@@ -457,7 +464,7 @@ def _save_displaypad_buttons(data):
 
 def _load_displaypad_fullscreen():
     try:
-        return json.load(open(DISPLAYPAD_FULLSCREEN_FILE)).get("gif_path")
+        return _read_json(DISPLAYPAD_FULLSCREEN_FILE).get("gif_path")
     except Exception:
         return None
 
@@ -478,7 +485,7 @@ def _load_displaypad_actions():
     """Return list of 12 dicts with 'type' and 'action' keys."""
     default = [{"type": "none", "action": ""} for _ in range(12)]
     try:
-        data = json.load(open(DISPLAYPAD_ACTIONS_FILE))
+        data = _read_json(DISPLAYPAD_ACTIONS_FILE)
         for i in range(12):
             if i < len(data):
                 default[i].update(data[i])
@@ -495,7 +502,7 @@ def _save_displaypad_actions(actions):
 def _load_displaypad_pages():
     """Return dict {str(page_num): {buttons: {}, actions: [...], fullscreen: None}}."""
     try:
-        return json.load(open(DISPLAYPAD_PAGES_FILE))
+        return _read_json(DISPLAYPAD_PAGES_FILE)
     except Exception:
         return {}
 
@@ -508,7 +515,8 @@ def _save_displaypad_pages(data):
 
 def _load_displaypad_rotation():
     try:
-        v = int(open(DISPLAYPAD_ROTATION_FILE).read().strip())
+        with open(DISPLAYPAD_ROTATION_FILE) as f:
+            v = int(f.read().strip())
         return v if v in (0, 90, 180, 270) else 0
     except Exception:
         return 0
@@ -521,7 +529,8 @@ def _save_displaypad_rotation(deg):
 
 def _load_displaypad_brightness():
     try:
-        v = int(open(DISPLAYPAD_BRIGHTNESS_FILE).read().strip())
+        with open(DISPLAYPAD_BRIGHTNESS_FILE) as f:
+            v = int(f.read().strip())
         return v if v in (0, 25, 50, 75, 100) else 100
     except Exception:
         return 100
@@ -609,7 +618,7 @@ def _list_dp_fs_library():
 def _load_icon_last():
     """Return dict {slot_str: thumb_filename} for last uploaded image per slot."""
     try:
-        return json.load(open(ICON_LAST_FILE))
+        return _read_json(ICON_LAST_FILE)
     except Exception:
         return {}
 
@@ -714,7 +723,7 @@ def _list_main_library():
 def load_macros():
     """Return full macros dict: {"macros": {uuid: {name, actions, repeat_mode, repeat_count}}}."""
     try:
-        return json.load(open(MACROS_FILE))
+        return _read_json(MACROS_FILE)
     except Exception:
         return {"macros": {}}
 

@@ -1604,7 +1604,7 @@ class DisplayPadPanel(ctk.CTkFrame):
                 if btype in ("url", "folder"):
                     subprocess.Popen(["xdg-open", action])
                 else:
-                    subprocess.Popen(action, shell=True)
+                    subprocess.Popen(["bash", "-c", action])
         except Exception:
             pass
 

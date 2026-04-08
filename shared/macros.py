@@ -256,9 +256,9 @@ def _run_shell(command):
     if sudo_user:
         cmd = ["sudo", "-u", sudo_user, "-E", "bash", "-c", command]
     else:
-        cmd = command
+        cmd = ["bash", "-c", command]
     try:
-        subprocess.Popen(cmd, shell=not sudo_user, env=env)
+        subprocess.Popen(cmd, env=env)
     except Exception:
         pass
 
@@ -385,12 +385,14 @@ def _exec_mouse_move(tool, value):
 def _exec_mouse_path(tool, filename, stop_event=None):
     """Play back a mouse recording file."""
     from shared.config import MOUSE_RECORDINGS_DIR
-    path = os.path.join(MOUSE_RECORDINGS_DIR, filename)
+    safe_name = os.path.basename(filename)
+    path = os.path.join(MOUSE_RECORDINGS_DIR, safe_name)
     if not os.path.exists(path):
         return
     try:
         import json
-        data = json.loads(open(path).read())
+        with open(path) as f:
+            data = json.load(f)
         positions = data.get("positions", [])
         add_click = data.get("click_at_end", False)
     except Exception:
@@ -418,7 +420,8 @@ def save_mouse_recording(name, positions, click_at_end=False):
         "positions": positions,
         "click_at_end": click_at_end,
     }
-    filename = name.replace(" ", "_").lower() + ".json"
+    safe_name = os.path.basename(name.replace(" ", "_").lower())
+    filename = safe_name + ".json"
     path = os.path.join(MOUSE_RECORDINGS_DIR, filename)
     with open(path, "w") as f:
         json.dump(data, f, indent=2)
@@ -434,7 +437,8 @@ def list_mouse_recordings():
         for f in sorted(os.listdir(MOUSE_RECORDINGS_DIR)):
             if f.endswith(".json"):
                 try:
-                    data = json.loads(open(os.path.join(MOUSE_RECORDINGS_DIR, f)).read())
+                    with open(os.path.join(MOUSE_RECORDINGS_DIR, f)) as fh:
+                        data = json.load(fh)
                     name = data.get("name", f)
                     n = len(data.get("positions", []))
                     result.append((f, f"{name} ({n} pts)"))

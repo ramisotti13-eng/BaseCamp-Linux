@@ -1,5 +1,57 @@
 # Changelog
 
+## [1.7.4-beta] - 2026-04-08
+
+### Everest 60 — FransM LED fixes (PR #8)
+
+- **Custom RGB: byte order fix** — color entries now sent as IRGB (index, R, G, B) instead of RGBI
+- **Custom RGB: header offset fix** — packet payload starts at byte 9, not byte 6
+- **Arrow Up LED index** — corrected from 95 to 99
+
+### Custom RGB Editor
+
+- **QWERTY / QWERTZ layout toggle** — switch keyboard label display between US and German layout
+- **Live brightness** — brightness slider now sends changes to the keyboard in real-time (300ms debounce, Everest 60 only; Everest Max protocol too slow for live updates)
+- **Eyedropper shortcut** — changed from Alt+Click to Shift+Click (Alt conflicted with window managers)
+
+### New features
+
+- **Autostart minimized** — app starts in tray when launched via autostart (`--minimized` flag)
+- **`--install` updates autostart** — running `--install` with a new AppImage now also updates the autostart .desktop path
+- **`--install` refreshes desktop cache** — runs `update-desktop-database` automatically so the app menu updates immediately
+
+### i18n
+
+- **Full translation coverage** — all CustomRGBWindow strings moved to lang/en.json + lang/de.json (~30 keys)
+- **Everest 60 panel** — "nicht verbunden", "Sending…", "Applied ✓" no longer hardcoded, uses self.T()
+- **Color picker dialog** — title now translated via lang files
+- **de.json** — translated missing "reset_buttons_btn"
+- **Removed 14 duplicate keys** in en.json (makalu_rgb/settings block was defined twice)
+
+### Bug fixes
+
+- **Display sleep recovery** — window restore now forces full geometry cycle, re-packs active panel, and refreshes switcher colors; only triggers after actual withdraw (tray/sleep), not on every focus change
+- **Custom RGB button not updating on language switch** — now registered with `_reg()`
+- **Direction not persisted** — RGB direction setting is now saved and restored on restart
+- **Speed slider visual glitch** — slider position now refreshes correctly when switching between effects
+- **Color picker going behind main window** — dialog now stays on top with focus
+- **SEGFAULT on exit** — HID background threads (DisplayPad key events, monitor) are now stopped before window destruction to prevent libusb crash
+
+### Security & stability
+
+- **Command injection fix** — replaced `shell=True` with `["bash", "-c", action]` in button action execution (3 files) and macro shell runner
+- **Path traversal fix** — mouse recording filenames now sanitized with `os.path.basename()` to prevent `../` directory escape
+- **Tray helper path validation** — lang file argument now validated to be inside the `lang/` directory
+- **Autostart path quoting** — .desktop Exec= paths now quoted, fixing autostart for paths with spaces
+- **Desktop entry path quoting** — `--install` .desktop Exec= path now quoted (same fix as autostart)
+- **File descriptor leaks** — replaced ~20 `json.load(open(...))` calls with `_read_json()` helper using `with` statements; fixed `_read_cfg()` in gui.py and everest_max/panel.py; fixed mouse recording reads in macros.py
+- **stderr fd leak** — CPU monitor log file handle now closed after Popen
+- **Upload pipe deadlock** — replaced `proc.stdout.read()` + `proc.wait()` with `proc.communicate()`
+- **Debounce timer crash** — brightness debounce timer now cancelled on window close (prevents TclError)
+- **Live brightness error handling** — background thread now catches exceptions silently
+- **Everest 60 controller** — `NUM_KEYS` corrected from 191 to 64, `dir()` → `locals()`, tornado direction bounds check
+- **Preset consistency** — added missing `brightness: 100` to 6 default presets
+
 ## [1.7.3-beta] - 2026-04-07
 
 ### Everest 60 — Protocol overhaul (thanks to [@FransM](https://github.com/FransM) for reverse-engineering and testing!)
@@ -11,7 +63,7 @@
 - **Tornado direction fix:** CW=0x0A, CCW=0x09 with inversion formula (10-direction)
 - **Tornado is single-color only** — removed broken dual-color support for Tornado
 - **Breathing, Wave, Reactive, Yeti** now use COLOR_DUAL by default — both colors are sent correctly
-- **Custom RGB: LEDIDX hardware mapping** — byte 4 of each color entry is now the physical LED address instead of 0xFF. LED index table reverse-engineered by FransM (WIP, may need refinement)
+- **Custom RGB: LEDIDX hardware mapping** — byte 4 of each color entry is now the physical LED address instead of 0xFF. LED index table reverse-engineered by FransM
 - **Custom RGB: packet flag fix** — 0x0E = more packets, 0x0A = last packet (was inverted)
 - **Custom RGB: mode activation** — `_send_mode(EFFECT_CUSTOM)` is now called before uploading per-key colors
 

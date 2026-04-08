@@ -858,7 +858,8 @@
         0,
         130
       ]
-    ]
+    ],
+    "brightness": 100
   },
   "Ocean": {
     "leds": [
@@ -1719,7 +1720,8 @@
         200,
         170
       ]
-    ]
+    ],
+    "brightness": 100
   },
   "Ember": {
     "leds": [
@@ -2580,7 +2582,8 @@
         180,
         0
       ]
-    ]
+    ],
+    "brightness": 100
   },
   "Forest": {
     "leds": [
@@ -3441,7 +3444,8 @@
         240,
         80
       ]
-    ]
+    ],
+    "brightness": 100
   },
   "Arctic": {
     "leds": [
@@ -4302,7 +4306,8 @@
         255,
         255
       ]
-    ]
+    ],
+    "brightness": 100
   },
   "Galaxy": {
     "leds": [
@@ -5163,7 +5168,8 @@
         110,
         240
       ]
-    ]
+    ],
+    "brightness": 100
   },
   "Shoreline": {
     "leds": [

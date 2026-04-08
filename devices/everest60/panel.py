@@ -77,7 +77,7 @@ class Everest60Panel(ctk.CTkFrame):
         self._banner = ctk.CTkFrame(self, fg_color="#3b1515", corner_radius=6)
         self._banner_lbl = ctk.CTkLabel(
             self._banner,
-            text=f"{self._model_name} nicht verbunden",
+            text=self.T("device_not_connected", model=self._model_name),
             font=("Helvetica", 11), text_color=RED)
         self._banner_lbl.pack(pady=8, padx=16)
         if not self._connected:
@@ -218,23 +218,25 @@ class Everest60Panel(ctk.CTkFrame):
             self._rgb_color2 = tuple(saved["color2"])
             h = _hex(*self._rgb_color2)
             self._rgb_c2_btn.configure(fg_color=h, hover_color=h)
+        if "direction" in saved:
+            self._rgb_dir_var.set(saved["direction"])
 
         self._rgb_update_controls()
 
     def _build_custom_rgb_section(self, scroll):
-        s = _Section(scroll, self._app, "🎨", f"Custom RGB — {self._model_name}")
+        s = _Section(scroll, self._app, "🎨", f"{self.T('zone_title')} — {self._model_name}")
         self._sections.append(s)
 
         self._custom_rgb_status = ctk.CTkLabel(
             s.content, text="", font=("Helvetica", 11), text_color=FG2, fg_color="transparent")
         self._custom_rgb_status.pack(pady=(8, 4))
 
-        ctk.CTkButton(
-            s.content, text="Open Custom RGB Editor",
+        self._reg(ctk.CTkButton(
+            s.content, text="",
             height=32, corner_radius=4, fg_color=BLUE, hover_color="#0884be",
             text_color=FG, font=("Helvetica", 11),
             command=self._open_custom_rgb
-        ).pack(fill="x", padx=10, pady=(0, 10))
+        ), "custom_rgb_open").pack(fill="x", padx=10, pady=(0, 10))
 
     def _open_custom_rgb(self):
         from shared.ui_helpers import CustomRGBWindow, _KB60_LAYOUT, _KB60_CANVAS_W, _KB60_CANVAS_H, _KB60_NUM_LEDS
@@ -261,6 +263,11 @@ class Everest60Panel(ctk.CTkFrame):
         _, hs, hb, hc1, hc2, hd = self._rgb_effect_map.get(name, ("", False, False, False, False, False))
         self._rgb_speed_sl.configure(state="normal" if hs else "disabled")
         self._rgb_bri_sl.configure(state="normal" if hb else "disabled")
+        # Re-set slider values to fix visual position after enable/disable cycle
+        if hs:
+            self._rgb_speed_sl.set(self._rgb_speed_sl.get())
+        if hb:
+            self._rgb_bri_sl.set(self._rgb_bri_sl.get())
         self._rgb_c1_btn.configure(state="normal" if hc1 else "disabled")
         self._rgb_c2_btn.configure(state="normal" if hc2 else "disabled")
         self._rgb_c2_lbl.configure(state="normal" if hc2 else "disabled")
@@ -274,7 +281,7 @@ class Everest60Panel(ctk.CTkFrame):
     def _pick_color(self, slot):
         from shared.ui_helpers import pick_color
         initial = self._rgb_color1 if slot == 1 else self._rgb_color2
-        rgb = pick_color(self._app, initial_rgb=initial, title="Farbe wählen", show_brightness=False)
+        rgb = pick_color(self._app, initial_rgb=initial, title=self.T("color_picker_title"), show_brightness=False)
         if rgb is None:
             return
         h = _hex(*rgb)
@@ -325,13 +332,14 @@ class Everest60Panel(ctk.CTkFrame):
         save_rgb_config({
             "effect": name, "speed": speed, "brightness": bri,
             "color1": list(self._rgb_color1), "color2": list(self._rgb_color2),
+            "direction": self._rgb_dir_var.get(),
         })
 
-        self._rgb_status.configure(text="Sending…", text_color=YLW)
+        self._rgb_status.configure(text=self.T("rgb_applying"), text_color=YLW)
 
         def _done(ok, msg):
             self._rgb_status.configure(
-                text="Applied ✓" if ok else f"Failed: {msg[:40]}",
+                text=self.T("rgb_applied") if ok else f"{self.T('rgb_error')}: {msg[:40]}",
                 text_color=GRN if ok else RED)
             self.after(3000, lambda: self._rgb_status.configure(text=""))
 

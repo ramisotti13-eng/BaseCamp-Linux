@@ -239,7 +239,9 @@ class ColorPickerDialog(ctk.CTkToplevel):
         dh = self.winfo_height()
         self.geometry(f"+{pw - dw//2}+{ph - dh//2}")
 
+        self.attributes('-topmost', True)
         self.grab_set()
+        self.focus_force()
         self.wait_window()
 
     def _build_ui(self):
@@ -518,14 +520,15 @@ def _build_kb60_layout():
                ('B',46,30),('N',47,30),('M',48,30),(',',49,30),('.',50,30),
                ('/',51,30),('⇧',52,30),('↑',53,30),('Del',54,30)], IW, OY+3*RS)
     # Row 4: Ctrl Win Alt Space Alt Fn ← ↓ → (9 keys, idx 55-63)
-    # Place left side with sbet(), then align arrows under row 3
-    left = sbet([('Ctrl',55,38),('⊞',56,30),('Alt',57,38),(' ',58,194),
-                 ('Alt',59,30),('Fn',60,30)], IW, OY+4*RS)
-    L += left
-    # Align arrows under ↑ and Del from row 3
+    # Get arrow positions from row 3 first, then fit left keys up to ←
     arrow_up_x = next(x for lbl, _, x, _, _, _ in L if lbl == '↑')
     del_x      = next(x for lbl, _, x, _, _, _ in L if lbl == 'Del')
-    L.append(('←', 61, arrow_up_x - KW - KG, OY+4*RS, KW, KH))
+    left_arrow_x = arrow_up_x - KW - KG
+    # Distribute left 6 keys up to the ← position
+    left_iw = left_arrow_x - OX - KG
+    L += sbet([('Ctrl',55,38),('⊞',56,30),('Alt',57,38),(' ',58,194),
+               ('Alt',59,30),('Fn',60,30)], left_iw, OY+4*RS)
+    L.append(('←', 61, left_arrow_x, OY+4*RS, KW, KH))
     L.append(('↓', 62, arrow_up_x, OY+4*RS, KW, KH))
     L.append(('→', 63, del_x, OY+4*RS, KW, KH))
     return L
@@ -543,6 +546,14 @@ _QUICK_COLORS = [
     ("#8800ff", (136, 0, 255)), ("#ff00ff", (255, 0, 255)),
     ("#ffffff", (255, 255, 255)), ("#000000", (0, 0, 0)),
 ]
+
+# QWERTY → QWERTZ label substitution (German keyboard layout)
+_QWERTZ_MAP = {
+    'Y': 'Z', 'Z': 'Y',
+    '`': '^', '-': 'ß', '=': '´',
+    '[': 'ü', ']': '+', '\\': '#',
+    ';': 'ö', "'": 'ä', '/': '-',
+}
 
 _SIDE_ZONE_INDICES = [
     [13,14,15,7,6,5,4,3,2,1,0],
@@ -566,9 +577,10 @@ class CustomRGBWindow(ctk.CTkToplevel):
                  load_presets=None, save_presets=None,
                  apply_cmd=None):
         super().__init__(app)
-        self.title("Custom RGB — Per Key")
-        self.resizable(False, False)
         self._app = app
+        self._lang = getattr(app, '_lang', {})
+        self.title(self._T("custom_rgb_title"))
+        self.resizable(False, False)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self._layout     = layout    if layout    is not None else _KB_LAYOUT
@@ -599,9 +611,15 @@ class CustomRGBWindow(ctk.CTkToplevel):
         self._item_led   = {}
         self._led_item   = {}
         self._undo_stack = []
+        self._kb_layout_mode = "QWERTY"
+        self._bri_debounce_id = None
 
         self._build_ui()
         self.after(50, self._draw_keys)
+
+    def _T(self, key, **kw):
+        s = self._lang.get(key, key) if self._lang else key
+        return s.format(**kw) if kw else s
 
     def _build_ui(self):
         PAD = 12
@@ -615,9 +633,22 @@ class CustomRGBWindow(ctk.CTkToplevel):
         self._cv.bind("<ButtonRelease-1>", self._on_release)
         self._cv.bind("<Double-Button-1>", self._on_dbl)
         self._cv.bind("<Button-3>",        self._on_rclick)
-        self._cv.bind("<Alt-Button-1>",    self._on_eyedrop)
+        self._cv.bind("<Shift-Button-1>",   self._on_eyedrop)
         self.bind("<Control-z>", self._undo)
         self.bind("<Control-Z>", self._undo)
+
+        kb_bar = ctk.CTkFrame(self, fg_color="transparent")
+        kb_bar.pack(fill="x", padx=PAD, pady=(0, 2))
+        ctk.CTkLabel(kb_bar, text=self._T("custom_rgb_kb_layout"),
+                     text_color=FG2, font=("Helvetica", 11)).pack(side="left", padx=(0, 6))
+        self._kb_seg = ctk.CTkSegmentedButton(
+            kb_bar, values=["QWERTY", "QWERTZ"], height=26,
+            font=("Helvetica", 11),
+            selected_color=BLUE, unselected_color=BG3,
+            text_color=FG, unselected_hover_color="#2a2a3a",
+            command=self._switch_kb_layout)
+        self._kb_seg.set("QWERTY")
+        self._kb_seg.pack(side="left")
 
         strip = ctk.CTkFrame(self, fg_color=BG2, corner_radius=6)
         strip.pack(fill="x", padx=PAD, pady=4)
@@ -627,7 +658,7 @@ class CustomRGBWindow(ctk.CTkToplevel):
                                       highlightthickness=1,
                                       highlightbackground="#555")
         self._fill_swatch.pack(side="left", padx=(8, 2), pady=6)
-        ctk.CTkButton(strip, text="Pick", width=50, height=28,
+        ctk.CTkButton(strip, text=self._T("custom_rgb_pick"), width=50, height=28,
                       fg_color=BG3, hover_color="#2a2a3a", text_color=FG,
                       font=("Helvetica", 11),
                       command=self._pick_fill).pack(side="left", padx=(0, 8))
@@ -639,44 +670,44 @@ class CustomRGBWindow(ctk.CTkToplevel):
             btn.pack(side="left", padx=2, pady=8)
             btn.bind("<Button-1>", lambda e, c=rgb: self._set_fill(c))
 
-        self._sel_lbl = ctk.CTkLabel(strip, text="0 keys selected",
+        self._sel_lbl = ctk.CTkLabel(strip, text=self._T("custom_rgb_selected", n=0),
                                      text_color=FG2, font=("Helvetica", 11))
         self._sel_lbl.pack(side="right", padx=10)
 
         act = ctk.CTkFrame(self, fg_color="transparent")
         act.pack(fill="x", padx=PAD, pady=4)
 
-        ctk.CTkButton(act, text="Fill Selected", width=110, height=30,
+        ctk.CTkButton(act, text=self._T("custom_rgb_fill"), width=110, height=30,
                       fg_color=BLUE, hover_color="#0284c7", text_color=FG,
                       font=("Helvetica", 11),
                       command=self._fill_selected).pack(side="left", padx=(0,4))
-        ctk.CTkButton(act, text="Select All", width=90, height=30,
+        ctk.CTkButton(act, text=self._T("custom_rgb_select_all"), width=90, height=30,
                       fg_color=BG3, hover_color="#2a2a3a", text_color=FG,
                       font=("Helvetica", 11),
                       command=self._select_all).pack(side="left", padx=4)
-        ctk.CTkButton(act, text="Deselect", width=80, height=30,
+        ctk.CTkButton(act, text=self._T("custom_rgb_deselect"), width=80, height=30,
                       fg_color=BG3, hover_color="#2a2a3a", text_color=FG,
                       font=("Helvetica", 11),
                       command=self._deselect_all).pack(side="left", padx=4)
-        ctk.CTkButton(act, text="All Black", width=80, height=30,
+        ctk.CTkButton(act, text=self._T("custom_rgb_all_black"), width=80, height=30,
                       fg_color=BG3, hover_color="#2a2a3a", text_color=FG,
                       font=("Helvetica", 11),
                       command=lambda: self._fill_all((0,0,0))).pack(side="left", padx=4)
-        ctk.CTkButton(act, text="All White", width=80, height=30,
+        ctk.CTkButton(act, text=self._T("custom_rgb_all_white"), width=80, height=30,
                       fg_color=BG3, hover_color="#2a2a3a", text_color=FG,
                       font=("Helvetica", 11),
                       command=lambda: self._fill_all((255,255,255))).pack(side="left", padx=4)
-        ctk.CTkButton(act, text="↩ Undo", width=70, height=30,
+        ctk.CTkButton(act, text=self._T("custom_rgb_undo"), width=70, height=30,
                       fg_color=BG3, hover_color="#2a2a3a", text_color=FG,
                       font=("Helvetica", 11),
                       command=self._undo).pack(side="right", padx=(4, 0))
-        ctk.CTkLabel(act, text="Alt+click = Eyedropper", text_color=FG2,
+        ctk.CTkLabel(act, text=self._T("custom_rgb_eyedropper"), text_color=FG2,
                      font=("Helvetica", 10)).pack(side="right", padx=8)
 
         pre = ctk.CTkFrame(self, fg_color=BG2, corner_radius=6)
         pre.pack(fill="x", padx=PAD, pady=(0, 4))
 
-        ctk.CTkLabel(pre, text="Presets:", text_color=FG2,
+        ctk.CTkLabel(pre, text=self._T("custom_rgb_presets"), text_color=FG2,
                      font=("Helvetica", 11)).pack(side="left", padx=(8, 4), pady=6)
         self._preset_var = tk.StringVar()
         self._preset_combo = ctk.CTkComboBox(
@@ -684,15 +715,15 @@ class CustomRGBWindow(ctk.CTkToplevel):
             fg_color=BG3, border_color=BORDER, button_color=BLUE,
             dropdown_fg_color=BG2, text_color=FG, font=("Helvetica", 11))
         self._preset_combo.pack(side="left", padx=(0, 4), pady=6)
-        ctk.CTkButton(pre, text="Load", width=60, height=28,
+        ctk.CTkButton(pre, text=self._T("custom_rgb_load"), width=60, height=28,
                       fg_color=BLUE, hover_color="#0284c7", text_color=FG,
                       font=("Helvetica", 11),
                       command=self._preset_load).pack(side="left", padx=2)
-        ctk.CTkButton(pre, text="Save as…", width=80, height=28,
+        ctk.CTkButton(pre, text=self._T("custom_rgb_save_as"), width=80, height=28,
                       fg_color="#166534", hover_color="#14532d", text_color=FG,
                       font=("Helvetica", 11),
                       command=self._preset_save_as).pack(side="left", padx=2)
-        ctk.CTkButton(pre, text="Delete", width=68, height=28,
+        ctk.CTkButton(pre, text=self._T("custom_rgb_delete"), width=68, height=28,
                       fg_color="#7f1d1d", hover_color="#6b1a1a", text_color=FG,
                       font=("Helvetica", 11),
                       command=self._preset_delete).pack(side="left", padx=2)
@@ -704,7 +735,7 @@ class CustomRGBWindow(ctk.CTkToplevel):
         bot = ctk.CTkFrame(self, fg_color="transparent")
         bot.pack(fill="x", padx=PAD, pady=4)
 
-        ctk.CTkLabel(bot, text="Brightness:", text_color=FG2,
+        ctk.CTkLabel(bot, text=self._T("custom_rgb_brightness"), text_color=FG2,
                      font=("Helvetica", 11)).pack(side="left")
         self._bri_val = ctk.CTkLabel(bot, text=str(self._bri), text_color=FG,
                                      font=("Helvetica", 11), width=30)
@@ -714,26 +745,26 @@ class CustomRGBWindow(ctk.CTkToplevel):
                                      button_color=BLUE, button_hover_color=BLUE,
                                      width=160, height=16)
         self._bri_sl.set(self._bri)
-        self._bri_sl.configure(command=lambda v: self._bri_val.configure(text=str(int(v))))
+        self._bri_sl.configure(command=self._on_bri_change)
         self._bri_sl.pack(side="right", padx=(0, 6))
 
         btns = ctk.CTkFrame(self, fg_color="transparent")
         btns.pack(fill="x", padx=PAD, pady=(4, PAD))
 
-        ctk.CTkButton(btns, text="Apply to Keyboard", width=140, height=32,
+        ctk.CTkButton(btns, text=self._T("custom_rgb_apply"), width=140, height=32,
                       fg_color=BLUE, hover_color="#0284c7", text_color=FG,
                       font=("Helvetica", 11, "bold"),
                       command=self._apply).pack(side="left", padx=(0, 4))
         if self._has_persist:
-            ctk.CTkButton(btns, text="Persist to Slot", width=120, height=32,
+            ctk.CTkButton(btns, text=self._T("custom_rgb_persist"), width=120, height=32,
                           fg_color="#166534", hover_color="#14532d", text_color=FG,
                           font=("Helvetica", 11),
                           command=self._persist).pack(side="left", padx=4)
-        ctk.CTkButton(btns, text="Save Profile", width=100, height=32,
+        ctk.CTkButton(btns, text=self._T("custom_rgb_save_profile"), width=100, height=32,
                       fg_color=BG3, hover_color="#2a2a3a", text_color=FG,
                       font=("Helvetica", 11),
                       command=self._save_profile).pack(side="left", padx=4)
-        ctk.CTkButton(btns, text="Load Profile", width=100, height=32,
+        ctk.CTkButton(btns, text=self._T("custom_rgb_load_profile"), width=100, height=32,
                       fg_color=BG3, hover_color="#2a2a3a", text_color=FG,
                       font=("Helvetica", 11),
                       command=self._load_profile).pack(side="left", padx=4)
@@ -765,6 +796,7 @@ class CustomRGBWindow(ctk.CTkToplevel):
             self._cv.create_rectangle(npbx1, by1, npbx2, by2,
                                       fill="#1a1a22", outline="#333", width=1)
 
+        qz = _QWERTZ_MAP if self._kb_layout_mode == "QWERTZ" else {}
         for (lbl, idx, x, y, w, h) in self._layout:
             yo    = y + YO
             color = _rgb_hex(self._leds[idx]) if idx is not None and 0 <= idx < self._num_leds else "#252530"
@@ -776,7 +808,8 @@ class CustomRGBWindow(ctk.CTkToplevel):
                 width=2 if sel else 1,
             )
             font_size = 6 if w < 22 else 7
-            self._cv.create_text(x + w // 2, yo + h // 2, text=lbl,
+            draw_lbl = qz.get(lbl, lbl)
+            self._cv.create_text(x + w // 2, yo + h // 2, text=draw_lbl,
                                  fill="#cccccc", font=("Helvetica", font_size),
                                  anchor="center")
             if idx is not None:
@@ -819,6 +852,10 @@ class CustomRGBWindow(ctk.CTkToplevel):
                 vstrip([41,40,39,38],   by1,   by2,   npbx2 + GAP)
                 hstrip([35,36,37],      npbx1, npbx2, by2 + GAP)
                 vstrip([31,32,33,34],   by1,   by2,   npbx1 - GAP - SZ)
+
+    def _switch_kb_layout(self, value):
+        self._kb_layout_mode = value
+        self._draw_keys()
 
     def _refresh_key(self, idx):
         item = self._led_item.get(idx)
@@ -921,7 +958,7 @@ class CustomRGBWindow(ctk.CTkToplevel):
         self._fill_swatch.configure(bg=_rgb_hex(rgb))
 
     def _pick_fill(self):
-        rgb = pick_color(self, initial_rgb=tuple(self._fill_rgb), title="Key Color")
+        rgb = pick_color(self, initial_rgb=tuple(self._fill_rgb), title=self._T("custom_rgb_key_color"))
         if rgb is None:
             return
         self._set_fill(rgb)
@@ -959,7 +996,7 @@ class CustomRGBWindow(ctk.CTkToplevel):
 
     def _update_sel_lbl(self):
         n = len(self._selected)
-        self._sel_lbl.configure(text=f"{n} key{'s' if n != 1 else ''} selected")
+        self._sel_lbl.configure(text=self._T("custom_rgb_selected", n=n))
 
     def _push_undo(self):
         self._undo_stack.append((list(self._leds), list(self._side_leds)))
@@ -994,7 +1031,7 @@ class CustomRGBWindow(ctk.CTkToplevel):
         name = self._preset_var.get().strip()
         presets = self._load_presets()
         if name not in presets:
-            self._preset_status.configure(text="Not found", text_color=RED)
+            self._preset_status.configure(text=self._T("custom_rgb_not_found"), text_color=RED)
             return
         self._push_undo()
         d = presets[name]
@@ -1008,16 +1045,16 @@ class CustomRGBWindow(ctk.CTkToplevel):
         self._bri_sl.set(bri)
         self._bri_val.configure(text=str(bri))
         self._draw_keys()
-        self._preset_status.configure(text=f'Loaded "{name}"', text_color=GRN)
+        self._preset_status.configure(text=self._T("custom_rgb_preset_loaded", name=name), text_color=GRN)
 
     def _preset_save_as(self):
         dlg = ctk.CTkToplevel(self)
-        dlg.title("Save Preset")
+        dlg.title(self._T("custom_rgb_preset_save_title"))
         dlg.resizable(False, False)
         dlg.geometry("300x110")
         dlg.grab_set()
         dlg.configure(fg_color=BG)
-        ctk.CTkLabel(dlg, text="Preset name:", text_color=FG,
+        ctk.CTkLabel(dlg, text=self._T("custom_rgb_preset_name"), text_color=FG,
                      font=("Helvetica", 12)).pack(pady=(14, 4))
         var = tk.StringVar(value=self._preset_var.get())
         entry = ctk.CTkEntry(dlg, textvariable=var, width=200, height=30,
@@ -1038,27 +1075,44 @@ class CustomRGBWindow(ctk.CTkToplevel):
             self._save_presets(presets)
             self._preset_refresh()
             self._preset_combo.set(name)
-            self._preset_status.configure(text=f'Saved "{name}"', text_color=GRN)
+            self._preset_status.configure(text=self._T("custom_rgb_preset_saved", name=name), text_color=GRN)
             dlg.destroy()
         entry.bind("<Return>", lambda e: _save())
-        ctk.CTkButton(dlg, text="Save", width=80, height=28,
+        ctk.CTkButton(dlg, text=self._T("custom_rgb_preset_save_btn"), width=80, height=28,
                       fg_color=BLUE, text_color=FG, command=_save).pack(pady=8)
 
     def _preset_delete(self):
         name = self._preset_var.get().strip()
         presets = self._load_presets()
         if name not in presets:
-            self._preset_status.configure(text="Not found", text_color=RED)
+            self._preset_status.configure(text=self._T("custom_rgb_not_found"), text_color=RED)
             return
         del presets[name]
         self._save_presets(presets)
         self._preset_refresh()
         remaining = sorted(presets.keys())
         self._preset_combo.set(remaining[0] if remaining else "")
-        self._preset_status.configure(text=f'Deleted "{name}"', text_color=FG2)
+        self._preset_status.configure(text=self._T("custom_rgb_preset_deleted", name=name), text_color=FG2)
 
     def _current_bri(self):
         return int(self._bri_sl.get())
+
+    def _on_bri_change(self, v):
+        self._bri_val.configure(text=str(int(float(v))))
+        if self._bri_debounce_id is not None:
+            self.after_cancel(self._bri_debounce_id)
+        self._bri_debounce_id = self.after(300, self._apply_brightness_live)
+
+    def _apply_brightness_live(self):
+        self._bri_debounce_id = None
+        payload = self._build_payload()
+        def run():
+            try:
+                subprocess.run(self._cmd("per-key-rgb", payload),
+                               capture_output=True)
+            except Exception:
+                pass
+        threading.Thread(target=run, daemon=True).start()
 
     def _build_payload(self):
         import json as _j
@@ -1073,7 +1127,7 @@ class CustomRGBWindow(ctk.CTkToplevel):
         return self._app._cmd(*args)
 
     def _apply(self):
-        self._status.configure(text="Sending…", text_color=YLW)
+        self._status.configure(text=self._T("custom_rgb_sending"), text_color=YLW)
         self.update_idletasks()
         payload = self._build_payload()
         was_running = self._app._stop_cpu_proc()
@@ -1084,7 +1138,7 @@ class CustomRGBWindow(ctk.CTkToplevel):
             self._save_per_key(self._leds, self._side_leds, self._current_bri())
             def finish():
                 self._status.configure(
-                    text="Applied ✓" if ok else f"Error — {err}",
+                    text=self._T("custom_rgb_applied") if ok else self._T("custom_rgb_error", err=err[:40]),
                     text_color=GRN if ok else RED)
                 if was_running:
                     self._app._start_cpu_auto()
@@ -1092,7 +1146,7 @@ class CustomRGBWindow(ctk.CTkToplevel):
         threading.Thread(target=run, daemon=True).start()
 
     def _persist(self):
-        self._status.configure(text="Persisting…", text_color=YLW)
+        self._status.configure(text=self._T("custom_rgb_persisting"), text_color=YLW)
         self.update_idletasks()
         payload = self._build_payload()
         was_running = self._app._stop_cpu_proc()
@@ -1104,7 +1158,7 @@ class CustomRGBWindow(ctk.CTkToplevel):
             err = (r.stderr.decode(errors="replace").strip().splitlines() or [""])[-1]
             def finish():
                 self._status.configure(
-                    text="Persisted ✓" if ok else f"Error — {err}",
+                    text=self._T("custom_rgb_persisted") if ok else self._T("custom_rgb_error", err=err[:40]),
                     text_color=GRN if ok else RED)
                 if was_running:
                     self._app._start_cpu_auto()
@@ -1117,7 +1171,7 @@ class CustomRGBWindow(ctk.CTkToplevel):
         path = _fd.asksaveasfilename(
             parent=self, defaultextension=".json",
             filetypes=[("JSON Profile", "*.json"), ("All", "*.*")],
-            title="Save RGB Profile")
+            title=self._T("custom_rgb_save_profile"))
         if not path:
             return
         profile = {"leds": [list(c) for c in self._leds],
@@ -1126,7 +1180,7 @@ class CustomRGBWindow(ctk.CTkToplevel):
             profile["side"] = [list(c) for c in self._side_leds]
         with open(path, "w") as f:
             f.write(_j.dumps(profile, indent=2))
-        self._status.configure(text="Saved ✓", text_color=GRN)
+        self._status.configure(text=self._T("custom_rgb_saved"), text_color=GRN)
 
     def _load_profile(self):
         import tkinter.filedialog as _fd
@@ -1134,7 +1188,7 @@ class CustomRGBWindow(ctk.CTkToplevel):
         path = _fd.askopenfilename(
             parent=self,
             filetypes=[("JSON Profile", "*.json"), ("All", "*.*")],
-            title="Load RGB Profile")
+            title=self._T("custom_rgb_load_profile"))
         if not path:
             return
         try:
@@ -1150,11 +1204,14 @@ class CustomRGBWindow(ctk.CTkToplevel):
             self._bri_sl.set(int(d.get("brightness", 100)))
             self._bri_val.configure(text=str(int(d.get("brightness", 100))))
             self._draw_keys()
-            self._status.configure(text="Loaded ✓", text_color=GRN)
+            self._status.configure(text=self._T("custom_rgb_loaded"), text_color=GRN)
         except Exception as ex:
-            self._status.configure(text=f"Load error: {ex}", text_color=RED)
+            self._status.configure(text=self._T("custom_rgb_load_error", err=str(ex)), text_color=RED)
 
     def _on_close(self):
+        if self._bri_debounce_id is not None:
+            self.after_cancel(self._bri_debounce_id)
+            self._bri_debounce_id = None
         self.destroy()
 
 

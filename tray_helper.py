@@ -11,6 +11,9 @@ _open_label = "Open"
 _quit_label = "Quit"
 if len(sys.argv) >= 3:
     lang_file = sys.argv[2]
+    _lang_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lang")
+    if not os.path.abspath(lang_file).startswith(_lang_dir):
+        lang_file = None
     try:
         with open(lang_file, encoding="utf-8") as f:
             _lang = json.load(f)

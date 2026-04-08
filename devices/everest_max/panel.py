@@ -60,7 +60,8 @@ class EverestMaxPanel(ctk.CTkFrame):
         # Clock format + style
         def _read_cfg(name, default):
             try:
-                return open(os.path.join(CONFIG_DIR, name)).read().strip()
+                with open(os.path.join(CONFIG_DIR, name)) as f:
+                    return f.read().strip()
             except FileNotFoundError:
                 return default
 
@@ -74,7 +75,8 @@ class EverestMaxPanel(ctk.CTkFrame):
 
         # Main display mode
         try:
-            _saved_mode = open(MAIN_MODE_FILE).read().strip()
+            with open(MAIN_MODE_FILE) as f:
+                _saved_mode = f.read().strip()
         except FileNotFoundError:
             _saved_mode = "clock"
         self._main_mode = _saved_mode if _saved_mode in (
@@ -689,9 +691,12 @@ class EverestMaxPanel(ctk.CTkFrame):
             style_arg = STYLES[self._current_style.get()]
             try:
                 _stderr_log = open(os.path.join(CONFIG_DIR, "controller_error.log"), "w")
-                self._cpu_proc = subprocess.Popen(
-                    self._cmd("cpu", style_arg),
-                    stdout=subprocess.DEVNULL, stderr=_stderr_log)
+                try:
+                    self._cpu_proc = subprocess.Popen(
+                        self._cmd("cpu", style_arg),
+                        stdout=subprocess.DEVNULL, stderr=_stderr_log)
+                finally:
+                    _stderr_log.close()
                 self._btn_cpu.configure(text=self.T("monitor_stop"),
                                         fg_color=RED, text_color=BG,
                                         font=("Helvetica", 11, "bold"))
@@ -1039,8 +1044,7 @@ class EverestMaxPanel(ctk.CTkFrame):
                 cmd = self._cmd("upload", str(idx), path, "--frame", str(gif_frame))
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                                     stderr=subprocess.PIPE, text=True)
-            proc.stdout.read()
-            proc.wait()
+            stdout_data, stderr_data = proc.communicate()
             ok = proc.returncode == 0
             if ok:
                 new_fname = thumb_fname or _save_to_library(path, gif_frame)
@@ -1048,7 +1052,7 @@ class EverestMaxPanel(ctk.CTkFrame):
                     _save_icon_last(idx, new_fname)
             if was_running:
                 self._app.after(0, self._start_cpu_auto)
-            err_hint = (proc.stderr.read().strip().splitlines() or [""])[-1]
+            err_hint = (stderr_data.strip().splitlines() or [""])[-1]
 
             def finish():
                 self._numpad_info.configure(

@@ -961,7 +961,7 @@ def controller_loop(style=STYLE_ANALOG):
                                 if btype in ("url", "folder"):
                                     subprocess.Popen(["xdg-open", action])
                                 else:  # shell, app
-                                    subprocess.Popen(action, shell=True)
+                                    subprocess.Popen(["bash", "-c", action])
                 last_btn_state = pressed  # None when byte42=0 (released)
 
             # Gather all metrics
