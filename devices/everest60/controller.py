@@ -73,7 +73,6 @@ DIR_TORNADO = {"CW": 0x0A, "CCW": 0x09}
 NUM_KEYS = 191
 
 # LED hardware index mapping — maps logical key position to firmware LED address.
-# WIP: based on FransM's reverse-engineering, some indices may need correction.
 LEDIDX = [
     # Row 0: ESC  1    2    3    4    5    6    7    8    9    0    -    =   BSPC
     0,   22,  23,  24,  25,  26,  27,  28,  29,  30,  31,  32,  33,  34,
