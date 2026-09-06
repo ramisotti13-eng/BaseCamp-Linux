@@ -614,6 +614,10 @@ def _confirm_delete_page(app, panel, page_id):
 
 _DIALOG_TILE  = 90   # thumbnail size in dialog
 _PANEL_TILE   = 84   # key tile on the screen (was 48 in the old column)
+# Shortest gap between two redraws of one key tile while a widget keeps
+# writing the same file. A clock pushes once a second and wants every
+# one of them; a video pushes thirty times and wants none of that (#96).
+_TILE_REDRAW_MIN = 0.5
 _INSPECTOR_W  = 236  # width of the key inspector beside the grid
 
 def action_type_ids(app, include_page=True):
@@ -2442,11 +2446,17 @@ class DisplayPadPanel(ctk.CTkFrame):
         self._dialog_win       = None
         self._upload_queue     = queue.Queue()
         self._plugin_frame_keys = {}
-        # Per key, the image path the grid was last redrawn for, so a widget
-        # pushing frames only costs a redraw when the picture really changed.
-        self._tile_shown = {}     # page -> {key idx} currently showing a
-                                          # plugin's live frame instead of the
-                                          # key's icon (see _persistable_images)
+        # Per key, the image path the grid was last redrawn for, and when.
+        # A widget that keeps writing the same file name still changes what
+        # the key shows, so the path alone cannot decide this (#96).
+        self._tile_shown = {}     # key idx -> path last drawn
+        self._tile_drawn = {}     # key idx -> time.monotonic() of that draw
+        self._svc_sync_id = None  # pending widget service sync (#97)
+        # Set the moment the application starts going away, so a worker
+        # about to open the device does not do it into an interpreter that
+        # is already tearing down: libusb aborts the process on that
+        # ("libusb_ref_device: Assertion `refcnt >= 2' failed").
+        self._closing = threading.Event()
         self._fullscreen_group = set()   # key indices that form a synced fullscreen GIF
         self._rotation         = _load_displaypad_rotation()
         self._brightness       = _load_displaypad_brightness()
@@ -3546,7 +3556,41 @@ class DisplayPadPanel(ctk.CTkFrame):
                 self._refresh_panel_tile(idx)
             if not self._uploading and not self._animating:
                 self.after(200, self._start_upload)
+            self._schedule_service_sync()
         self._sync_editors(page)
+
+    def _schedule_service_sync(self):
+        """Ask for the page's widget services to be brought in line, shortly.
+
+        Assigning a widget to a key has to start that widget's service, and
+        clearing the last key that used it has to stop it. Both were only ever
+        done on a page switch, so a widget assigned to a key on the page you
+        were already looking at simply never started: nothing appeared on the
+        pad or in the editor, though the key was stored and worked after a
+        restart or a switch away and back (#97). Clearing one had the mirror
+        problem, leaving the thread polling and painting a key nobody had
+        assigned it to any more.
+
+        Deferred and coalesced because applying the actions dialog saves all
+        twelve rows in a loop, and a sync per row would stop a service on one
+        row and start it again on the next.
+        """
+        if getattr(self, "_svc_sync_id", None) is not None:
+            try:
+                self.after_cancel(self._svc_sync_id)
+            except Exception:
+                pass
+        self._svc_sync_id = self.after(250, self._sync_page_services)
+
+    def _sync_page_services(self):
+        self._svc_sync_id = None
+        pm = getattr(self._app, "_plugin_manager", None)
+        if not pm:
+            return
+        try:
+            pm.sync_services_for_page(self._current_page)
+        except Exception as e:
+            print(f"[Plugin] sync_services_for_page failed: {e}")
 
     def _sync_editors(self, page):
         """Show the stored action in the editor that did not just write it.
@@ -4336,13 +4380,23 @@ class DisplayPadPanel(ctk.CTkFrame):
         before the widget was assigned is the blank one, and it stayed blank
         in the editor for as long as nothing else happened to redraw it (#90).
 
-        Only on a change of path, so a video pushing frames does not redraw the
-        same file thirty times a second.
+        A change of path is drawn at once. The same path is drawn again at
+        most a few times a second: a clock or a system monitor rewrites one
+        file name every second and only its content changes, so waiting for
+        the path to change meant the editor kept the first frame it ever drew
+        while the pad showed the current one, until something unrelated
+        happened to redraw that tile (#96). The floor is what keeps a video
+        pushing thirty frames a second from costing thirty redraws.
         """
         path = self._images.get(str(idx))
-        if not path or self._tile_shown.get(idx) == path:
+        if not path:
+            return
+        now = time.monotonic()
+        if self._tile_shown.get(idx) == path and \
+                now - self._tile_drawn.get(idx, 0.0) < _TILE_REDRAW_MIN:
             return
         self._tile_shown[idx] = path
+        self._tile_drawn[idx] = now
         try:
             self.after(0, lambda i=idx: self._refresh_panel_tile(i))
         except Exception:
@@ -4455,8 +4509,10 @@ class DisplayPadPanel(ctk.CTkFrame):
         self._persist_images()
         self._save_page_action(self._current_page, idx, "none", "")
         self._refresh_panel_tile(idx)
-        if idx == self._selected_key:
-            self._load_inspector()
+        # The key you just cleared is the one you are working on, so the
+        # inspector moves to it. It used to stay on whichever key was selected
+        # before, which read as the clear having hit the wrong key (#98).
+        self._select_key(idx)
         self._start_upload()
 
     def _open_app_picker(self):
@@ -4618,6 +4674,9 @@ class DisplayPadPanel(ctk.CTkFrame):
         # device returns [Errno 16] Resource busy (issue #26).
         self._key_released.wait(timeout=1.5)
         self._usb_lock.acquire()
+        if self._closing.is_set():
+            self._usb_lock.release()
+            return
         try:
             usb_dev, hid_dev = _open_interfaces()
         except Exception as e:
@@ -4983,7 +5042,7 @@ class DisplayPadPanel(ctk.CTkFrame):
                     pass
                 holding = False
 
-        while not self._plugin_worker_stop.is_set():
+        while not (self._plugin_worker_stop.is_set() or self._closing.is_set()):
             # Yield the device immediately the moment anything else wants
             # it — don't linger. A plugin pushing frequently, or a steady
             # stream of key reads, must never starve a manual upload or a

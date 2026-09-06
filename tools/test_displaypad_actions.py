@@ -22,6 +22,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import threading
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -165,13 +166,24 @@ def checks():
         app.update()
         check("a widget's first frame redraws its tile", 6 in redrawn, redrawn)
 
-        # The same file again is the same picture: no redraw.
+        # The same file again, straight away, is a video pushing frames: the
+        # floor is what keeps that from costing a redraw per frame.
         redrawn.clear()
         panel.push_plugin_image(6, frame)
         app.update()
-        check("the same frame file does not redraw it again", not redrawn, redrawn)
+        check("the same file again at once does not redraw it",
+              not redrawn, redrawn)
 
-        # A new file is a new picture.
+        # But the same file a second later is a clock, whose file name never
+        # changes and whose content does. Waiting for the path to change left
+        # the editor on the first frame it ever drew (#96).
+        redrawn.clear()
+        panel._tile_drawn[6] = time.monotonic() - dpp._TILE_REDRAW_MIN - 0.01
+        panel.push_plugin_image(6, frame)
+        app.update()
+        check("the same file after the floor redraws it", 6 in redrawn, redrawn)
+
+        # A new file is a new picture, whenever it arrives.
         redrawn.clear()
         panel._images["6"] = os.path.join(_TMP_HOME, "widget-frame-2.png")
         panel.push_plugin_image(6, frame)
@@ -179,6 +191,53 @@ def checks():
         check("a new frame file redraws it", 6 in redrawn, redrawn)
     finally:
         panel._refresh_panel_tile = real_refresh
+
+    # ── A widget assigned to the page you are on has to start (#97) ──────────
+    # Starting and stopping the services was only ever done on a page switch,
+    # so assigning a widget to a key on the page already shown started nothing:
+    # the key was stored and worked after a restart, and did nothing until then.
+    synced = []
+    real_sync = app._plugin_manager.sync_services_for_page
+    app._plugin_manager.sync_services_for_page = lambda page: synced.append(page)
+    try:
+        panel._save_page_action(panel._current_page, 7, "widget_demo", "sec")
+        app.update()
+        check("assigning a widget asks for a service sync",
+              panel._svc_sync_id is not None)
+        check("and it has not run per row yet", not synced, synced)
+
+        # Applying twelve rows must not stop and start a service twelve times.
+        for idx in range(8, 12):
+            panel._save_page_action(panel._current_page, idx, "widget_demo", "sec")
+        app.update()
+        deadline = time.monotonic() + 3.0
+        while not synced and time.monotonic() < deadline:
+            app.update()
+            time.sleep(0.02)
+        check("the sync runs once for the whole batch",
+              synced == [panel._current_page], synced)
+
+        # Clearing the key has to stop it again, by the same route.
+        synced.clear()
+        panel._save_page_action(panel._current_page, 7, "none", "")
+        deadline = time.monotonic() + 3.0
+        while not synced and time.monotonic() < deadline:
+            app.update()
+            time.sleep(0.02)
+        check("clearing a widget key syncs too", synced == [panel._current_page],
+              synced)
+    finally:
+        app._plugin_manager.sync_services_for_page = real_sync
+
+    # ── Right click clears the key it is on, and moves there (#98) ───────────
+    panel._select_key(2)
+    app.update()
+    panel._clear_slot(9)
+    app.update()
+    check("clearing a key selects that key",
+          panel._selected_key == 9, panel._selected_key)
+    check("and the inspector is showing it",
+          panel._insp_title.cget("text") == "K10", panel._insp_title.cget("text"))
 
     # ── Saving must not disturb a key nobody touched ─────────────────────────
     panel._save_page_action(panel._current_page, 11, "shell", "untouched")

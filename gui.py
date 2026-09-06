@@ -2386,6 +2386,16 @@ class App(ctk.CTk):
         # Signal all background HID threads to stop
         if hasattr(self, "_displaypad_panel"):
             p = self._displaypad_panel
+            # First, so no worker starts opening the device while the rest of
+            # this runs. The <Destroy> binding that stops the plugin worker
+            # only fires inside super().destroy() below, which is after the
+            # wait, and the per-upload worker was never told at all: a thread
+            # still in libusb_open when the interpreter tears down aborts the
+            # process rather than exiting it.
+            if hasattr(p, "_closing"):
+                p._closing.set()
+            if hasattr(p, "_plugin_worker_stop"):
+                p._plugin_worker_stop.set()
             if hasattr(p, "_monitor_stop"):
                 p._monitor_stop.set()
             if hasattr(p, "_key_stop"):
@@ -2410,6 +2420,15 @@ class App(ctk.CTk):
         # Give HID threads time to close their devices before tearing down
         import time
         time.sleep(0.4)
+        # A fixed wait is a guess, and a worker that started opening the device
+        # just before _closing was set is still inside libusb when it runs out.
+        # The upload worker holds this lock for the whole time it owns the
+        # device, so taking it is proof that nobody is in there any more.
+        # Tearing down while one is aborts the process instead of ending it.
+        p = getattr(self, "_displaypad_panel", None)
+        lock = getattr(p, "_usb_lock", None) if p is not None else None
+        if lock is not None and lock.acquire(timeout=3.0):
+            lock.release()
         super().destroy()
 
 
