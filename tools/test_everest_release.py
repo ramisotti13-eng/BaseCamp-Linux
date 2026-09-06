@@ -107,6 +107,25 @@ finally:
     usb.util.release_interface = _real_release
 
 
+# A reclaim releases a handle whose device has just re-enumerated, so the
+# release failing there is the premise and not news worth a warning.
+import contextlib                                  # noqa: E402
+import io as _io                                   # noqa: E402
+
+err = _io.StringIO()
+dev = DeadDev()
+usb.util.release_interface = _raise
+try:
+    with contextlib.redirect_stderr(err):
+        E._release(dev, expect_gone=True)
+finally:
+    usb.util.release_interface = _real_release
+check("a release that was expected to fail says nothing about it",
+      "not released" not in err.getvalue(), err.getvalue().strip()[:70])
+check("and still hands the interface back", dev.attached == [E.INTERFACE],
+      dev.attached)
+
+
 # And the complaint is about the outcome, not the attempt: a port reset
 # re-enumerates the board and the kernel binds it again by itself, so the
 # attach comes back busy while the interface is in exactly the right hands.
@@ -117,9 +136,6 @@ class BusyButBound(FakeDev):
     def is_kernel_driver_active(self, iface):
         return True         # the kernel got there first
 
-
-import io as _io                                   # noqa: E402
-import contextlib                                  # noqa: E402
 
 err = _io.StringIO()
 with contextlib.redirect_stderr(err):

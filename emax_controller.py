@@ -58,15 +58,22 @@ def _claim(dev):
         dev.detach_kernel_driver(INTERFACE)
     usb.util.claim_interface(dev, INTERFACE)
 
-def _release(dev):
+def _release(dev, expect_gone=False):
+    """Hand interface 3 back. `expect_gone` for a handle already known dead.
+
+    A reclaim after a port reset is releasing a handle whose device has just
+    re-enumerated, so the release failing is the premise rather than news,
+    and saying so would be a warning on every suspend.
+    """
     try:
         usb.util.release_interface(dev, INTERFACE)
     except Exception as e:
         # A keyboard that has gone away mid-run cannot be released, and that
         # must not skip the reattach below or escape the caller's `finally`:
         # this is the one place that hands interface 3 back.
-        print(f"interface {INTERFACE} not released: {e}",
-              file=sys.stderr, flush=True)
+        if not expect_gone:
+            print(f"interface {INTERFACE} not released: {e}",
+                  file=sys.stderr, flush=True)
     # usbhid owns this interface when we are not using it, so hand it back
     # whether or not this process is the one that took it away. A run that
     # was killed before it could release leaves the interface with no driver
@@ -133,7 +140,7 @@ def _reclaim(dev):
     the claimed interface dead: every write fails from then on.
     """
     try:
-        _release(dev)
+        _release(dev, expect_gone=True)
     except Exception:
         pass
     for _ in range(20):
