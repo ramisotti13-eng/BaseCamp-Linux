@@ -1124,6 +1124,9 @@ def controller_loop(style=STYLE_ANALOG):
 
 # ── CLI ────────────────────────────────────────────────────────────────────
 
+_stopping = False
+
+
 def _exit_on_term(_sig, _frame):
     """Leave through the normal exit path when the GUI stops us.
 
@@ -1132,7 +1135,16 @@ def _exit_on_term(_sig, _frame):
     stands: no `finally`, so the claimed interface is never released and
     usbhid never gets it back. Turning it into KeyboardInterrupt makes a stop
     from the application take exactly the path Ctrl-C already took.
+
+    Only the first one raises. The application stops a monitor in one place
+    and clears strays with pkill in another, so two can arrive close
+    together, and the second landing inside the release would interrupt the
+    very cleanup this exists to run.
     """
+    global _stopping
+    if _stopping:
+        return
+    _stopping = True
     raise KeyboardInterrupt
 
 

@@ -101,6 +101,26 @@ done = subprocess.run([sys.executable, "-c", child], capture_output=True,
 check("SIGTERM raises KeyboardInterrupt", done.returncode == 0,
       done.stdout.strip() or done.stderr.strip()[-80:])
 
+# A second signal must not interrupt the release the first one started.
+child = textwrap.dedent("""
+    import os, signal, sys
+    sys.path.insert(0, %r)
+    import emax_controller as E
+    signal.signal(signal.SIGTERM, E._exit_on_term)
+    raised = 0
+    for _ in range(3):
+        try:
+            os.kill(os.getpid(), signal.SIGTERM)
+        except KeyboardInterrupt:
+            raised += 1
+    print(raised)
+    sys.exit(0 if raised == 1 else 1)
+""" % os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+done = subprocess.run([sys.executable, "-c", child], capture_output=True,
+                      text=True, timeout=30)
+check("only the first SIGTERM raises", done.returncode == 0,
+      "raised %s" % (done.stdout.strip() or done.stderr.strip()[-60:]))
+
 # And main() is where that handler goes on, so every mode gets it.
 import inspect                                    # noqa: E402
 src = inspect.getsource(E.main)
