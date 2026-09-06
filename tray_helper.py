@@ -189,16 +189,24 @@ def main():
     backoff = 1.0
     while state["run"] and main_alive():
         started = time.monotonic()
+        # One watcher per icon, ended with it. Without this, a session with no
+        # notification area at all keeps every watcher it ever started: they
+        # are waiting for an icon to be docked that never will be, and this
+        # loop builds a fresh one every backoff.
+        done = threading.Event()
         try:
             icon = build_icon()
             if watch_docked_applies(icon):
                 threading.Thread(
                     target=watch_docked,
-                    args=(icon, lambda: state["run"] and main_alive()),
+                    args=(icon, lambda: (not done.is_set()
+                                         and state["run"] and main_alive())),
                     daemon=True).start()
             icon.run()
         except Exception as e:
             print(f"[Tray] {type(e).__name__}: {e} — re-docking", file=sys.stderr)
+        finally:
+            done.set()
         if not state["run"] or not main_alive():
             break
         if time.monotonic() - started > 5.0:

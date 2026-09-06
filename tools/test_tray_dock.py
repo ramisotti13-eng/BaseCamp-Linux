@@ -83,6 +83,23 @@ icon = XorgIcon([host, host, host, host])
 check("a docked icon is left running", run(icon, 4) is False)
 check("and is not stopped", not icon.stopped)
 
+# A session that never had a notification area must not leave the watcher
+# running: the supervisor builds a fresh icon on every backoff, and a watcher
+# per icon that never ends is a thread per icon that never ends.
+icon = XorgIcon([None] * 50)
+ticks = [0]
+
+
+def counting_should_run():
+    ticks[0] += 1
+    return ticks[0] <= 5
+
+
+check("a watcher stops when its own run is over",
+      tray_helper.watch_docked(icon, counting_should_run, poll=0,
+                               sleep=lambda _s: None) is False)
+check("and did not stop an icon it never saw docked", not icon.stopped)
+
 # The watcher only applies where the failure exists.
 check("the Xorg backend is watched",
       tray_helper.watch_docked_applies(XorgIcon([])))
