@@ -139,6 +139,38 @@ class BrokenCtx:
 plugin.ctx = BrokenCtx()
 check("no pad is not an error either", plugin._find_dp_key() is None)
 
+# ── Stopping and starting again ──────────────────────────────────────────────
+# The application brings a page's services in line whenever a key changes, not
+# only on a page switch, so stop-then-start is ordinary. start() never reset
+# the stop, so the new thread found it already set and returned: nothing was
+# drawn for the rest of the session, which is the symptom this issue is about.
+threads = []
+_real_thread = np.threading.Thread
+
+
+def spy(*a, **kw):
+    t = _real_thread(*a, **kw)
+    t.start = lambda: threads.append(kw.get("args", ()))
+    return t
+
+
+live = np.Plugin.__new__(np.Plugin)
+live._stop = np.threading.Event()
+np.threading.Thread = spy
+try:
+    live.start()
+    first = live._stop
+    live.stop()
+    live.start()
+finally:
+    np.threading.Thread = _real_thread
+
+check("it is startable again after a stop", not live._stop.is_set())
+check("and does not revive the thread it stopped", first.is_set())
+check("each thread has its own stop",
+      len(threads) == 2 and threads[0][0] is not threads[1][0]
+      and threads[1][0] is live._stop, threads)
+
 os.unlink(cover)
 os.rmdir(work)
 

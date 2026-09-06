@@ -3661,7 +3661,11 @@ class DisplayPadPanel(ctk.CTkFrame):
                 self.after_cancel(self._svc_sync_id)
             except Exception:
                 pass
-        self._svc_sync_id = self.after(250, self._sync_page_services)
+        try:
+            self._svc_sync_id = self.after(250, self._sync_page_services)
+        except Exception:
+            # The window is going away, so there is no page to bring in line.
+            self._svc_sync_id = None
 
     def _sync_page_services(self):
         self._svc_sync_id = None
