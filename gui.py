@@ -1685,7 +1685,33 @@ class App(ctk.CTk):
     # first sight of it put a full "cannot be opened" notice on screen during
     # an ordinary page switch (#80). Only a denial that survives this many
     # consecutive scans, roughly fifteen seconds, is a real one.
+    #
+    # Counted per node, not per device (#86). An upload detaches the kernel
+    # driver from an interface and gives it back afterwards, which makes the
+    # kernel build that interface a fresh hidraw node, and a fresh node is
+    # root:root 0600 until udev gets to it. Counting per device let three
+    # different nodes, each caught inside its own short window, add up to a
+    # verdict about a device whose entries were readable throughout, which is
+    # what produced a report that the reporter's own `ls` contradicted.
     _ACCESS_STRIKES = 3
+
+    def _busy_with_device(self, dev_id):
+        """True while the application itself is driving this device.
+
+        The node churn during an upload is our own doing, so a permission
+        verdict formed in the middle of one says nothing about the
+        installation (#86).
+        """
+        if dev_id != "displaypad":
+            return False
+        panel = getattr(self, "_displaypad_panel", None)
+        if panel is None:
+            return False
+        # Only the upload sessions, which are short and bounded. The device
+        # worker holds its lock for long stretches while it listens for key
+        # presses, so waiting on that would switch this check off for good.
+        return bool(getattr(panel, "_uploading", False)
+                    or getattr(panel, "_animating", False))
 
     def _check_device_access(self, kb_max, kb_60, mouse, dp, mkd=False):
         """Note devices we can see but not open, and say so once (#49).
@@ -1708,22 +1734,26 @@ class App(ctk.CTk):
             if present:
                 for pid in pids:
                     denied.extend(_device_access_denied(vid, pid))
-            if denied:
-                strikes = self._denied_strikes.get(dev_id, 0) + 1
-                self._denied_strikes[dev_id] = strikes
-                if strikes < self._ACCESS_STRIKES:
-                    continue          # still inside the window udev needs
-                self._dev_denied[dev_id] = denied
+            if present and self._busy_with_device(dev_id):
+                continue              # our own upload is churning the nodes
+            strikes = self._denied_strikes.setdefault(dev_id, {})
+            for node in list(strikes):
+                if node not in denied:
+                    del strikes[node]   # that one came back, forget it
+            for node in denied:
+                strikes[node] = strikes.get(node, 0) + 1
+            persistent = sorted(n for n, c in strikes.items()
+                                if c >= self._ACCESS_STRIKES)
+            if persistent:
+                self._dev_denied[dev_id] = persistent
                 if dev_id not in self._denied_logged:
                     self._denied_logged.add(dev_id)
-                    described = ", ".join(_describe_node(n)
-                                          for n in sorted(denied))
+                    described = ", ".join(_describe_node(n) for n in persistent)
                     print(f"[Device] {dev_id}: no access to {described}. "
                           f"The udev rule is missing or has not been applied; "
                           f"see 'USB permissions' in the README.", flush=True)
             else:
                 # Access is back: drop the notice at once, no counting down.
-                self._denied_strikes.pop(dev_id, None)
                 self._dev_denied.pop(dev_id, None)
                 self._denied_logged.discard(dev_id)
 
