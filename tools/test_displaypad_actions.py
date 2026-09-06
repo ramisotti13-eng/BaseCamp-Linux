@@ -229,6 +229,50 @@ def checks():
     finally:
         app._plugin_manager.sync_services_for_page = real_sync
 
+    # ── The generated icons all follow one naming scheme (#95) ───────────────
+    # Reported by @FransM: the widget plugins write dp_<plugin>_p1_k2.png and
+    # the application wrote dp_label_1_2.png beside them, with folder icons on
+    # page 0 dropping the page altogether. The names an old configuration
+    # holds have to keep working, so they are renamed and the stored paths
+    # follow.
+    check("a label icon is named for its page and key",
+          dpp._generated_icon_name("label", 3, 7).endswith("dp_label_p3_k7.png"),
+          dpp._generated_icon_name("label", 3, 7))
+    check("and a folder icon on the main page names its page too",
+          panel._folder_icon_name(0, 4).endswith("dp_folder_p0_k4.png"),
+          panel._folder_icon_name(0, 4))
+
+    old_label = os.path.join(dpp.CONFIG_DIR, "dp_label_0_10.png")
+    old_folder = os.path.join(dpp.CONFIG_DIR, "dp_folder_11.png")
+    _Image.new("RGB", (102, 102), (1, 2, 3)).save(old_label)
+    _Image.new("RGB", (102, 102), (4, 5, 6)).save(old_folder)
+    panel._page_images[0] = dict(panel._page_images.get(0, {}))
+    panel._page_images[0]["10"] = old_label
+    panel._page_images[0]["11"] = old_folder
+    panel._migrate_generated_icon_names()
+    check("an old label name is renamed and followed",
+          panel._page_images[0]["10"] == dpp._generated_icon_name("label", 0, 10)
+          and os.path.exists(panel._page_images[0]["10"]),
+          panel._page_images[0]["10"])
+    check("so is the page-less folder name",
+          panel._page_images[0]["11"] == dpp._generated_icon_name("folder", 0, 11)
+          and os.path.exists(panel._page_images[0]["11"]),
+          panel._page_images[0]["11"])
+    check("and the old files are gone",
+          not os.path.exists(old_label) and not os.path.exists(old_folder))
+
+    before = dict(panel._page_images[0])
+    panel._migrate_generated_icon_names()
+    check("running it again changes nothing", panel._page_images[0] == before)
+
+    # An image the person chose is not ours to rename.
+    mine = os.path.join(_TMP_HOME, "my-own-picture.png")
+    _Image.new("RGB", (102, 102), (7, 8, 9)).save(mine)
+    panel._page_images[0]["9"] = mine
+    panel._migrate_generated_icon_names()
+    check("an image of your own is left alone",
+          panel._page_images[0]["9"] == mine and os.path.exists(mine))
+
     # ── Right click clears the key it is on, and moves there (#98) ───────────
     panel._select_key(2)
     app.update()

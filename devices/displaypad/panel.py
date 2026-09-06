@@ -443,6 +443,27 @@ def _load_gif_display_frames(path, size):
     return frames if len(frames) > 1 else None
 
 
+# Every picture the application draws for a key is named the same way: what
+# it is, which page, which key. The widget plugins already write
+# dp_<plugin>_p<page>_k<key>.png, and the application did not (#95): labels
+# were dp_label_<page>_<key>.png, and folder icons dropped the page entirely
+# on page 0, which is a legacy form from before sub-pages existed.
+_ICON_KINDS = ("label", "folder")
+
+
+def _generated_icon_name(kind, page, idx):
+    """Config path of an icon the application draws itself."""
+    return os.path.join(CONFIG_DIR, f"dp_{kind}_p{page}_k{idx}.png")
+
+
+def _legacy_icon_names(kind, page, idx):
+    """What that same icon was called before the scheme was settled."""
+    names = [f"dp_{kind}_{page}_{idx}.png"]
+    if kind == "folder" and page == 0:
+        names.append(f"dp_{kind}_{idx}.png")   # older still, page 0 only
+    return [os.path.join(CONFIG_DIR, n) for n in names]
+
+
 def _make_thumb(path, size, rotation=0):
     try:
         img = Image.open(path).convert("RGB").resize((size, size), Image.LANCZOS)
@@ -2561,6 +2582,8 @@ class DisplayPadPanel(ctk.CTkFrame):
             if p != 0 and acts and acts[0].get("type", "none") == "none":
                 acts[0] = _back_act()
 
+        self._migrate_generated_icon_names()
+
         self._images = dict(self._page_images.get(0, {}))
         # A value that is not a path is dropped rather than carried into the
         # first os.path call, where it would stop the app from starting at all.
@@ -3328,11 +3351,48 @@ class DisplayPadPanel(ctk.CTkFrame):
         return max(self._all_page_ids()) + 1
 
     def _folder_icon_name(self, page, idx):
-        """Config path of the auto folder-label icon for a nav button. Page 0
-        keeps the legacy dp_folder_{idx}.png name; sub-pages qualify by page id
-        so labels don't collide across pages."""
-        fname = f"dp_folder_{idx}.png" if page == 0 else f"dp_folder_{page}_{idx}.png"
-        return os.path.join(CONFIG_DIR, fname)
+        """Config path of the auto folder-label icon for a nav button."""
+        return _generated_icon_name("folder", page, idx)
+
+    def _migrate_generated_icon_names(self):
+        """Rename the icons this application drew to the one scheme (#95).
+
+        The page and the key are known from where the entry sits, so the old
+        name does not have to be parsed, only recognised. A file that cannot
+        be renamed keeps its old name and its stored path, which still works;
+        the point of this is a config directory that reads consistently, not
+        something anything depends on. Idempotent, so it costs one directory
+        walk on every later start and does nothing.
+        """
+        changed = False
+        for page, imgs in self._page_images.items():
+            if not isinstance(imgs, dict):
+                continue
+            for key, path in list(imgs.items()):
+                if not isinstance(path, str):
+                    continue
+                try:
+                    idx = int(key)
+                except (TypeError, ValueError):
+                    continue
+                for kind in _ICON_KINDS:
+                    if path not in _legacy_icon_names(kind, page, idx):
+                        continue
+                    new = _generated_icon_name(kind, page, idx)
+                    try:
+                        if os.path.exists(path) and not os.path.exists(new):
+                            os.replace(path, new)
+                    except OSError as e:
+                        print(f"[DisplayPad] keeping {path}: {e}")
+                        break
+                    if os.path.exists(new):
+                        imgs[key] = new
+                        changed = True
+                    break
+        if changed:
+            _save_displaypad_buttons(
+                self._persistable_images(0, self._page_images.get(0, {})))
+            self._save_sub_pages()
 
     def _inject_page_icons(self, page):
         """Give every navigation button on `page` its icon: a custom icon set on
@@ -3640,7 +3700,7 @@ class DisplayPadPanel(ctk.CTkFrame):
         if not (is_blank or auto):
             return  # user-assigned image — keep it
         label = action.strip()
-        icon_path = os.path.join(CONFIG_DIR, f"dp_label_{page}_{idx}.png")
+        icon_path = _generated_icon_name("label", page, idx)
         try:
             _make_label_icon(label, icon_path)
         except Exception:
@@ -4557,7 +4617,7 @@ class DisplayPadPanel(ctk.CTkFrame):
         if self._current_page == 0:
             for i, act in enumerate(cur_actions):
                 if act.get("type") == "page":
-                    labeled = os.path.join(CONFIG_DIR, f"dp_folder_{i}.png")
+                    labeled = self._folder_icon_name(self._current_page, i)
                     page_btns[str(i)] = labeled if os.path.exists(labeled) else self._folder_icon
                     kept_page_actions[i] = dict(act)
         self._images = {str(i): self._blank_icon for i in range(NUM_KEYS)}
