@@ -2473,6 +2473,8 @@ class DisplayPadPanel(ctk.CTkFrame):
         self._tile_shown = {}     # key idx -> path last drawn
         self._tile_drawn = {}     # key idx -> time.monotonic() of that draw
         self._svc_sync_id = None  # pending widget service sync (#97)
+        self._tile_dirty = set()  # keys whose picture changed, not yet drawn
+        self._tile_pass_id = None # the one scheduled pass that will draw them
         # Set the moment the application starts going away, so a worker
         # about to open the device does not do it into an interpreter that
         # is already tearing down: libusb aborts the process on that
@@ -3351,8 +3353,22 @@ class DisplayPadPanel(ctk.CTkFrame):
         return max(self._all_page_ids()) + 1
 
     def _folder_icon_name(self, page, idx):
-        """Config path of the auto folder-label icon for a nav button."""
+        """Where the auto folder-label icon for a nav button is written."""
         return _generated_icon_name("folder", page, idx)
+
+    def _folder_icon_drawn(self, page, idx):
+        """The drawn folder label for this key, whatever it is called, or None.
+
+        Normally the one name. A legacy one only when the rename could not
+        happen, which is a config directory that cannot be written to: that
+        should not also cost the picture, since the key would silently fall
+        back to the generic folder icon and the label would look lost.
+        """
+        for path in (_generated_icon_name("folder", page, idx),
+                     *_legacy_icon_names("folder", page, idx)):
+            if os.path.exists(path):
+                return path
+        return None
 
     def _migrate_generated_icon_names(self):
         """Rename the icons this application drew to the one scheme (#95).
@@ -3380,7 +3396,13 @@ class DisplayPadPanel(ctk.CTkFrame):
                         continue
                     new = _generated_icon_name(kind, page, idx)
                     try:
-                        if os.path.exists(path) and not os.path.exists(new):
+                        if os.path.exists(path):
+                            # Unconditionally, even when the new name is
+                            # already taken: what the configuration points at
+                            # is this key's picture by definition, and a file
+                            # left under the new name by an earlier half
+                            # finished run is not. Repointing without moving
+                            # would have shown that stale one instead.
                             os.replace(path, new)
                     except OSError as e:
                         print(f"[DisplayPad] keeping {path}: {e}")
@@ -3416,9 +3438,8 @@ class DisplayPadPanel(ctk.CTkFrame):
                     # editor wins over the default folder icon (#30 custom icon).
                     self._images[str(i)] = user_img
                 else:
-                    labeled = self._folder_icon_name(page, i)
-                    self._images[str(i)] = (labeled if os.path.exists(labeled)
-                                            else self._folder_icon)
+                    labeled = self._folder_icon_drawn(page, i)
+                    self._images[str(i)] = labeled or self._folder_icon
             elif t == "back":
                 self._images[str(i)] = self._back_icon
 
@@ -4457,11 +4478,27 @@ class DisplayPadPanel(ctk.CTkFrame):
             return
         self._tile_shown[idx] = path
         self._tile_drawn[idx] = now
-        try:
-            self.after(0, lambda i=idx: self._refresh_panel_tile(i))
-        except Exception:
-            # The window is going away; a tile nobody will see is no loss.
-            pass
+        # Noted, not drawn: a page of widgets pushes a dozen frames a second
+        # between them, and one scheduled redraw each would put a dozen file
+        # reads and resizes a second on the interface thread. One pass draws
+        # whatever has piled up.
+        self._tile_dirty.add(idx)
+        if self._tile_pass_id is None:
+            try:
+                self._tile_pass_id = self.after(0, self._draw_dirty_tiles)
+            except Exception:
+                # The window is going away; a tile nobody will see is no loss.
+                self._tile_dirty.discard(idx)
+
+    def _draw_dirty_tiles(self):
+        """Redraw every key noted since the last pass."""
+        self._tile_pass_id = None
+        dirty, self._tile_dirty = self._tile_dirty, set()
+        for idx in sorted(dirty):
+            try:
+                self._refresh_panel_tile(idx)
+            except Exception:
+                pass
 
     def _refresh_panel_tile(self, idx):
         rot = self._rotation
@@ -4638,6 +4675,11 @@ class DisplayPadPanel(ctk.CTkFrame):
             if 0 <= idx < len(new_actions):
                 new_actions[idx] = act
         self._page_actions[self._current_page] = new_actions
+        # The services follow the page's actions, and this is the one writer
+        # that does not go through _save_page_action, so it has to ask for
+        # itself. Without it, clearing a page left a widget's thread running
+        # and painting a key nobody had assigned it to (#97).
+        self._schedule_service_sync()
 
         if self._current_page == 0:
             save_imgs = dict(page_btns)  # only keep page buttons in config
@@ -5162,6 +5204,12 @@ class DisplayPadPanel(ctk.CTkFrame):
                 self._usb_lock.acquire()
                 holding = True
                 self._key_released.clear()
+                if self._closing.is_set():
+                    # The wait above is up to 1.5 s and the open below is
+                    # seconds more; checking only at the top of the loop
+                    # narrowed the teardown race rather than closing it.
+                    _release()
+                    return
                 try:
                     usb_dev, hid_dev = _open_interfaces()
                     _init_device(hid_dev)

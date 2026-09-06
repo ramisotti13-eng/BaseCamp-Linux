@@ -71,6 +71,13 @@ icon = XorgIcon([object(), object(), None, None])
 check("a host that disappears ends the run", run(icon, 6) is True)
 check("and the icon was stopped so it can be rebuilt", icon.stopped)
 
+# One look is not enough: pystray clears the host window before it goes
+# looking for a new one, so a single glance can land inside its own recovery.
+host = object()
+icon = XorgIcon([host, None, host, host])
+check("a host gone for one look only is left alone", run(icon, 4) is False)
+check("and that icon keeps running", not icon.stopped)
+
 # A desktop with no notification area yet must not be mistaken for one that
 # lost it: that is the state every icon starts in.
 icon = XorgIcon([None, None, None])

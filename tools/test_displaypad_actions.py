@@ -231,6 +231,22 @@ def checks():
         panel.push_plugin_image(6, frame)
         app.update()
         check("a new frame file redraws it", 6 in redrawn, redrawn)
+
+        # A page of widgets pushes a dozen frames between them, and one
+        # scheduled redraw each would put a dozen file reads and resizes a
+        # second on the interface thread. They are collected into one pass.
+        redrawn.clear()
+        for key in range(12):
+            panel._images[str(key)] = os.path.join(
+                _TMP_HOME, "widget-many-%d.png" % key)
+            panel.push_plugin_image(key, frame)
+        check("nothing is drawn before the pass runs", not redrawn, redrawn)
+        check("and one pass is scheduled, not twelve",
+              panel._tile_pass_id is not None)
+        app.update()
+        check("the pass draws every key that changed",
+              sorted(redrawn) == list(range(12)), sorted(redrawn))
+        check("and books no further pass", panel._tile_pass_id is None)
     finally:
         panel._refresh_panel_tile = real_refresh
 
@@ -306,6 +322,32 @@ def checks():
     before = dict(panel._page_images[0])
     panel._migrate_generated_icon_names()
     check("running it again changes nothing", panel._page_images[0] == before)
+
+    # Two files, one name each: what the configuration points at is this
+    # key's picture, and a leftover under the new name is not.
+    live = os.path.join(dpp.CONFIG_DIR, "dp_label_0_8.png")
+    stale = dpp._generated_icon_name("label", 0, 8)
+    _Image.new("RGB", (102, 102), (11, 22, 33)).save(live)
+    _Image.new("RGB", (102, 102), (99, 88, 77)).save(stale)
+    panel._page_images[0]["8"] = live
+    panel._migrate_generated_icon_names()
+    check("the referenced picture wins over a leftover under the new name",
+          _Image.open(panel._page_images[0]["8"]).getpixel((5, 5)) == (11, 22, 33),
+          _Image.open(panel._page_images[0]["8"]).getpixel((5, 5)))
+
+    # A folder label that could not be renamed still has to be findable, or
+    # the key falls back to the generic icon and the label looks lost.
+    legacy = os.path.join(dpp.CONFIG_DIR, "dp_folder_6.png")
+    _Image.new("RGB", (102, 102), (3, 3, 3)).save(legacy)
+    check("a folder label under its old name is still found",
+          panel._folder_icon_drawn(0, 6) == legacy, panel._folder_icon_drawn(0, 6))
+    check("and the new name wins when both are there",
+          (_Image.new("RGB", (102, 102), (4, 4, 4)).save(
+              dpp._generated_icon_name("folder", 0, 6)) or
+           panel._folder_icon_drawn(0, 6)) == dpp._generated_icon_name("folder", 0, 6),
+          panel._folder_icon_drawn(0, 6))
+    check("and a key with neither has none",
+          panel._folder_icon_drawn(0, 7) is None, panel._folder_icon_drawn(0, 7))
 
     # An image the person chose is not ours to rename.
     mine = os.path.join(_TMP_HOME, "my-own-picture.png")

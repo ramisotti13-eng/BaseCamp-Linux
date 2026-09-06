@@ -23,8 +23,9 @@ import sys, os, signal, json, threading, time
 import pystray
 from PIL import Image
 
-# How often to ask whether the icon is still docked, and how long the
-# notification area may be gone before the icon is rebuilt. See _watch_docked.
+# How often to ask whether the icon is still docked. It takes two answers in
+# a row for the icon to be rebuilt, so the notification area may be gone for
+# up to twice this without anything happening. See watch_docked.
 _DOCK_POLL_S = 3.0
 
 
@@ -59,20 +60,27 @@ def watch_docked(icon, should_run, poll=_DOCK_POLL_S, sleep=time.sleep):
     that simply has no notification area yet at login, which is the state the
     icon starts in.
     """
-    docked = False
+    docked, gone = False, 0
     while should_run():
         sleep(poll)
         if getattr(icon, "_systray_manager", None) is not None:
-            docked = True
+            docked, gone = True, 0
             continue
-        if docked:
-            print("[Tray] the notification area went away, docking again",
-                  file=sys.stderr, flush=True)
-            try:
-                icon.stop()
-            except Exception:
-                pass
-            return True
+        if not docked:
+            continue
+        # Two in a row, not one. pystray clears the host window first and
+        # only then looks for a new one, so a single look can land inside
+        # its own recovery and tear down an icon that was about to be fine.
+        gone += 1
+        if gone < 2:
+            continue
+        print("[Tray] the notification area went away, docking again",
+              file=sys.stderr, flush=True)
+        try:
+            icon.stop()
+        except Exception:
+            pass
+        return True
     return False
 
 

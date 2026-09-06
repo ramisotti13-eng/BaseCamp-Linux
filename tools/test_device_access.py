@@ -150,6 +150,21 @@ check("access coming back drops the notice at once",
       "displaypad" not in app._dev_denied and
       "displaypad" not in app._denied_logged, app._dev_denied)
 
+# Once it has been said, a node changing its number must not take the notice
+# off the screen and then say it again. A pad that re-enumerates does that
+# often, and the warning would flicker and repeat.
+app = fresh_app()
+first = scan_with(app, [["/dev/hidraw7"]] * 3)
+again = scan_with(app, [["/dev/hidraw8"], ["/dev/hidraw8"]])
+check("a real denial is not dropped while a new node counts up",
+      first == [["/dev/hidraw7"]] and again == []
+      and "displaypad" in app._dev_denied, (first, again, app._dev_denied))
+check("and it is not announced a second time",
+      "displaypad" in app._denied_logged)
+scan_with(app, [[]])
+check("but real access ends it", "displaypad" not in app._dev_denied,
+      app._dev_denied)
+
 # A node that is denied throughout must not be held up by one that comes and
 # goes beside it.
 app = fresh_app()

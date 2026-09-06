@@ -2,6 +2,8 @@
 import subprocess
 import threading
 import os
+import time
+from collections import OrderedDict
 import customtkinter as ctk
 from PIL import Image, ImageDraw, ImageFont
 
@@ -20,8 +22,10 @@ except ImportError:
 # the plugin's own help says it does (#99). Fetched once per address and kept,
 # because the poll runs every two seconds and the picture does not change in
 # between.
-_ART_CACHE = {}
+_ART_CACHE = OrderedDict()      # url -> picture, oldest first
+_ART_FAILED = {}                # url -> when the last attempt failed
 _ART_CACHE_MAX = 8
+_ART_RETRY_S = 30
 _ART_MAX_BYTES = 4 * 1024 * 1024
 
 
@@ -30,7 +34,13 @@ def _load_art(url):
     if not url:
         return None
     if url in _ART_CACHE:
+        _ART_CACHE.move_to_end(url)
         return _ART_CACHE[url]
+    # A failure is not remembered the way a picture is. A cover behind an
+    # http address can fail for a moment, and keeping that answer meant the
+    # cover never appeared for that track again however long it played.
+    if time.monotonic() - _ART_FAILED.get(url, -_ART_RETRY_S) < _ART_RETRY_S:
+        return None
     img = None
     try:
         if url.startswith("file://"):
@@ -45,9 +55,17 @@ def _load_art(url):
                 img = Image.open(_io.BytesIO(data)).convert("RGB")
     except Exception:
         img = None      # no cover is an ordinary answer, not a failure
-    if len(_ART_CACHE) >= _ART_CACHE_MAX:
-        _ART_CACHE.clear()
+    if img is None:
+        _ART_FAILED[url] = time.monotonic()
+        if len(_ART_FAILED) > 32:
+            _ART_FAILED.clear()
+        return None
+    _ART_FAILED.pop(url, None)
     _ART_CACHE[url] = img
+    while len(_ART_CACHE) > _ART_CACHE_MAX:
+        # The oldest goes, not all of them: clearing the lot threw away the
+        # cover of whatever was playing, which is the one wanted next.
+        _ART_CACHE.popitem(last=False)
     return img
 
 
@@ -346,14 +364,32 @@ class Plugin:
     # ── Service ───────────────────────────────────────────────────────────────
 
     def start(self):
-        self._thread = threading.Thread(target=self._poll_loop, daemon=True)
+        """Begin polling the player.
+
+        The stop was never cleared here, so once the plugin had been stopped
+        it stayed stopped for the rest of the session: the new thread found
+        the event already set and returned at once, and the panel's own
+        updates returned at their guard. Nothing was drawn from then on,
+        which is the very symptom #99 was about. It matters more now, because
+        assigning or clearing a key brings the page's services in line
+        straight away rather than only on a page switch, so a stop closely
+        followed by a start is an ordinary thing.
+
+        Each thread carries its own stop, so a stopped one can never be
+        revived alongside its successor.
+        """
+        self._stop.set()               # any predecessor ends here
+        stop = threading.Event()
+        self._stop = stop
+        self._thread = threading.Thread(target=self._poll_loop, args=(stop,),
+                                        daemon=True)
         self._thread.start()
 
     def stop(self):
         self._stop.set()
 
-    def _poll_loop(self):
-        while not self._stop.is_set():
+    def _poll_loop(self, stop):
+        while not stop.is_set():
             try:
                 info = _get_media_info()
                 if info:
@@ -365,7 +401,7 @@ class Plugin:
                 self._update_displaypad(info)
             except Exception:
                 pass
-            self._stop.wait(2)
+            stop.wait(2)
 
     def _update_ui(self, info):
         # Panel might not be built yet (plugin enabled but tab not opened),
@@ -589,7 +625,10 @@ class Plugin:
 
         if not info or not info.get("title"):
             # Nothing playing -- show idle icon
-            dp_key = "idle"
+            # The key index belongs in here: which key this is depends on
+            # the page now, so the same track on a different key has to be
+            # drawn again (#99).
+            dp_key = ("idle", self._dp_key)
             if self._dp_last_key == dp_key:
                 return
             self._dp_last_key = dp_key
@@ -610,7 +649,7 @@ class Plugin:
         # position). The cover is part of that: a player can hand over the
         # track before it has the picture for it.
         art = info.get("art")
-        dp_key = f"{title}|{status}|{art is not None}"
+        dp_key = (title, status, art is not None, self._dp_key)
         if self._dp_last_key == dp_key:
             return
         self._dp_last_key = dp_key

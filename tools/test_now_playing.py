@@ -55,6 +55,46 @@ check("it is remembered rather than read again",
       "file://" + cover in np._ART_CACHE)
 
 check("no address means no cover", np._load_art("") is None)
+
+# A cover behind an http address can fail for a moment. Remembering that
+# answer meant the cover never appeared for that track again.
+np._ART_CACHE.clear()
+np._ART_FAILED.clear()
+calls = []
+
+
+def flaky(_url, timeout=None):
+    calls.append(1)
+    raise OSError("network down")
+
+
+import urllib.request                              # noqa: E402
+_real_urlopen = urllib.request.urlopen
+urllib.request.urlopen = flaky
+try:
+    check("a failed fetch gives no cover",
+          np._load_art("https://example.invalid/a.png") is None)
+    np._load_art("https://example.invalid/a.png")
+    check("and is not retried straight away", len(calls) == 1, len(calls))
+    np._ART_FAILED["https://example.invalid/a.png"] -= np._ART_RETRY_S + 1
+    np._load_art("https://example.invalid/a.png")
+    check("but is tried again after a while", len(calls) == 2, len(calls))
+finally:
+    urllib.request.urlopen = _real_urlopen
+
+# The cache drops its oldest, not all of it: clearing the lot threw away the
+# cover of whatever was playing.
+np._ART_CACHE.clear()
+for n in range(np._ART_CACHE_MAX + 3):
+    np._ART_CACHE["u%d" % n] = "picture %d" % n
+    while len(np._ART_CACHE) > np._ART_CACHE_MAX:
+        np._ART_CACHE.popitem(last=False)
+check("the cache keeps its newest and drops its oldest",
+      len(np._ART_CACHE) == np._ART_CACHE_MAX
+      and "u%d" % (np._ART_CACHE_MAX + 2) in np._ART_CACHE
+      and "u0" not in np._ART_CACHE, list(np._ART_CACHE))
+np._ART_CACHE.clear()
+np._ART_FAILED.clear()
 check("an address that leads nowhere is not a failure",
       np._load_art("file:///nowhere/at/all.png") is None)
 check("and neither is one we do not speak",

@@ -1730,12 +1730,12 @@ class App(ctk.CTk):
             ("macropad", mkd, self.MACROPAD_VID, (self.MACROPAD_PID,)),
         )
         for dev_id, present, vid, pids in checks:
+            if present and self._busy_with_device(dev_id):
+                continue              # our own upload is churning the nodes
             denied = []
             if present:
                 for pid in pids:
                     denied.extend(_device_access_denied(vid, pid))
-            if present and self._busy_with_device(dev_id):
-                continue              # our own upload is churning the nodes
             # A set: a device with two product ids can list one node twice,
             # and a node counted twice per scan reaches the strike count in
             # two scans instead of three.
@@ -1756,8 +1756,13 @@ class App(ctk.CTk):
                     print(f"[Device] {dev_id}: no access to {described}. "
                           f"The udev rule is missing or has not been applied; "
                           f"see 'USB permissions' in the README.", flush=True)
-            else:
+            elif not denied:
                 # Access is back: drop the notice at once, no counting down.
+                # Only when nothing is shut, though. A node still counting
+                # towards the mark is not the same as access having returned,
+                # and dropping the notice for it would take the warning off
+                # the screen and print it again the moment the node changed
+                # its number, which a pad that re-enumerates does often.
                 self._dev_denied.pop(dev_id, None)
                 self._denied_logged.discard(dev_id)
 
@@ -2436,6 +2441,16 @@ class App(ctk.CTk):
                 p._key_stop.set()
             if hasattr(p, "_anim_stop"):
                 p._anim_stop.set()
+        # The MacroPad's device thread opens the pad in a loop and was never
+        # told to stop, so it kept doing that while the application went away.
+        # It talks hidapi rather than libusb, so it is not the abort the
+        # DisplayPad's worker could cause, but there is no reason to leave it
+        # opening a device nobody is going to read.
+        if hasattr(self, "_macropad_panel"):
+            try:
+                self._macropad_panel._stop_worker()
+            except Exception:
+                pass
         # Stop Everest panel CPU proc if running
         if hasattr(self, "_everest_panel"):
             if hasattr(self, "_everest_panel") and self._everest_panel._cpu_proc \
