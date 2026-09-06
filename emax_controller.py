@@ -1087,7 +1087,9 @@ def controller_loop(style=STYLE_ANALOG):
 
                 # Send all metrics (keyboard shows whichever the wheel selects)
                 for metric_type in range(5):
-                    value = min(int(_smooth[metric_type]), 999)
+                    # One packet byte, so 0-255. Network MB/s is the only
+                    # metric that is not a percentage and can leave that range.
+                    value = max(0, min(int(_smooth[metric_type]), 255))
                     dev.write(EP_OUT, make_packet(0x11, 0x81, metric_type, 0x00, value))
                     _handle_btn_resp(_read(dev, timeout=150))
 
