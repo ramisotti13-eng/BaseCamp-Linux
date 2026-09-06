@@ -65,17 +65,15 @@ Mountain Base Camp is only available on Windows. This project brings full device
 
 ### AppImage (Debian, Ubuntu, Mint, Fedora, Nobara)
 
-Self-contained AppImages, no Python installation required. Both of them live on
-**[release v2.1.0](../../releases/tag/v2.1.0)**, which is why that one is marked
-*Latest* on the releases page even though newer version numbers sit above it. An
-AppImage only has to be rebuilt when something native changes, and nothing
-native has changed since; every release after it is a source patch that the
-application applies to itself.
+Self-contained AppImages, no Python installation required. They live on the
+**[latest release](../../releases/latest)**. Not every release carries them: an
+AppImage only has to be rebuilt when something native changes, and the releases
+in between ship as a source patch that the application applies to itself. If a
+release page has no AppImage, take the newest one that does.
 
-So take the AppImage from v2.1.0 and then let the app bring itself up to date.
-It asks GitHub on startup, offers the newest version in a popup, and a source
-patch is a 200 KB download that installs in a couple of seconds. See
-[Automatic updates](#automatic-updates).
+Then let the app bring itself up to date. It asks GitHub on startup, offers the
+newest version in a popup, and a source patch is a 200 KB download that installs
+in a couple of seconds. See [Automatic updates](#automatic-updates).
 
 | File | Distro |
 |------|--------|
