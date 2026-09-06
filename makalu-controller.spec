@@ -13,6 +13,19 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
+# Remove bloat: system icon themes, locales and themes dragged in from the
+# build host. On a native desktop build the GTK hook pulls in the whole
+# cursor/icon theme set — 380 MB of it in one measured case, which is why the
+# AppImages are built in the container / clean venv. Same filter as in
+# BaseCamp-Linux.spec.
+a.datas = [
+    (dst, src, kind)
+    for dst, src, kind in a.datas
+    if not dst.startswith('share/icons/')
+    and not dst.startswith('share/locale/')
+    and not dst.startswith('share/themes/')
+]
+
 pyz = PYZ(a.pure)
 
 exe = EXE(

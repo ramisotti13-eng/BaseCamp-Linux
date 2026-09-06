@@ -2050,10 +2050,10 @@ class App(ctk.CTk):
         def _run():
             try:
                 import urllib.request
-                # Scan the recent release feed, not /latest, so that v2.0 can
-                # stay pinned as Latest for new downloaders while small source
-                # patches (2.0.x) still surface here. Picks the release with
-                # the highest version number, skipping drafts + prereleases.
+                # Scan the recent release feed rather than /latest: the
+                # Latest marker is a manual pin and is not necessarily the
+                # highest version. Picks the release with the highest version
+                # number, skipping drafts + prereleases.
                 req = urllib.request.Request(
                     "https://api.github.com/repos/ramisotti13-eng/BaseCamp-Linux/releases?per_page=20",
                     headers={"User-Agent": f"BaseCamp-Linux/{APP_VERSION}"})
