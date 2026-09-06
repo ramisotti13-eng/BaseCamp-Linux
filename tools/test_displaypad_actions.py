@@ -36,6 +36,29 @@ os.environ["HOME"] = _TMP_HOME
 
 import gui                                       # noqa: E402
 from devices.displaypad import panel as dpp      # noqa: E402
+from shared.config import (_save_displaypad_buttons,   # noqa: E402
+                           _save_displaypad_pages,
+                           _load_displaypad_buttons,
+                           _load_displaypad_pages)
+
+# A configuration written under the old icon names, before the application is
+# built, so the rename in the panel's own start-up is what is checked and not
+# a hand call to it afterwards (#95). It has to persist what it renames, and
+# that happens while the panel is still being constructed.
+from PIL import Image as _SeedImage               # noqa: E402
+
+os.makedirs(dpp.CONFIG_DIR, exist_ok=True)
+_LEGACY = {
+    "main_folder": os.path.join(dpp.CONFIG_DIR, "dp_folder_2.png"),
+    "main_label": os.path.join(dpp.CONFIG_DIR, "dp_label_0_3.png"),
+    "sub_label": os.path.join(dpp.CONFIG_DIR, "dp_label_5_1.png"),
+}
+for _path in _LEGACY.values():
+    _SeedImage.new("RGB", (102, 102), (9, 9, 9)).save(_path)
+_save_displaypad_buttons({"2": _LEGACY["main_folder"], "3": _LEGACY["main_label"]})
+_save_displaypad_pages({"5": {"v": 2, "fullscreen": None,
+                              "actions": [{"type": "none", "action": ""}] * 12,
+                              "buttons": {"1": _LEGACY["sub_label"]}}})
 
 failures = []
 
@@ -61,6 +84,25 @@ def checks():
     panel = app._displaypad_panel
     app._switch_device("displaypad")
     app.update()
+
+    # ── The rename happened while the panel was starting up (#95) ────────────
+    stored_main = _load_displaypad_buttons()
+    check("the main page's stored paths were rewritten on start-up",
+          stored_main.get("2") == dpp._generated_icon_name("folder", 0, 2)
+          and stored_main.get("3") == dpp._generated_icon_name("label", 0, 3),
+          stored_main)
+    stored_sub = _load_displaypad_pages().get("5", {}).get("buttons", {})
+    check("and so were a sub-page's",
+          stored_sub.get("1") == dpp._generated_icon_name("label", 5, 1),
+          stored_sub)
+    check("the files moved with them",
+          all(os.path.exists(p) for p in
+              (dpp._generated_icon_name("folder", 0, 2),
+               dpp._generated_icon_name("label", 0, 3),
+               dpp._generated_icon_name("label", 5, 1))))
+    check("and none of the old names is left",
+          not any(os.path.exists(p) for p in _LEGACY.values()))
+
 
     ids = dpp.action_type_ids(app)
     labels = dpp.action_type_labels(app)

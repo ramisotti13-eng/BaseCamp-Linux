@@ -51,13 +51,17 @@ def _load_art(url):
     return img
 
 
-def _cover_tile(art, size, darken=0.45):
-    """The cover, filled to a square and dimmed so text stays readable."""
+def _cover_tile(art, size, darken=0.62):
+    """The cover, filled to a square, dimmed by `darken` so text over it stays
+    readable. A key has the title written across it; the card beside the text
+    does not, and asks for 0."""
     w, h = art.size
     side = min(w, h)
     art = art.crop(((w - side) // 2, (h - side) // 2,
                     (w - side) // 2 + side, (h - side) // 2 + side))
     art = art.resize((size, size), Image.LANCZOS)
+    if not darken:
+        return art
     return Image.blend(art, Image.new("RGB", (size, size), (0, 0, 0)), darken)
 
 
@@ -509,9 +513,13 @@ class Plugin:
                 draw.text((16, y), ln, fill=(224, 224, 224), font=font_title)
                 y += 26
 
-            # Artist
+            # Artist, kept inside the text column: with a cover on the right
+            # there is less room than the card is wide.
             if artist:
                 y = max(y + 4, 100)
+                while (draw.textbbox((0, 0), artist, font=font_artist)[2]
+                       > max_text_w and len(artist) > 5):
+                    artist = artist[:-2]
                 draw.text((16, y), artist, fill=(112, 112, 144),
                           font=font_artist)
 
@@ -528,7 +536,10 @@ class Plugin:
             if sym:
                 bbox = draw.textbbox((0, 0), sym, font=font_artist)
                 sw = bbox[2] - bbox[0]
-                draw.text((W - sw - 16, H - 28), sym, fill=sym_color,
+                # Right edge of the text column, which is the card's own edge
+                # only when there is no cover sitting in front of it.
+                right = W - (H if art is not None else 0)
+                draw.text((right - sw - 16, H - 28), sym, fill=sym_color,
                           font=font_artist)
 
             self._thumb_photo = ctk.CTkImage(
@@ -606,7 +617,8 @@ class Plugin:
 
         try:
             S = 102
-            img = (_cover_tile(art, S) if art is not None
+            over_art = art is not None
+            img = (_cover_tile(art, S) if over_art
                    else Image.new("RGB", (S, S), (16, 16, 36)))
             draw = ImageDraw.Draw(img)
             font = self._get_dp_font(11)
@@ -644,7 +656,11 @@ class Plugin:
                 # Truncate if too long
                 while draw.textbbox((0, 0), artist, font=font_sm)[2] > S - 12 and len(artist) > 5:
                     artist = artist[:-2]
-                draw.text((6, y), artist, fill=(100, 100, 140), font=font_sm)
+                # Lighter over a cover: the muted grey the plain background
+                # was built for disappears into a busy picture.
+                draw.text((6, y), artist,
+                          fill=(190, 190, 210) if over_art else (100, 100, 140),
+                          font=font_sm)
 
             # Play/Pause icon bottom
             if status == "Playing":

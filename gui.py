@@ -1736,6 +1736,10 @@ class App(ctk.CTk):
                     denied.extend(_device_access_denied(vid, pid))
             if present and self._busy_with_device(dev_id):
                 continue              # our own upload is churning the nodes
+            # A set: a device with two product ids can list one node twice,
+            # and a node counted twice per scan reaches the strike count in
+            # two scans instead of three.
+            denied = set(denied)
             strikes = self._denied_strikes.setdefault(dev_id, {})
             for node in list(strikes):
                 if node not in denied:
