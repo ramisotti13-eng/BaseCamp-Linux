@@ -14,6 +14,53 @@ except ImportError:
     BORDER = "#2a2a4a"
 
 
+# MPRIS hands over the cover as an address, not a picture: a local file for a
+# player that has one on disk, an http(s) one for a browser. It was being read
+# out of playerctl and then dropped, so nothing ever showed a cover although
+# the plugin's own help says it does (#99). Fetched once per address and kept,
+# because the poll runs every two seconds and the picture does not change in
+# between.
+_ART_CACHE = {}
+_ART_CACHE_MAX = 8
+_ART_MAX_BYTES = 4 * 1024 * 1024
+
+
+def _load_art(url):
+    """The cover for a track, or None if there is not one to be had."""
+    if not url:
+        return None
+    if url in _ART_CACHE:
+        return _ART_CACHE[url]
+    img = None
+    try:
+        if url.startswith("file://"):
+            from urllib.parse import unquote, urlparse
+            img = Image.open(unquote(urlparse(url).path)).convert("RGB")
+        elif url.startswith(("http://", "https://")):
+            import io as _io
+            from urllib.request import urlopen
+            with urlopen(url, timeout=3) as response:
+                data = response.read(_ART_MAX_BYTES + 1)
+            if len(data) <= _ART_MAX_BYTES:
+                img = Image.open(_io.BytesIO(data)).convert("RGB")
+    except Exception:
+        img = None      # no cover is an ordinary answer, not a failure
+    if len(_ART_CACHE) >= _ART_CACHE_MAX:
+        _ART_CACHE.clear()
+    _ART_CACHE[url] = img
+    return img
+
+
+def _cover_tile(art, size, darken=0.45):
+    """The cover, filled to a square and dimmed so text stays readable."""
+    w, h = art.size
+    side = min(w, h)
+    art = art.crop(((w - side) // 2, (h - side) // 2,
+                    (w - side) // 2 + side, (h - side) // 2 + side))
+    art = art.resize((size, size), Image.LANCZOS)
+    return Image.blend(art, Image.new("RGB", (size, size), (0, 0, 0)), darken)
+
+
 def _system_env():
     """Environment for a system tool, without our bundled library paths.
 
@@ -305,6 +352,11 @@ class Plugin:
         while not self._stop.is_set():
             try:
                 info = _get_media_info()
+                if info:
+                    # Here, not in _update_ui: that runs on the interface
+                    # thread and a cover behind an http address would freeze
+                    # the window for as long as the fetch takes.
+                    info["art"] = _load_art(info.get("art_url"))
                 self.ctx.schedule(0, lambda i=info: self._update_ui(i))
                 self._update_displaypad(info)
             except Exception:
@@ -398,7 +450,8 @@ class Plugin:
         player = _player_icon(info.get("player", ""))
 
         # Only regenerate if content changed (not position)
-        thumb_key = f"{title}|{artist}|{status}"
+        art = info.get("art")
+        thumb_key = f"{title}|{artist}|{status}|{art is not None}"
         if getattr(self, "_last_thumb_key", None) == thumb_key:
             return
         self._last_thumb_key = thumb_key
@@ -406,6 +459,9 @@ class Plugin:
         try:
             W, H = 440, 190
             img = Image.new("RGB", (W, H), (22, 22, 46))
+            if art is not None:
+                # Square cover on the right, the text keeps the room it had.
+                img.paste(_cover_tile(art, H, darken=0.0), (W - H, 0))
             draw = ImageDraw.Draw(img)
 
             # Try to find a good font
@@ -432,7 +488,7 @@ class Plugin:
 
             # Title (wrapped)
             y = 16
-            max_text_w = W - 40
+            max_text_w = W - 40 - (H if art is not None else 0)
             words = title.split()
             lines = []
             line = ""
@@ -497,11 +553,16 @@ class Plugin:
         return ImageFont.load_default()
 
     def _find_dp_key(self):
-        """Find which DisplayPad button has 'now_playing' action type assigned."""
+        """Which DisplayPad button carries the 'now_playing' action.
+
+        Through the context, which answers for the page that is on the pad.
+        Reading the stored actions directly meant only the main page was ever
+        looked at, so a key on a sub-page was never found: nothing was drawn
+        on it, and the icon it had before stayed where it was (#99). Same
+        fix the other widget plugins got in #82.
+        """
         try:
-            from shared.config import _load_displaypad_actions
-            actions = _load_displaypad_actions()
-            for i, act in enumerate(actions):
+            for i, act in enumerate(self.ctx.get_displaypad_actions()):
                 if act.get("type") == "now_playing":
                     return i
         except Exception:
@@ -534,15 +595,19 @@ class Plugin:
         pos = info.get("position", 0)
         dur = info.get("duration", 0)
 
-        # Only re-upload when content or status changes (not every 2s for position)
-        dp_key = f"{title}|{status}"
+        # Only re-upload when content or status changes (not every 2s for
+        # position). The cover is part of that: a player can hand over the
+        # track before it has the picture for it.
+        art = info.get("art")
+        dp_key = f"{title}|{status}|{art is not None}"
         if self._dp_last_key == dp_key:
             return
         self._dp_last_key = dp_key
 
         try:
             S = 102
-            img = Image.new("RGB", (S, S), (16, 16, 36))
+            img = (_cover_tile(art, S) if art is not None
+                   else Image.new("RGB", (S, S), (16, 16, 36)))
             draw = ImageDraw.Draw(img)
             font = self._get_dp_font(11)
             font_sm = self._get_dp_font(9)
