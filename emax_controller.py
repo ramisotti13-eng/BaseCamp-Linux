@@ -3,6 +3,8 @@
 import usb.core
 import usb.util
 import datetime
+import errno
+import signal
 import sys
 import os
 import time
@@ -53,19 +55,30 @@ def make_packet(*args):
     return pkt
 
 def _claim(dev):
-    dev._reattach = False
     if dev.is_kernel_driver_active(INTERFACE):
         dev.detach_kernel_driver(INTERFACE)
-        dev._reattach = True
     usb.util.claim_interface(dev, INTERFACE)
 
 def _release(dev):
     usb.util.release_interface(dev, INTERFACE)
-    if getattr(dev, '_reattach', False):
-        try:
-            dev.attach_kernel_driver(INTERFACE)
-        except Exception:
-            pass
+    # usbhid owns this interface when we are not using it, so hand it back
+    # whether or not this process is the one that took it away. A run that
+    # was killed before it could release leaves the interface with no driver
+    # at all, and the next run then sees nothing to reattach and would leave
+    # it that way for good. Reporting a failure matters more than the attempt:
+    # silence here is what let that state survive unnoticed.
+    if getattr(dev, "_no_reattach", False):
+        usb.util.dispose_resources(dev)
+        return
+    try:
+        dev.attach_kernel_driver(INTERFACE)
+    except usb.core.USBError as e:
+        if e.errno != errno.ENOENT:      # ENOENT: no driver wants it, fine
+            print(f"kernel driver not reattached on interface {INTERFACE}: {e}",
+                  file=sys.stderr, flush=True)
+    except Exception as e:
+        print(f"kernel driver not reattached on interface {INTERFACE}: {e}",
+              file=sys.stderr, flush=True)
     usb.util.dispose_resources(dev)
 
 def _get_claimed_device():
@@ -751,7 +764,7 @@ def upload_main_display(image_path, frame=0, activate=False):
     _claim(dev)
     try:
         _upload_main_display_image(dev, img_bytes, activate=activate)
-        dev._reattach = False
+        dev._no_reattach = True   # the upload resets the port, usbhid returns by itself
     finally:
         _release(dev)
 
@@ -768,13 +781,7 @@ def upload_icon(button_idx, image_path, frame=0):
         _upload_icon_image(dev, button_idx, img_bytes)
     finally:
         # Release interface before USB reset to restore numpad
-        usb.util.release_interface(dev, INTERFACE)
-        if getattr(dev, '_reattach', False):
-            try:
-                dev.attach_kernel_driver(INTERFACE)
-            except Exception:
-                pass
-        usb.util.dispose_resources(dev)
+        _release(dev)
 
 def set_icon_once(button_idx, variant, action=None, action_type=0x04):
     dev = usb.core.find(idVendor=VID, idProduct=PID)
@@ -1117,7 +1124,20 @@ def controller_loop(style=STYLE_ANALOG):
 
 # ── CLI ────────────────────────────────────────────────────────────────────
 
+def _exit_on_term(_sig, _frame):
+    """Leave through the normal exit path when the GUI stops us.
+
+    Every caller that stops a controller uses Popen.terminate(), which is
+    SIGTERM, and the default handling for that ends the process where it
+    stands: no `finally`, so the claimed interface is never released and
+    usbhid never gets it back. Turning it into KeyboardInterrupt makes a stop
+    from the application take exactly the path Ctrl-C already took.
+    """
+    raise KeyboardInterrupt
+
+
 def main():
+    signal.signal(signal.SIGTERM, _exit_on_term)
     args = sys.argv[1:]
     mode = "time"
     style_arg = None
@@ -1295,4 +1315,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        # Ctrl-C, or the SIGTERM the application sends. Both are a normal stop
+        # and both have already run the release path on the way out.
+        pass
