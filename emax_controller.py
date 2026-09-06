@@ -3,7 +3,6 @@
 import usb.core
 import usb.util
 import datetime
-import errno
 import signal
 import sys
 import os
@@ -60,7 +59,14 @@ def _claim(dev):
     usb.util.claim_interface(dev, INTERFACE)
 
 def _release(dev):
-    usb.util.release_interface(dev, INTERFACE)
+    try:
+        usb.util.release_interface(dev, INTERFACE)
+    except Exception as e:
+        # A keyboard that has gone away mid-run cannot be released, and that
+        # must not skip the reattach below or escape the caller's `finally`:
+        # this is the one place that hands interface 3 back.
+        print(f"interface {INTERFACE} not released: {e}",
+              file=sys.stderr, flush=True)
     # usbhid owns this interface when we are not using it, so hand it back
     # whether or not this process is the one that took it away. A run that
     # was killed before it could release leaves the interface with no driver
@@ -70,16 +76,42 @@ def _release(dev):
     if getattr(dev, "_no_reattach", False):
         usb.util.dispose_resources(dev)
         return
+    failed = None
     try:
         dev.attach_kernel_driver(INTERFACE)
-    except usb.core.USBError as e:
-        if e.errno != errno.ENOENT:      # ENOENT: no driver wants it, fine
-            print(f"kernel driver not reattached on interface {INTERFACE}: {e}",
-                  file=sys.stderr, flush=True)
     except Exception as e:
-        print(f"kernel driver not reattached on interface {INTERFACE}: {e}",
+        failed = e
+    if failed is not None and not _driver_back(dev):
+        # The attempt failing is not the news; the interface still having no
+        # driver is. A port reset re-enumerates the board and the kernel
+        # binds it again by itself, so the attach comes back "Resource busy"
+        # or "Entity not found" and the interface is nonetheless in the hands
+        # it belongs in. Saying so anyway would be a warning after every
+        # suspend, and warnings nobody can act on are how the real one got
+        # missed for as long as it did.
+        print(f"kernel driver not reattached on interface {INTERFACE}: {failed}",
               file=sys.stderr, flush=True)
     usb.util.dispose_resources(dev)
+
+
+def _driver_back(dev):
+    """True if interface 3 has a kernel driver on it, whoever put it there."""
+    try:
+        return bool(dev.is_kernel_driver_active(INTERFACE))
+    except Exception:
+        # The handle is dead, which is the re-enumeration case: ask sysfs,
+        # which is about the device rather than about this handle.
+        try:
+            for entry in os.listdir("/sys/bus/usb/devices"):
+                path = f"/sys/bus/usb/devices/{entry}:1.{INTERFACE}/driver"
+                if entry.count(":") == 0 and os.path.islink(path):
+                    vid = open(f"/sys/bus/usb/devices/{entry}/idVendor").read()
+                    pid = open(f"/sys/bus/usb/devices/{entry}/idProduct").read()
+                    if vid.strip() == f"{VID:04x}" and pid.strip() == f"{PID:04x}":
+                        return True
+        except OSError:
+            pass
+        return False
 
 def _get_claimed_device():
     """Find keyboard, claim Interface 3 with retries. Returns dev or exits."""
@@ -1145,12 +1177,35 @@ def _exit_on_term(_sig, _frame):
     if _stopping:
         return
     _stopping = True
+    # The application waits for this process on its own interface thread, so
+    # a cleanup that blocks would freeze the window. Only the first signal
+    # raises, so a second one cannot break into the release; this is what
+    # ends the process if the release itself does not come back.
+    try:
+        signal.signal(signal.SIGALRM, signal.SIG_DFL)
+        signal.alarm(5)
+    except Exception:
+        pass
     raise KeyboardInterrupt
 
 
 def main():
+    """Entry point for both ways in.
+
+    The stop has to be caught here rather than under `if __name__ ==
+    "__main__"`: the packaged build runs emax_entry.py, which imports this
+    module and calls main(), so it never reaches that guard. Without it a
+    stop during an upload or an icon write ended with a traceback and a
+    non-zero exit, which the screen reads as the upload having failed.
+    """
     signal.signal(signal.SIGTERM, _exit_on_term)
-    args = sys.argv[1:]
+    try:
+        _run(sys.argv[1:])
+    except KeyboardInterrupt:
+        pass    # Ctrl-C or the stop from the application; both are normal
+
+
+def _run(args):
     mode = "time"
     style_arg = None
     btn_idx = None
@@ -1327,9 +1382,4 @@ def main():
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        # Ctrl-C, or the SIGTERM the application sends. Both are a normal stop
-        # and both have already run the release path on the way out.
-        pass
+    main()

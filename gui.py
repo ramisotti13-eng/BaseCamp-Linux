@@ -1756,13 +1756,19 @@ class App(ctk.CTk):
                     print(f"[Device] {dev_id}: no access to {described}. "
                           f"The udev rule is missing or has not been applied; "
                           f"see 'USB permissions' in the README.", flush=True)
-            elif not denied:
+                continue
+            # Nothing has reached the mark on this scan. Two things must not
+            # happen, and they pull opposite ways: a device already known to
+            # be shut must not have its warning taken down and put back up
+            # every time a node changes its number, which a pad that
+            # re-enumerates does often, and the warning must not go on naming
+            # a node that has since gone or become readable. So the warning
+            # stands while anything at all is shut, and names what is shut
+            # now. Before it has been said once, the count still rules.
+            if dev_id in self._denied_logged and denied:
+                self._dev_denied[dev_id] = sorted(denied)
+            else:
                 # Access is back: drop the notice at once, no counting down.
-                # Only when nothing is shut, though. A node still counting
-                # towards the mark is not the same as access having returned,
-                # and dropping the notice for it would take the warning off
-                # the screen and print it again the moment the node changed
-                # its number, which a pad that re-enumerates does often.
                 self._dev_denied.pop(dev_id, None)
                 self._denied_logged.discard(dev_id)
 

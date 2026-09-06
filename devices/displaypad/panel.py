@@ -2473,8 +2473,11 @@ class DisplayPadPanel(ctk.CTkFrame):
         self._tile_shown = {}     # key idx -> path last drawn
         self._tile_drawn = {}     # key idx -> time.monotonic() of that draw
         self._svc_sync_id = None  # pending widget service sync (#97)
+        # Noted by the plugin threads, drawn by the interface thread, so the
+        # note and the taking of it are under one lock.
+        self._tile_lock = threading.Lock()
         self._tile_dirty = set()  # keys whose picture changed, not yet drawn
-        self._tile_pass_id = None # the one scheduled pass that will draw them
+        self._tile_pass_due = False   # a pass is booked and has not run yet
         # Set the moment the application starts going away, so a worker
         # about to open the device does not do it into an interpreter that
         # is already tearing down: libusb aborts the process on that
@@ -4486,18 +4489,29 @@ class DisplayPadPanel(ctk.CTkFrame):
         # between them, and one scheduled redraw each would put a dozen file
         # reads and resizes a second on the interface thread. One pass draws
         # whatever has piled up.
-        self._tile_dirty.add(idx)
-        if self._tile_pass_id is None:
-            try:
-                self._tile_pass_id = self.after(0, self._draw_dirty_tiles)
-            except Exception:
-                # The window is going away; a tile nobody will see is no loss.
+        with self._tile_lock:
+            self._tile_dirty.add(idx)
+            if self._tile_pass_due:
+                return
+            # Marked before the call, not after it. Tk runs the callback on
+            # its own thread, and it can have run and cleared this again
+            # before after() has even returned here: storing the answer
+            # afterwards would leave a mark for a pass that is already over,
+            # and no pass would ever be asked for again.
+            self._tile_pass_due = True
+        try:
+            self.after(0, self._draw_dirty_tiles)
+        except Exception:
+            # The window is going away; a tile nobody will see is no loss.
+            with self._tile_lock:
+                self._tile_pass_due = False
                 self._tile_dirty.discard(idx)
 
     def _draw_dirty_tiles(self):
         """Redraw every key noted since the last pass."""
-        self._tile_pass_id = None
-        dirty, self._tile_dirty = self._tile_dirty, set()
+        with self._tile_lock:
+            self._tile_pass_due = False
+            dirty, self._tile_dirty = self._tile_dirty, set()
         for idx in sorted(dirty):
             try:
                 self._refresh_panel_tile(idx)
@@ -4658,8 +4672,8 @@ class DisplayPadPanel(ctk.CTkFrame):
         if self._current_page == 0:
             for i, act in enumerate(cur_actions):
                 if act.get("type") == "page":
-                    labeled = self._folder_icon_name(self._current_page, i)
-                    page_btns[str(i)] = labeled if os.path.exists(labeled) else self._folder_icon
+                    labeled = self._folder_icon_drawn(self._current_page, i)
+                    page_btns[str(i)] = labeled or self._folder_icon
                     kept_page_actions[i] = dict(act)
         self._images = {str(i): self._blank_icon for i in range(NUM_KEYS)}
         self._images.update(page_btns)
@@ -4812,6 +4826,8 @@ class DisplayPadPanel(ctk.CTkFrame):
             # sessions don't linger on the device.
             _blank_bgr = b'\x00' * (ICON_SIZE * ICON_SIZE * 3)
             for k in range(NUM_KEYS):
+                if self._closing.is_set():
+                    return      # the application is going, the pad can wait
                 if k not in assigned:
                     _upload_button(usb_dev, hid_dev, k, _blank_bgr)
 
@@ -4833,6 +4849,8 @@ class DisplayPadPanel(ctk.CTkFrame):
 
             total = len(static) + len(animated)
             for n, (key_index, bgr) in enumerate(sorted(static.items())):
+                if self._closing.is_set():
+                    return
                 self.after(0, lambda n=n, k=key_index: self._info_label.configure(
                     text=self.T("dp_uploading_key", k=k+1, n=n+1, total=total), text_color=FG2))
                 _upload_button(usb_dev, hid_dev, key_index, bgr)
@@ -4842,6 +4860,8 @@ class DisplayPadPanel(ctk.CTkFrame):
                 return
 
             for n, (key_index, frames) in enumerate(sorted(animated.items())):
+                if self._closing.is_set():
+                    return
                 self.after(0, lambda n=n+len(static), k=key_index:
                            self._info_label.configure(
                                text=self.T("dp_uploading_key", k=k+1, n=n+1, total=total),

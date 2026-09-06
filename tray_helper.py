@@ -67,6 +67,19 @@ def watch_docked(icon, should_run, poll=_DOCK_POLL_S, sleep=time.sleep):
             docked, gone = True, 0
             continue
         if not docked:
+            # Never docked. That is the ordinary state at login, and also the
+            # state a rebuilt icon lands in when the panel has not come back
+            # yet: pystray logs "Failed to dock icon" and never looks again,
+            # so the icon that was built to replace a lost one is lost too.
+            # A host that has since appeared is the signal to try once more.
+            try:
+                if icon._get_systray_manager() is not None:
+                    print("[Tray] a notification area appeared, docking into it",
+                          file=sys.stderr, flush=True)
+                    icon.stop()
+                    return True
+            except Exception:
+                pass
             continue
         # Two in a row, not one. pystray clears the host window first and
         # only then looks for a new one, so a single look can land inside
@@ -207,8 +220,12 @@ def main():
             if watch_docked_applies(icon):
                 threading.Thread(
                     target=watch_docked,
-                    args=(icon, lambda: (not done.is_set()
-                                         and state["run"] and main_alive())),
+                    # `done` bound here and not looked up later: it is
+                    # rebound at the top of every turn of this loop, and a
+                    # lambda that reads the name would ask the next run's
+                    # event whether this run is over, which it never is.
+                    args=(icon, lambda d=done: (not d.is_set()
+                                                and state["run"] and main_alive())),
                     daemon=True).start()
             icon.run()
         except Exception as e:

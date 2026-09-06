@@ -161,6 +161,9 @@ check("a real denial is not dropped while a new node counts up",
       and "displaypad" in app._dev_denied, (first, again, app._dev_denied))
 check("and it is not announced a second time",
       "displaypad" in app._denied_logged)
+check("but it stops naming the node that has gone",
+      app._dev_denied["displaypad"] == ["/dev/hidraw8"],
+      app._dev_denied["displaypad"])
 scan_with(app, [[]])
 check("but real access ends it", "displaypad" not in app._dev_denied,
       app._dev_denied)

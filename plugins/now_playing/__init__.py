@@ -3,7 +3,7 @@ import subprocess
 import threading
 import os
 import time
-from collections import OrderedDict
+from collections import OrderedDict, namedtuple
 import customtkinter as ctk
 from PIL import Image, ImageDraw, ImageFont
 
@@ -22,51 +22,110 @@ except ImportError:
 # the plugin's own help says it does (#99). Fetched once per address and kept,
 # because the poll runs every two seconds and the picture does not change in
 # between.
-_ART_CACHE = OrderedDict()      # url -> picture, oldest first
-_ART_FAILED = {}                # url -> when the last attempt failed
+_ART_CACHE = OrderedDict()      # url -> _Cover, oldest first
+_ART_FAILED = OrderedDict()     # url -> when the last attempt failed
 _ART_CACHE_MAX = 8
+_ART_FAILED_MAX = 32
 _ART_RETRY_S = 30
 _ART_MAX_BYTES = 4 * 1024 * 1024
+_ART_MAX_PIXELS = 40_000_000    # a cover, not a decompression bomb
+
+
+def _art_host_allowed(url):
+    """False for an address on this machine or this network.
+
+    mpris:artUrl is not the player's own idea: any page playing media sets it
+    through the Media Session API, so it is text a web page chooses and this
+    plugin would fetch on the desktop's behalf, from inside the household
+    network. A cover lives on a public server; an address that resolves onto
+    the loopback or a private range is asking this machine to reach something
+    a web page cannot reach itself, and is refused.
+    """
+    import ipaddress
+    import socket
+    from urllib.parse import urlparse
+    host = urlparse(url).hostname
+    if not host:
+        return False
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except OSError:
+        return False
+    for info in infos:
+        try:
+            addr = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            return False
+        if (addr.is_private or addr.is_loopback or addr.is_link_local
+                or addr.is_reserved or addr.is_multicast or addr.is_unspecified):
+            return False
+    return bool(infos)
+
+
+# The two places a cover is ever drawn: across a key, where the title is
+# written over it, and beside the text on the card, where nothing is.
+_KEY_TILE, _CARD_TILE = 102, 190
+_Cover = namedtuple("_Cover", "key card")
 
 
 def _load_art(url):
-    """The cover for a track, or None if there is not one to be had."""
+    """Both covers for a track, or None if there is none to be had.
+
+    Kept as the two finished tiles rather than the picture they came from:
+    those are the only sizes anything draws, and a player advertising a
+    3000x3000 cover would otherwise pin tens of megabytes per track in a
+    cache that is never let go of.
+    """
     if not url:
         return None
-    if url in _ART_CACHE:
+    cover = _ART_CACHE.get(url)
+    if cover is not None:
         _ART_CACHE.move_to_end(url)
-        return _ART_CACHE[url]
+        return cover
     # A failure is not remembered the way a picture is. A cover behind an
     # http address can fail for a moment, and keeping that answer meant the
     # cover never appeared for that track again however long it played.
     if time.monotonic() - _ART_FAILED.get(url, -_ART_RETRY_S) < _ART_RETRY_S:
         return None
-    img = None
+    art = None
     try:
         if url.startswith("file://"):
             from urllib.parse import unquote, urlparse
-            img = Image.open(unquote(urlparse(url).path)).convert("RGB")
-        elif url.startswith(("http://", "https://")):
+            art = Image.open(unquote(urlparse(url).path))
+        elif url.startswith(("http://", "https://")) and _art_host_allowed(url):
             import io as _io
             from urllib.request import urlopen
             with urlopen(url, timeout=3) as response:
                 data = response.read(_ART_MAX_BYTES + 1)
             if len(data) <= _ART_MAX_BYTES:
-                img = Image.open(_io.BytesIO(data)).convert("RGB")
+                art = Image.open(_io.BytesIO(data))
+        if art is not None:
+            w, h = art.size
+            if w * h > _ART_MAX_PIXELS:
+                art = None      # not a cover, whatever it is
+            else:
+                art = art.convert("RGB")
     except Exception:
-        img = None      # no cover is an ordinary answer, not a failure
-    if img is None:
+        art = None      # no cover is an ordinary answer, not a failure
+    if art is None:
         _ART_FAILED[url] = time.monotonic()
-        if len(_ART_FAILED) > 32:
-            _ART_FAILED.clear()
+        _ART_FAILED.move_to_end(url)
+        while len(_ART_FAILED) > _ART_FAILED_MAX:
+            # The oldest, not all of them: clearing the lot threw away the
+            # entry just written, and the next poll two seconds later tried
+            # the same dead address all over again.
+            _ART_FAILED.popitem(last=False)
         return None
     _ART_FAILED.pop(url, None)
-    _ART_CACHE[url] = img
+    cover = _Cover(key=_cover_tile(art, _KEY_TILE),
+                   card=_cover_tile(art, _CARD_TILE, darken=0.0))
+    art.close()
+    _ART_CACHE[url] = cover
     while len(_ART_CACHE) > _ART_CACHE_MAX:
         # The oldest goes, not all of them: clearing the lot threw away the
         # cover of whatever was playing, which is the one wanted next.
         _ART_CACHE.popitem(last=False)
-    return img
+    return cover
 
 
 def _cover_tile(art, size, darken=0.62):
@@ -381,6 +440,12 @@ class Plugin:
         self._stop.set()               # any predecessor ends here
         stop = threading.Event()
         self._stop = stop
+        # What is on the key and in the card is forgotten too. The panel
+        # restores a key's stored icon while this is stopped, so remembering
+        # what was drawn before means nothing is pushed for the track that
+        # is still playing and the key keeps the icon instead (#99).
+        self._dp_last_key = None
+        self._last_thumb_key = None
         self._thread = threading.Thread(target=self._poll_loop, args=(stop,),
                                         daemon=True)
         self._thread.start()
@@ -497,11 +562,11 @@ class Plugin:
         self._last_thumb_key = thumb_key
 
         try:
-            W, H = 440, 190
+            W, H = 440, _CARD_TILE
             img = Image.new("RGB", (W, H), (22, 22, 46))
             if art is not None:
                 # Square cover on the right, the text keeps the room it had.
-                img.paste(_cover_tile(art, H, darken=0.0), (W - H, 0))
+                img.paste(art.card, (W - H, 0))
             draw = ImageDraw.Draw(img)
 
             # Try to find a good font
@@ -657,7 +722,7 @@ class Plugin:
         try:
             S = 102
             over_art = art is not None
-            img = (_cover_tile(art, S) if over_art
+            img = (art.key.copy() if over_art
                    else Image.new("RGB", (S, S), (16, 16, 36)))
             draw = ImageDraw.Draw(img)
             font = self._get_dp_font(11)

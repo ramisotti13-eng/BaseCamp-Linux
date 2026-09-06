@@ -241,12 +241,48 @@ def checks():
                 _TMP_HOME, "widget-many-%d.png" % key)
             panel.push_plugin_image(key, frame)
         check("nothing is drawn before the pass runs", not redrawn, redrawn)
-        check("and one pass is scheduled, not twelve",
-              panel._tile_pass_id is not None)
+        check("and one pass is booked, not twelve", panel._tile_pass_due)
         app.update()
         check("the pass draws every key that changed",
               sorted(redrawn) == list(range(12)), sorted(redrawn))
-        check("and books no further pass", panel._tile_pass_id is None)
+
+        # The mark goes up before the pass is booked, not after: Tk runs the
+        # callback on its own thread and it can have run and cleared the mark
+        # before after() has even returned, and writing the mark afterwards
+        # would leave one standing for a pass that is over. Nothing would be
+        # drawn again for the rest of the session.
+        app.update()
+        with panel._tile_lock:      # a live widget may have booked one
+            panel._tile_pass_due = False
+            panel._tile_dirty.clear()
+        redrawn.clear()
+        fired = []
+        real_after = panel.after
+
+        def after_that_runs_first(ms, cb=None, *a):
+            # == and not is: each access binds a fresh method object.
+            if cb == panel._draw_dirty_tiles:
+                cb()                    # as if Tk had got there first
+                fired.append(1)
+                return "already-run"
+            return real_after(ms, cb, *a)
+
+        panel.after = after_that_runs_first
+        try:
+            panel._images["4"] = os.path.join(_TMP_HOME, "widget-race.png")
+            panel.push_plugin_image(4, frame)
+        finally:
+            panel.after = real_after
+        check("a pass that runs before it is booked leaves no mark",
+              bool(fired) and not panel._tile_pass_due,
+              "fired=%s due=%s" % (fired, panel._tile_pass_due))
+
+        redrawn.clear()
+        panel._images["5"] = os.path.join(_TMP_HOME, "widget-race-2.png")
+        panel.push_plugin_image(5, frame)
+        app.update()
+        check("so the next change is still drawn", 5 in redrawn, redrawn)
+        check("and books no further pass", not panel._tile_pass_due)
     finally:
         panel._refresh_panel_tile = real_refresh
 

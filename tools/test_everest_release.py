@@ -82,6 +82,66 @@ E._release(dev)
 check("an explicit opt-out is respected", dev.attached == [],
       "attached=%s" % dev.attached)
 
+# A release that cannot happen must not skip the reattach or escape the
+# caller's `finally`: this is the one place that hands interface 3 back.
+class DeadDev(FakeDev):
+    def __init__(self):
+        FakeDev.__init__(self, driver_active=True)
+        self.released = False
+
+
+def _raise(*_a, **_kw):
+    raise OSError("the keyboard went away")
+
+
+dev = DeadDev()
+_real_release = usb.util.release_interface
+usb.util.release_interface = _raise
+try:
+    E._release(dev)
+    check("a release that fails still hands the interface back",
+          dev.attached == [E.INTERFACE], "attached=%s" % dev.attached)
+except Exception as exc:
+    check("a release that fails still hands the interface back", False, repr(exc))
+finally:
+    usb.util.release_interface = _real_release
+
+
+# And the complaint is about the outcome, not the attempt: a port reset
+# re-enumerates the board and the kernel binds it again by itself, so the
+# attach comes back busy while the interface is in exactly the right hands.
+class BusyButBound(FakeDev):
+    def attach_kernel_driver(self, iface):
+        raise OSError("Resource busy")
+
+    def is_kernel_driver_active(self, iface):
+        return True         # the kernel got there first
+
+
+import io as _io                                   # noqa: E402
+import contextlib                                  # noqa: E402
+
+err = _io.StringIO()
+with contextlib.redirect_stderr(err):
+    E._release(BusyButBound(driver_active=True))
+check("a failed attach on an interface that has a driver says nothing",
+      "not reattached" not in err.getvalue(), err.getvalue().strip()[:70])
+
+
+class BusyAndBare(FakeDev):
+    def attach_kernel_driver(self, iface):
+        raise OSError("Resource busy")
+
+    def is_kernel_driver_active(self, iface):
+        return False        # really left without one
+
+
+err = _io.StringIO()
+with contextlib.redirect_stderr(err):
+    E._release(BusyAndBare(driver_active=True))
+check("but an interface really left bare is reported",
+      "not reattached" in err.getvalue(), err.getvalue().strip()[:70])
+
 # SIGTERM has to arrive as the stop Ctrl-C already was.
 child = textwrap.dedent("""
     import os, signal, sys

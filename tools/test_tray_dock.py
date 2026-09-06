@@ -29,16 +29,28 @@ def check(name, ok, detail=""):
 
 
 class XorgIcon:
-    """As much of pystray's Xorg backend as the watcher looks at."""
+    """As much of pystray's Xorg backend as the watcher looks at.
 
-    def __init__(self, managers):
+    `managers` is what the icon holds after each poll; `hosts` is what the
+    display would answer if asked, which is not the same thing: an icon that
+    failed to dock holds nothing while a host is sitting right there.
+    """
+
+    def __init__(self, managers, hosts=None):
         self._managers = list(managers)
+        self._hosts = list(hosts) if hosts is not None else None
+        self._host = None
         self._systray_manager = None
         self.stopped = False
 
     def step(self):
         if self._managers:
             self._systray_manager = self._managers.pop(0)
+        if self._hosts:
+            self._host = self._hosts.pop(0)
+
+    def _get_systray_manager(self):
+        return self._host
 
     def stop(self):
         self.stopped = True
@@ -83,6 +95,14 @@ check("and that icon keeps running", not icon.stopped)
 icon = XorgIcon([None, None, None])
 check("never having been docked is not a loss", run(icon, 3) is False)
 check("and nothing was stopped", not icon.stopped)
+
+# But an icon that never managed to dock, with a host now sitting there, is
+# the dead end a rebuild lands in when the panel is still restarting: pystray
+# logs its failure once and never looks again.
+icon = XorgIcon([None, None, None, None], hosts=[None, None, object(), object()])
+check("a host appearing under an undocked icon ends the run",
+      run(icon, 4) is True)
+check("so a fresh one can dock into it", icon.stopped)
 
 # A host that stays is left alone.
 host = object()

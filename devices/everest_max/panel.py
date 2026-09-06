@@ -38,6 +38,28 @@ STYLES = {"Analog": "analog", "Digital": "digital"}
 # ── EverestMaxPanel ────────────────────────────────────────────────────────────
 
 
+def _wait_for_controller(proc, timeout=8):
+    """Wait for a stopped controller, but never for ever.
+
+    Every stop here runs on the interface thread, and the controller now
+    releases the keyboard on its way out instead of dying where it stands.
+    That release is quick, but it talks to a device that may be mid-reset,
+    so waiting without a bound would freeze the window on it. The controller
+    ends itself after five seconds if its own cleanup does not come back;
+    this is the backstop for that backstop.
+    """
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        print("[Everest] controller did not stop in %ds, killing it" % timeout,
+              file=sys.stderr, flush=True)
+        proc.kill()
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            pass
+
+
 class EverestMaxPanel(ctk.CTkFrame):
     """All Everest Max specific UI, packaged as a CTkFrame."""
 
@@ -726,7 +748,7 @@ class EverestMaxPanel(ctk.CTkFrame):
         was_running = self._cpu_proc and self._cpu_proc.poll() is None
         if was_running:
             self._cpu_proc.terminate()
-            self._cpu_proc.wait()
+            _wait_for_controller(self._cpu_proc)
             self._cpu_proc = None
 
         def cb(ok):
@@ -750,7 +772,7 @@ class EverestMaxPanel(ctk.CTkFrame):
         """Terminate CPU monitor if running. Returns True if it was running."""
         if self._cpu_proc and self._cpu_proc.poll() is None:
             self._cpu_proc.terminate()
-            self._cpu_proc.wait()
+            _wait_for_controller(self._cpu_proc)
             self._cpu_proc = None
             return True
         return False
@@ -863,7 +885,7 @@ class EverestMaxPanel(ctk.CTkFrame):
         was_running = self._cpu_proc and self._cpu_proc.poll() is None
         if was_running:
             self._cpu_proc.terminate()
-            self._cpu_proc.wait()
+            _wait_for_controller(self._cpu_proc)
             self._cpu_proc = None
 
         def run():
@@ -910,7 +932,7 @@ class EverestMaxPanel(ctk.CTkFrame):
         was_running = self._cpu_proc and self._cpu_proc.poll() is None
         if was_running:
             self._cpu_proc.terminate()
-            self._cpu_proc.wait()
+            _wait_for_controller(self._cpu_proc)
             self._cpu_proc = None
         brightness = int(self._zone_bri_sl.get())
         tokens = []
@@ -1140,7 +1162,7 @@ class EverestMaxPanel(ctk.CTkFrame):
         was_running = self._cpu_proc and self._cpu_proc.poll() is None
         if was_running:
             self._cpu_proc.terminate()
-            self._cpu_proc.wait()
+            _wait_for_controller(self._cpu_proc)
             self._cpu_proc = None
 
         def do_upload():
@@ -1180,7 +1202,7 @@ class EverestMaxPanel(ctk.CTkFrame):
         was_running = self._cpu_proc and self._cpu_proc.poll() is None
         if was_running:
             self._cpu_proc.terminate()
-            self._cpu_proc.wait()
+            _wait_for_controller(self._cpu_proc)
             self._cpu_proc = None
 
         just_uploaded  = self._main_just_uploaded
@@ -1227,7 +1249,7 @@ class EverestMaxPanel(ctk.CTkFrame):
         was_running = self._cpu_proc and self._cpu_proc.poll() is None
         if was_running:
             self._cpu_proc.terminate()
-            self._cpu_proc.wait()
+            _wait_for_controller(self._cpu_proc)
             self._cpu_proc = None
 
         need_mode_switch = (self._main_mode != "image")
