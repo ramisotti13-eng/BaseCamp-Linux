@@ -125,6 +125,34 @@ def _get_claimed_device():
             time.sleep(0.5)
     print("Failed to claim interface", file=sys.stderr); sys.exit(1)
 
+
+def _reclaim(dev):
+    """Claim the keyboard again after a USB port reset.
+
+    Suspend/resume resets the port and re-enumerates the board, which leaves
+    the claimed interface dead: every write fails from then on.
+    """
+    try:
+        _release(dev)
+    except Exception:
+        pass
+    for _ in range(20):
+        try:
+            if usb.core.find(idVendor=VID, idProduct=PID) is not None:
+                break
+        except usb.core.USBError:
+            pass  # still settling
+        time.sleep(0.5)
+    dev = _get_claimed_device()  # exits if the keyboard really went away
+    try:
+        dev.write(EP_OUT, make_packet(0x11, 0x12)); _read(dev)
+        dev.write(EP_OUT, make_packet(0x11, 0x14)); _read(dev)
+        print("USB reclaimed after device reset", file=sys.stderr, flush=True)
+    except usb.core.USBError as e:
+        # Board back but not awake yet: keep the handle, the loop retries.
+        print(f"re-init after reclaim failed: {e}", file=sys.stderr, flush=True)
+    return dev
+
 _EMPTY_PKT = bytes(PKT_SIZE)
 
 def _read(dev, timeout=1000):
@@ -932,6 +960,9 @@ def controller_loop(style=STYLE_ANALOG):
         _slow_last = 0  # tracks last update time for RAM/HDD
         # Smoothed metric values (EMA, alpha=0.2)
         _smooth = {0: 0.0, 1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0}
+        _usb_fail = 0
+        # BOOTTIME counts time spent suspended, MONOTONIC does not.
+        _asleep = time.clock_gettime(time.CLOCK_BOOTTIME) - time.monotonic()
 
         def _run_action(btype, action):
             """Execute one button action by type. Issue #17 lets several run in
@@ -1063,6 +1094,13 @@ def controller_loop(style=STYLE_ANALOG):
         while True:
             now = time.monotonic()
 
+            # A jump means the machine was suspended, which reset the port.
+            _asleep_now = time.clock_gettime(time.CLOCK_BOOTTIME) - now
+            if _asleep_now - _asleep > 5:
+                dev = _reclaim(dev)
+                last_time_sync = 0  # the clock stood still while asleep
+            _asleep = _asleep_now
+
             # Re-read button config every 2 seconds
             if now - last_config_check >= 2.0:
                 buttons = read_buttons()
@@ -1126,7 +1164,9 @@ def controller_loop(style=STYLE_ANALOG):
 
                 # Send all metrics (keyboard shows whichever the wheel selects)
                 for metric_type in range(5):
-                    value = min(int(_smooth[metric_type]), 999)
+                    # One packet byte, so 0-255. Network MB/s is the only
+                    # metric that is not a percentage and can leave that range.
+                    value = max(0, min(int(_smooth[metric_type]), 255))
                     dev.write(EP_OUT, make_packet(0x11, 0x81, metric_type, 0x00, value))
                     _handle_btn_resp(_read(dev, timeout=150))
 
@@ -1141,18 +1181,31 @@ def controller_loop(style=STYLE_ANALOG):
                     dev.write(EP_OUT, make_packet(0x11, VOLUME_CMD, 0x00, 0x00,
                                                   vol))
                     _handle_btn_resp(_read(dev, timeout=150))
-            except usb.core.USBError:
-                pass  # Transient USB error — skip this cycle
 
-            # Time sync once per minute
-            if now - last_time_sync >= 60:
-                _send_time_packet(dev, style)
-                last_time_sync = now
+                # Time sync once per minute, in here so a USBError from it
+                # cannot escape and end the loop.
+                if now - last_time_sync >= 60:
+                    _send_time_packet(dev, style)
+                    last_time_sync = now
+                _usb_fail = 0
+            except usb.core.USBError as e:
+                # One bad cycle is transient; every cycle failing means the
+                # handle is dead and wants re-claiming.
+                _usb_fail += 1
+                if _usb_fail == 1:
+                    print(f"USB write failed: {e}", file=sys.stderr, flush=True)
+                if _usb_fail >= 10:
+                    dev = _reclaim(dev)
+                    _usb_fail = 0
+
             time.sleep(CPU_INTERVAL)
     except KeyboardInterrupt:
         pass  # Normal termination via SIGINT
     finally:
-        _release(dev)
+        try:
+            _release(dev)
+        except Exception:
+            pass
 
 # ── CLI ────────────────────────────────────────────────────────────────────
 
