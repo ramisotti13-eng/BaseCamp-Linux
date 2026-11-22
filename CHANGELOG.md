@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [3.2.3] - 2026-11-22
 
 - **Plugin updates are hard to miss now.** 3.2.0 already looked for plugin updates by itself, but said so in a way nobody noticed. The count was a "(2)" behind "Plugins" in the sidebar, in the same dim grey as the name, and the message went by after eight seconds, which with the window in the tray, as after an autostart, was before anybody could have seen it. The Plugins entry now carries a filled blue badge with the number, and the message has a **Show** button that opens the Plugins screen and stays for fifteen seconds; started into the tray, the application keeps it until the window is opened. `tools/test_plugin_updates.py` covers both, the tray case included.
 
