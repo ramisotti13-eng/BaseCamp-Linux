@@ -16,7 +16,12 @@ separate causes, both pinned here:
 
 It needs a display, and no DisplayPad: the editor is Tk widgets over stored
 actions, and it stores them whether or not a pad is plugged in. Its config
-goes to a temporary directory, so running it never touches yours.
+goes to a temporary directory, so running it never touches yours. A stand-in
+takes the pad's place whether one is plugged in or not. With the real one
+looked up, a plugged-in pad was sent the test's pictures (or refused them as
+busy while the application held it), and without one the application left
+the DisplayPad screen part way through, so the checks on widget frames, which
+need the key grid shown, failed.
 """
 import os
 import shutil
@@ -39,10 +44,65 @@ os.environ["XDG_RUNTIME_DIR"] = tempfile.mkdtemp(prefix="basecamp-test-run-")
 
 import gui                                       # noqa: E402
 from devices.displaypad import panel as dpp      # noqa: E402
+from shared import hid_compat                    # noqa: E402
 from shared.config import (_save_displaypad_buttons,   # noqa: E402
                            _save_displaypad_pages,
                            _load_displaypad_buttons,
                            _load_displaypad_pages)
+
+# ── A pad that is always there and never a real one ──────────────────────────
+# The application decides from /sys which device screens it keeps open, the
+# panel finds and talks to the pad through hidapi and pyusb. All of it is
+# answered here.
+_FAKE_PATH = b"/fake/displaypad"
+
+
+class _FakeHid:
+    nonblocking = False
+
+    def read(self, _size, timeout=None):
+        time.sleep((timeout or 0) / 1000.0)
+        return []
+
+    def write(self, data):
+        return len(data)
+
+    def close(self):
+        pass
+
+
+_real_enumerate = hid_compat.enumerate
+_real_open_path = hid_compat.open_path
+
+
+def _fake_enumerate(vid=0, pid=0, *a, **kw):
+    if vid == dpp.VID and pid == dpp.PID:
+        return [{"interface_number": 3, "path": _FAKE_PATH,
+                 "vendor_id": vid, "product_id": pid}]
+    return _real_enumerate(vid, pid, *a, **kw)
+
+
+def _fake_open_path(path, *a, **kw):
+    if path == _FAKE_PATH:
+        return _FakeHid()
+    return _real_open_path(path, *a, **kw)
+
+
+uploads = []
+
+
+def _fake_upload_button(_usb, _hid, key_index, _bgr, key_events=None):
+    uploads.append(key_index)
+
+
+gui._check_usb_presence = lambda vid, pid: (vid, pid) == (dpp.VID, dpp.PID)
+hid_compat.enumerate = _fake_enumerate
+hid_compat.open_path = _fake_open_path
+dpp._open_interfaces = lambda: (object(), _FakeHid())
+dpp._init_device = lambda _hid: None
+dpp._close_interfaces = lambda _usb, _hid: None
+dpp._upload_button = _fake_upload_button
+dpp.DisplayPadPanel._maybe_warn_usb_quirk = lambda self: None
 
 # A configuration written under the old icon names, before the application is
 # built, so the rename in the panel's own start-up is what is checked and not

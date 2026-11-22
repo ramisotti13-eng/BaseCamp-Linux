@@ -14,9 +14,10 @@ widget plugins run against it (from the basecamp-plugins checkout beside this
 one, when there is one), and after each step the memory is compared with what
 the page says each key should carry.
 
-It needs a display, and no DisplayPad. Its config goes to a temporary
-directory, and Monitor Mode is kept from starting, so a keyboard attached to
-the machine is never touched.
+It needs a display, and no DisplayPad: plugged in or not, the application
+sees only the simulated one. Its config goes to a temporary directory, and
+Monitor Mode is kept from starting, so a keyboard attached to the machine is
+never touched.
 """
 import os
 import re
@@ -179,6 +180,12 @@ else:
     dpp._init_device = lambda _hid: None
     dpp._close_interfaces = lambda _usb, _hid: None
     dpp._upload_button = _fake_upload_button
+    # The application keeps a device's screen open only while /sys lists the
+    # device. Without a real pad plugged in it left the DisplayPad screen part
+    # way through, and the checks that need the key grid shown failed. Here it
+    # sees the pad and nothing else; the simulated unplug happens below that,
+    # where the panel looks.
+    gui._check_usb_presence = lambda vid, pid: (vid, pid) == (dpp.VID, dpp.PID)
 if os.environ.get("DPSW_TRACE_SAVE"):
     import shared.config as _cfg
     _real_record = _cfg._save_displaypad_page_record
