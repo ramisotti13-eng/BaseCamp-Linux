@@ -409,8 +409,8 @@
   "pluginmgr_update_badge": "↑ v{ver}",
   "pluginmgr_update_all": "Update all ({n})",
   "pluginmgr_fetch_fail": "Could not load plugins: {err}",
-  "plugin_updates_one": "An update is available for 1 plugin, see Plugins",
-  "plugin_updates_many": "Updates are available for {n} plugins, see Plugins",
+  "plugin_updates_one": "An update is available for 1 plugin",
+  "plugin_updates_many": "Updates are available for {n} plugins",
   "pluginmgr_install_ok": "Plugin installed! Restart to activate.",
   "pluginmgr_install_fail": "Installation failed: {err}",
   "pluginmgr_install_exists": "Plugin already exists: {pid}",
@@ -570,5 +570,6 @@
   "toolkit_notice_title": "CustomTkinter is newer than this version",
   "toolkit_notice_body": "CustomTkinter {ver} is installed, and this version of BaseCamp Linux does not support it fully yet. The dropdowns use CustomTkinter's own menus for now. Update BaseCamp Linux, or install the CustomTkinter version it supports.",
   "toolkit_notice_detail": "Update:  git pull\nOr:  pip install \"customtkinter<{below}\"",
-  "toolkit_notice_ok": "OK"
+  "toolkit_notice_ok": "OK",
+  "plugin_updates_show": "Show"
 }

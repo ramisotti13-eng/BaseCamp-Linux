@@ -277,6 +277,8 @@ class NavItem(ctk.CTkFrame):
         if state is not None:
             self._dot = StatusDot(self, state=state, size=7, bg=self._bg)
             self._dot.pack(side="left", padx=(T.S2, 0))
+        self._badge = None       # see set_badge
+        self._badge_n = 0
 
         self._label = ctk.CTkLabel(
             self, text=text, font=T.font(T.TEXT_XS), text_color=T.FG_DIM,
@@ -341,6 +343,35 @@ class NavItem(ctk.CTkFrame):
             return
         self._label.configure(text=text)
 
+    def set_badge(self, count):
+        """A filled number at the right end of the row, or none for 0.
+
+        For something waiting to be done behind this entry, the plugin updates
+        being the case it was made for. A count in brackets in the label read
+        like part of the name, in the same dim grey, and nobody noticed it.
+        """
+        count = max(0, int(count or 0))
+        self._badge_n = count
+        if not count:
+            if self._badge is not None:
+                self._badge.pack_forget()
+            return
+        if self._badge is None:
+            self._badge = ctk.CTkLabel(
+                self, text="", font=T.font(T.TEXT_XS, bold=True),
+                fg_color=T.ACCENT, text_color=T.ACCENT_TEXT,
+                corner_radius=8, width=20, height=16)
+            for seq, fn in (("<Button-1>", self._on_click),
+                            ("<Enter>", self._on_enter),
+                            ("<Leave>", self._on_leave)):
+                self._badge.bind(seq, fn)
+        self._badge.configure(text=str(count) if count < 100 else "99+")
+        if not self._badge.winfo_ismapped():
+            self._badge.pack(side="right", padx=(0, T.S3), before=self._label)
+
+    def badge(self):
+        return self._badge_n
+
     def set_state(self, state):
         if self._dot is not None:
             self._dot.set_state(state)
@@ -382,7 +413,9 @@ class Toast(ctk.CTkFrame):
 
     _EDGE = {"ok": T.OK, "warn": T.WARN, "bad": T.DANGER, "info": T.ACCENT}
 
-    def __init__(self, parent, text, kind="info", ms=3500, **kw):
+    def __init__(self, parent, text, kind="info", ms=3500, action=None, **kw):
+        """`action` is (label, callback): a button that does the obvious next
+        thing and closes the message."""
         kw.setdefault("fg_color", T.SURFACE)
         kw.setdefault("corner_radius", T.RADIUS)
         kw.setdefault("border_width", T.BORDER_W)
@@ -393,6 +426,14 @@ class Toast(ctk.CTkFrame):
         ctk.CTkLabel(self, text=text, font=T.font(T.TEXT_XS), text_color=T.FG,
                      anchor="w", justify="left", wraplength=520).pack(
             side="left", padx=T.S3, pady=T.S3)
+        if action:
+            label, callback = action
+
+            def run():
+                self._close()
+                callback()
+            PrimaryButton(self, label, run, width=90).pack(
+                side="left", padx=(0, T.S3), pady=T.S2)
         self.place(relx=0.5, rely=1.0, anchor="s", y=-T.S4)
         self.lift()
         self.after(ms, self._close)

@@ -2439,16 +2439,60 @@ class App(ctk.CTk):
         self._plugin_update_count = count
         item = getattr(self, "_nav_items", {}).get("plugins")
         if item is not None:
-            item.set_text(f"Plugins ({count})" if count else "Plugins")
+            item.set_badge(count)
         if announce and count > self._plugin_updates_told:
-            self.toast(self.T("plugin_updates_one") if count == 1
-                       else self.T("plugin_updates_many", n=count),
-                       kind="info", ms=8000)
+            self._announce_plugin_updates(count)
         self._plugin_updates_told = count if announce else min(
             self._plugin_updates_told, count)
 
-    def toast(self, text, kind="info", ms=3500):
-        """Say something briefly, over the current screen.
+    def _announce_plugin_updates(self, count):
+        """Say that plugins have updates, with a button to the Plugins screen.
+
+        Only to someone who can see it. Started by autostart the window sits in
+        the tray, and a message shown there now is gone before anybody opens
+        it, which is how the 3.2.0 one went unnoticed. It waits for the window
+        then, and says the count as it is by that time.
+        """
+        if self._showing_on_screen():
+            self._plugin_notice_waiting = False
+            self.toast(self.T("plugin_updates_one") if count == 1
+                       else self.T("plugin_updates_many", n=count),
+                       kind="info", ms=15000,
+                       action=(self.T("plugin_updates_show"),
+                               lambda: self._switch_device("plugins")))
+            return
+        if not getattr(self, "_plugin_notice_waiting", False):
+            self._plugin_notice_waiting = True
+            self.bind("<Map>", self._plugin_notice_on_map, add="+")
+
+    def _showing_on_screen(self):
+        try:
+            return bool(self.winfo_viewable()) and self.state() == "normal"
+        except tk.TclError:
+            return False
+
+    def _plugin_notice_on_map(self, event):
+        # Every widget's <Map> passes through the window's bindings; only the
+        # window itself coming up counts.
+        if event.widget is not self or not getattr(self, "_plugin_notice_waiting", False):
+            return
+        # Once it is drawn, so the message lands on the screen rather than
+        # under it while the window is still being laid out.
+        self.after(600, self._plugin_notice_now)
+
+    def _plugin_notice_now(self):
+        if not getattr(self, "_plugin_notice_waiting", False):
+            return
+        count = getattr(self, "_plugin_update_count", 0)
+        if not count:
+            self._plugin_notice_waiting = False
+            return
+        if self._showing_on_screen():
+            self._announce_plugin_updates(count)
+
+    def toast(self, text, kind="info", ms=3500, action=None):
+        """Say something briefly, over the current screen. `action` is
+        (label, callback) for a button on the message.
 
         Panels used to keep a coloured label in their layout for this, which
         took a row permanently and kept the last message on screen for the
@@ -2457,7 +2501,7 @@ class App(ctk.CTk):
         if not text:
             return
         try:
-            UI.Toast(self._panel_area, text, kind=kind, ms=ms)
+            UI.Toast(self._panel_area, text, kind=kind, ms=ms, action=action)
         except Exception:
             pass
 

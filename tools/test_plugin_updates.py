@@ -80,7 +80,7 @@ plp._download_repo = _fake_download
 app = gui.App()
 app.geometry("1200x800")
 toasts = []
-app.toast = lambda text, kind="info", ms=3500: toasts.append(text)
+app.toast = lambda text, kind="info", ms=3500, action=None: toasts.append((text, action))
 
 
 def pump(seconds):
@@ -96,21 +96,42 @@ def checks():
     check("the bundled Now Playing is installed", installed is not None, installed)
 
     # The application's own look, without the Plugins screen ever opened.
+    # Started into the tray, as autostart does: a message now would be
+    # shown to nobody.
+    app.withdraw()
+    pump(0.3)
     app._on_plugins_fetched(plp.fetch_plugin_index(), announce=True)
-    nav = app._nav_items["plugins"]._label.cget("text")
-    check("the sidebar counts the update", nav == "Plugins (1)", nav)
-    check("and it is said once", len(toasts) == 1, toasts)
+    nav_item = app._nav_items["plugins"]
+    check("the sidebar shows the count as a badge beside Plugins",
+          nav_item.badge() == 1 and nav_item._label.cget("text") == "Plugins",
+          (nav_item.badge(), nav_item._label.cget("text")))
+    check("nothing is said while the window is in the tray", toasts == [], toasts)
+    app.deiconify()
+    pump(1.0)
+    check("it is said once the window is opened", len(toasts) == 1, toasts)
+    text, action = toasts[0] if toasts else ("", None)
+    check("with a button that leads to the Plugins screen",
+          action is not None and action[0] == app.T("plugin_updates_show"), action)
+    check("the badge is drawn", nav_item._badge is not None
+          and nav_item._badge.winfo_ismapped())
     app._on_plugins_fetched(plp.fetch_plugin_index(), announce=True)
     check("but not again for the same update", len(toasts) == 1, toasts)
+    if action:
+        action[1]()
+        pump(0.5)
+    check("and the button opens it", app._active_device == "plugins",
+          app._active_device)
+    app._switch_device("macros")
+    pump(0.3)
 
     # The screen's own fetch reports to the sidebar as well.
-    nav_item = app._nav_items["plugins"]
-    nav_item.set_text("Plugins")
+    nav_item.set_badge(0)
     app._switch_device("plugins")
-    pump(1.5)
     panel = app._panels["plugins"]
+    panel._fetch_available()        # built by the button above, so ask again
+    pump(1.5)
     check("the Plugins screen's own fetch reaches the sidebar",
-          nav_item._label.cget("text") == "Plugins (1)", nav_item._label.cget("text"))
+          nav_item.badge() == 1, nav_item.badge())
     check("the list marks the plugin with an update",
           panel._has_update("now_playing", pm._manifests["now_playing"]) is not None)
     btn = panel._update_all_btn
@@ -130,8 +151,9 @@ def checks():
     check("and the button goes once nothing is left to update",
           not panel._update_all_btn.winfo_ismapped())
     app._on_plugins_fetched(plp.fetch_plugin_index())
-    nav = app._nav_items["plugins"]._label.cget("text")
-    check("the sidebar count goes with it", nav == "Plugins", nav)
+    check("the badge goes with it", nav_item.badge() == 0
+          and not (nav_item._badge and nav_item._badge.winfo_ismapped()),
+          nav_item.badge())
 
 
 def run():
