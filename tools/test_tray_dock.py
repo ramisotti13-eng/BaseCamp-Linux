@@ -133,6 +133,36 @@ check("the Xorg backend is watched",
 check("the AppIndicator backend is not",
       not tray_helper.watch_docked_applies(AppIndicatorIcon()))
 
+# pystray reports the undocked state itself, with a full traceback, every
+# time it looks while the notification area is away; a screen saver on GNOME
+# brings three of them (#110). The helper says so in one line of its own, so
+# that report is left out, and nothing else pystray says.
+import io                                          # noqa: E402
+import logging                                     # noqa: E402
+
+_buf = io.StringIO()
+_handler = logging.StreamHandler(_buf)
+_log = logging.getLogger("pystray._base")
+_log.addHandler(_handler)
+try:
+    try:
+        assert None
+    except AssertionError:
+        _log.error("Failed to dock icon", exc_info=True)
+    check("the undocked report is not printed (#110)",
+          "Failed to dock icon" not in _buf.getvalue(), _buf.getvalue()[:60])
+    try:
+        raise RuntimeError("display gone")
+    except RuntimeError:
+        _log.error("Failed to dock icon", exc_info=True)
+    check("a dock failure of any other kind still is",
+          "display gone" in _buf.getvalue(), _buf.getvalue()[:60])
+    _log.warning("something else")
+    check("and so is anything else pystray says",
+          "something else" in _buf.getvalue(), _buf.getvalue()[-40:])
+finally:
+    _log.removeHandler(_handler)
+
 print()
 if failures:
     print("%d check(s) failed:" % len(failures))

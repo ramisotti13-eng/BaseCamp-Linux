@@ -19,9 +19,31 @@ The logic lives in main() so a thin frozen entry (tray_entry.py) can import it,
 which lets the source overlay replace this file for live updates (issue #20
 follow-up). Run directly (`python tray_helper.py <pid> [lang.json]`) still works.
 """
-import sys, os, signal, json, threading, time
+import sys, os, signal, json, threading, time, logging
 import pystray
 from PIL import Image
+
+
+class _UndockedReport(logging.Filter):
+    """Leave out pystray's report of the one state this helper handles.
+
+    While the notification area is away (a screen saver on GNOME takes it
+    with it), every handler pystray runs finds the icon undocked and logs
+    "Failed to dock icon" with a full traceback, three of them for one
+    screen saver (#110). Nothing is wrong that is not being dealt with:
+    watch_docked notices the same thing and says so in one line, and docks
+    again when the area is back. Only that report goes, with that cause; a
+    dock failure of any other kind, and anything else pystray says, is
+    still printed.
+    """
+
+    def filter(self, record):
+        exc = record.exc_info[1] if record.exc_info else None
+        return not (record.getMessage() == "Failed to dock icon"
+                    and isinstance(exc, AssertionError))
+
+
+logging.getLogger("pystray._base").addFilter(_UndockedReport())
 
 # How often to ask whether the icon is still docked. It takes two answers in
 # a row for the icon to be rebuilt, so the notification area may be gone for
