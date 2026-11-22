@@ -495,6 +495,12 @@ def hidden_scenario():
     panel._refresh_panel_tile = counted
     try:
         app.withdraw()
+        # Counted from the moment Tk knows the window is gone, not from the
+        # call: a tile drawn in the milliseconds between is no work saved or
+        # lost, and counting it made this check fail now and then.
+        yield from wait_until(lambda: not panel._grid_on_screen(), 2)
+        yield 0.2
+        del calls[:]
         yield 3.5                       # the clock pushes about three times
         hidden = list(calls)
         app.deiconify()
