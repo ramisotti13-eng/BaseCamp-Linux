@@ -901,10 +901,14 @@ class App(ctk.CTk):
         # on the release, otherwise we fall back to AppImage.
         self._update_kind = ""
         self.after(2000, self._check_for_update)
-        # Plugin update count is filled in by PluginManagerPanel after its
-        # background fetch (which runs unconditionally on app start) — it
-        # calls back into _on_plugins_fetched to decorate the sidebar button.
+        # Which installed plugins have a newer published version. Asked for
+        # here, a little after start and then twice a day: the Plugins screen
+        # is only built when someone opens it, so leaving it to that screen
+        # meant nobody heard about an update they did not go looking for
+        # (#103). The screen reports what it fetches through the same door.
         self._plugin_update_count = 0
+        self._plugin_updates_told = 0
+        self.after(15000, self._check_plugin_updates)
 
     # ── subprocess command builder ────────────────────────────────────────────
 
@@ -2363,30 +2367,44 @@ class App(ctk.CTk):
             pass
         self.destroy()
 
-    def _on_plugins_fetched(self, plugins):
-        """Called by PluginManagerPanel after a successful plugins.json fetch.
-        Counts published versions newer than installed and decorates the
-        Plugins switcher button so users see updates without opening the panel."""
-        def _version_tuple(s):
-            parts = []
-            for p in str(s or "").lstrip("v").split("."):
-                num = "".join(c for c in p if c.isdigit())
-                parts.append(int(num) if num else 0)
-            return tuple(parts) or (0,)
+    _PLUGIN_CHECK_MS = 12 * 3600 * 1000
 
-        count = 0
-        pm = self._plugin_manager
-        for pinfo in plugins or []:
-            pid = pinfo.get("id")
-            if not pid or pid not in pm._manifests:
-                continue
-            if _version_tuple(pinfo.get("version", "0")) > \
-               _version_tuple(pm._manifests[pid].get("version", "0")):
-                count += 1
+    def _check_plugin_updates(self):
+        """Ask the plugin index, off the interface thread, and again later."""
+        import threading
+        from devices.plugins.panel import fetch_plugin_index
+
+        def run():
+            try:
+                plugins = fetch_plugin_index()
+            except Exception:
+                return          # no network now; the next round asks again
+            try:
+                self.after(0, lambda: self._on_plugins_fetched(plugins, announce=True))
+            except (tk.TclError, RuntimeError):
+                pass
+        threading.Thread(target=run, daemon=True).start()
+        try:
+            self.after(self._PLUGIN_CHECK_MS, self._check_plugin_updates)
+        except tk.TclError:
+            pass
+
+    def _on_plugins_fetched(self, plugins, announce=False):
+        """The published plugins have been fetched: count the installed ones
+        with a newer version and show it on the Plugins entry in the sidebar.
+        With `announce`, say so once as well, for updates not mentioned yet."""
+        from devices.plugins.panel import updates_for
+        count = len(updates_for(plugins, self._plugin_manager._manifests))
         self._plugin_update_count = count
         item = getattr(self, "_nav_items", {}).get("plugins")
         if item is not None:
             item.set_text(f"Plugins ({count})" if count else "Plugins")
+        if announce and count > self._plugin_updates_told:
+            self.toast(self.T("plugin_updates_one") if count == 1
+                       else self.T("plugin_updates_many", n=count),
+                       kind="info", ms=8000)
+        self._plugin_updates_told = count if announce else min(
+            self._plugin_updates_told, count)
 
     def toast(self, text, kind="info", ms=3500):
         """Say something briefly, over the current screen.

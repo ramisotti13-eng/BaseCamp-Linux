@@ -203,10 +203,12 @@ def DangerButton(parent, text, command=None, **kw):
 
 class StatusDot(tk.Canvas):
     """A drawn state mark, not a character. `state` is one of ok, warn, bad,
-    off. Drawn so it cannot turn into a missing-glyph box on a system without
-    an emoji font, and so it stays the same size at every font scaling."""
+    off, update. Drawn so it cannot turn into a missing-glyph box on a system
+    without an emoji font, and so it stays the same size at every font
+    scaling."""
 
-    _COLORS = {"ok": T.OK, "warn": T.WARN, "bad": T.DANGER, "off": T.LINE}
+    _COLORS = {"ok": T.OK, "warn": T.WARN, "bad": T.DANGER, "off": T.LINE,
+               "update": T.ACCENT}
 
     def __init__(self, parent, state="off", size=8, bg=None, **kw):
         super().__init__(parent, width=size, height=size, highlightthickness=0,

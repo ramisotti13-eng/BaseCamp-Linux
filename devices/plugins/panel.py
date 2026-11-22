@@ -50,6 +50,80 @@ def _version_tuple(s):
     return tuple(parts) or (0,)
 
 
+def fetch_plugin_index(timeout=8):
+    """The published plugins, from the index in the plugins repository.
+
+    Used by this screen and by the application's own check at start-up, which
+    runs whether or not this screen is ever opened (#103)."""
+    req = urllib.request.Request(_PLUGINS_INDEX_URL)
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        data = json.loads(resp.read())
+    return data.get("plugins", []) if isinstance(data, dict) else []
+
+
+def updates_for(plugins, manifests):
+    """The published entries newer than what is installed, by id."""
+    out = {}
+    for pinfo in plugins or []:
+        pid = pinfo.get("id")
+        if pid in manifests and _version_tuple(pinfo.get("version", "0")) > \
+                _version_tuple(manifests[pid].get("version", "0")):
+            out[pid] = pinfo
+    return out
+
+
+def _download_repo(url):
+    """Fetch the repository a plugin URL points into, as one zip.
+
+    Returns (temporary directory, extracted root, path inside the repo). The
+    caller removes the directory. All published plugins live in one
+    repository, which is what lets an update of several share one download.
+    """
+    url = url.rstrip("/")
+    parts = url.split("github.com/", 1)[1].split("/")
+    owner = parts[0]
+    repo = parts[1] if len(parts) > 1 else ""
+    branch = "main"
+    subpath = ""
+    if len(parts) > 3 and parts[2] == "tree":
+        branch = parts[3]
+        subpath = "/".join(parts[4:]) if len(parts) > 4 else ""
+    zip_url = f"https://github.com/{owner}/{repo}/archive/refs/heads/{branch}.zip"
+    tmp = tempfile.mkdtemp()
+    zip_path = os.path.join(tmp, "repo.zip")
+    req = urllib.request.Request(zip_url)
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        with open(zip_path, "wb") as f:
+            f.write(resp.read())
+    with zipfile.ZipFile(zip_path) as zf:
+        zf.extractall(tmp)
+    return tmp, os.path.join(tmp, f"{repo}-{branch}"), subpath
+
+
+def _repo_branch_path(url):
+    """(repository URL, branch, path inside it) of a plugin URL."""
+    url = url.rstrip("/")
+    if "/tree/" not in url:
+        return url, "main", ""
+    repo, rest = url.split("/tree/", 1)
+    branch, _, sub = rest.partition("/")
+    return repo, branch, sub
+
+
+def _plugin_dir_in(extracted_root, subpath):
+    """Where in an extracted repository the plugin is."""
+    if subpath:
+        return os.path.join(extracted_root, subpath)
+    if os.path.isfile(os.path.join(extracted_root, "plugin.json")):
+        return extracted_root
+    for d in os.listdir(extracted_root):
+        candidate = os.path.join(extracted_root, d)
+        if os.path.isdir(candidate) and os.path.isfile(
+                os.path.join(candidate, "plugin.json")):
+            return candidate
+    raise FileNotFoundError("No plugin.json found in repository")
+
+
 class PluginManagerPanel(ctk.CTkFrame):
 
     def __init__(self, parent, app):
@@ -110,6 +184,10 @@ class PluginManagerPanel(ctk.CTkFrame):
         self._count_lbl = ctk.CTkLabel(head, text="", font=(UI.FONT_FAMILY, 10),
                                        text_color=FG2)
         self._count_lbl.pack(side="right")
+        # Shown only while there is something to update (#103): one press for
+        # all of them, rather than selecting each plugin to find its button.
+        self._update_all_btn = UI.PrimaryButton(left, "", self._update_all,
+                                                height=UI.CTRL_H_SM)
 
         self._list_frame = ctk.CTkFrame(left, fg_color="transparent")
         self._list_frame.pack(fill="x")
@@ -222,6 +300,13 @@ class PluginManagerPanel(ctk.CTkFrame):
         active = sum(1 for p in manifests if pm.is_loaded(p))
         self._count_lbl.configure(
             text=self.T("pluginmgr_count", total=total, active=active))
+        pending = updates_for(self._available, manifests)
+        if pending and not getattr(self, "_updating_all", False):
+            self._update_all_btn.configure(
+                text=self.T("pluginmgr_update_all", n=len(pending)), state="normal")
+            self._update_all_btn.pack(fill="x", pady=(0, 6), before=self._list_frame)
+        elif not getattr(self, "_updating_all", False):
+            self._update_all_btn.pack_forget()
         if self._selected is None or self._selected[0] not in manifests:
             self._select(sorted(manifests)[0], True)
         else:
@@ -247,7 +332,9 @@ class PluginManagerPanel(ctk.CTkFrame):
                 state = "info"
             else:
                 state = "ok"
-            dot = UI.StatusDot(row, state="ok" if state == "info" else state,
+            # An update used to be worked out here and then drawn as the same
+            # green as everything else, so the list never showed it (#103).
+            dot = UI.StatusDot(row, state="update" if state == "info" else state,
                                size=7, bg=BG2 if selected else BG)
             dot.pack(side="left", padx=(8, 6))
             dot.bind("<Button-1>", lambda _e, p=pid: self._select(p, True))
@@ -265,8 +352,15 @@ class PluginManagerPanel(ctk.CTkFrame):
                             text_color=FG if selected else FG2, anchor="w")
         name.pack(side="left", fill="x", expand=True,
                   padx=(8 if not installed else 0, 4))
-        ver = ctk.CTkLabel(row, text=f"v{info.get('version', '')}",
-                           font=(UI.FONT_FAMILY, 9), text_color=FG_FAINT)
+        newer = self._has_update(pid, info) if installed else None
+        if newer:
+            ver = ctk.CTkLabel(row, text=self.T("pluginmgr_update_badge",
+                                                ver=newer.get("version", "")),
+                               font=(UI.FONT_FAMILY, 9, "bold"),
+                               text_color=UI.ACCENT)
+        else:
+            ver = ctk.CTkLabel(row, text=f"v{info.get('version', '')}",
+                               font=(UI.FONT_FAMILY, 9), text_color=FG_FAINT)
         ver.pack(side="right", padx=8)
         for w in (row, name, ver):
             w.bind("<Button-1>", lambda _e, p=pid, i=installed: self._select(p, i))
@@ -547,10 +641,7 @@ class PluginManagerPanel(ctk.CTkFrame):
 
     def _do_fetch_available(self):
         try:
-            req = urllib.request.Request(_PLUGINS_INDEX_URL)
-            with urllib.request.urlopen(req, timeout=8) as resp:
-                data = json.loads(resp.read())
-            plugins = data.get("plugins", [])
+            plugins = fetch_plugin_index()
             self.after(0, lambda: self._show_available(plugins))
         except Exception as e:
             # Bind e as a default — Python clears the `except` variable at block
@@ -572,8 +663,10 @@ class PluginManagerPanel(ctk.CTkFrame):
                          anchor="w").pack(fill="x", pady=4)
         for pinfo in rows:
             self._list_row(self._avail_list, pinfo["id"], pinfo, installed=False)
-        self._app._refresh_plugin_update_count() if hasattr(
-            self._app, "_refresh_plugin_update_count") else None
+        # The sidebar's count. This called a method by a name the application
+        # does not have, so the count never reached the sidebar (#103).
+        if hasattr(self._app, "_on_plugins_fetched"):
+            self._app._on_plugins_fetched(self._available)
         self._populate()
 
     def _show_available_error(self, err):
@@ -581,7 +674,7 @@ class PluginManagerPanel(ctk.CTkFrame):
         for w in self._avail_list.winfo_children():
             w.destroy()
         ctk.CTkLabel(
-            self._avail_list, text=f"Could not load plugins: {err}",
+            self._avail_list, text=self.T("pluginmgr_fetch_fail", err=err),
             font=(UI.FONT_FAMILY, 9), text_color=RED
         ).pack(pady=8)
 
@@ -603,6 +696,50 @@ class PluginManagerPanel(ctk.CTkFrame):
                          args=(url, pinfo), daemon=True).start()
 
     # ── Install logic ────────────────────────────────────────────────────────
+
+    def _update_all(self):
+        """Every installed plugin with a newer published version, from one
+        download per repository, put in place one after another (#103)."""
+        pending = updates_for(self._available, self._app._plugin_manager._manifests)
+        if not pending or getattr(self, "_updating_all", False):
+            return
+        self._updating_all = True
+        self._update_all_btn.configure(text=self.T("pluginmgr_installing"),
+                                       state="disabled")
+        by_source = {}       # (repository, branch) -> entries, one download each
+        for pinfo in pending.values():
+            url = pinfo.get("url", "")
+            if url:
+                repo, branch, _sub = _repo_branch_path(url)
+                by_source.setdefault((repo, branch), []).append(pinfo)
+
+        def run():
+            failed = []
+            for plugins in by_source.values():
+                try:
+                    tmp, root, _sub = _download_repo(plugins[0]["url"])
+                except Exception as e:
+                    failed.append(str(e))
+                    continue
+                for pinfo in plugins:
+                    try:
+                        folder = _plugin_dir_in(
+                            root, _repo_branch_path(pinfo["url"])[2])
+                    except Exception as e:
+                        failed.append(f"{pinfo.get('id')}: {e}")
+                        continue
+                    self.after(0, lambda d=folder: self._install_from_folder(d, True))
+                self.after(5000, lambda t=tmp: shutil.rmtree(t, ignore_errors=True))
+            self.after(0, lambda: self._update_all_done(failed))
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _update_all_done(self, failed):
+        self._updating_all = False
+        if failed:
+            self._restart_lbl.configure(
+                text=self.T("pluginmgr_install_fail", err="; ".join(failed)))
+        self._populate()
 
     def _browse_folder(self):
         from tkinter import filedialog
@@ -680,45 +817,8 @@ class PluginManagerPanel(ctk.CTkFrame):
 
     def _install_from_github(self, url, pinfo=None):
         try:
-            url = url.rstrip("/")
-            parts = url.split("github.com/", 1)[1].split("/")
-            owner = parts[0]
-            repo = parts[1] if len(parts) > 1 else ""
-            branch = "main"
-            subpath = ""
-
-            if len(parts) > 3 and parts[2] == "tree":
-                branch = parts[3]
-                subpath = "/".join(parts[4:]) if len(parts) > 4 else ""
-
-            zip_url = f"https://github.com/{owner}/{repo}/archive/refs/heads/{branch}.zip"
-            tmp = tempfile.mkdtemp()
-            zip_path = os.path.join(tmp, "repo.zip")
-
-            req = urllib.request.Request(zip_url)
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                with open(zip_path, "wb") as f:
-                    f.write(resp.read())
-
-            with zipfile.ZipFile(zip_path) as zf:
-                zf.extractall(tmp)
-
-            extracted_root = os.path.join(tmp, f"{repo}-{branch}")
-            if subpath:
-                plugin_dir = os.path.join(extracted_root, subpath)
-            else:
-                if os.path.isfile(os.path.join(extracted_root, "plugin.json")):
-                    plugin_dir = extracted_root
-                else:
-                    plugin_dir = None
-                    for d in os.listdir(extracted_root):
-                        candidate = os.path.join(extracted_root, d)
-                        if os.path.isdir(candidate) and os.path.isfile(
-                                os.path.join(candidate, "plugin.json")):
-                            plugin_dir = candidate
-                            break
-                    if not plugin_dir:
-                        raise FileNotFoundError("No plugin.json found in repository")
+            tmp, extracted_root, subpath = _download_repo(url)
+            plugin_dir = _plugin_dir_in(extracted_root, subpath)
 
             from_browser = pinfo is not None
             self.after(0, lambda: self._install_from_folder(plugin_dir, from_browser))
