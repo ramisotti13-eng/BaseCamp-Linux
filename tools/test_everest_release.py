@@ -197,6 +197,59 @@ done = subprocess.run([sys.executable, "-c", child], capture_output=True,
 check("only the first SIGTERM raises", done.returncode == 0,
       "raised %s" % (done.stdout.strip() or done.stderr.strip()[-60:]))
 
+# A claim that never succeeds ends the run, and its first try detached the
+# kernel driver: leaving like that took interface 3 from usbhid until the
+# next run (#114 made the retries longer, which made the case no rarer).
+class NeverClaims(FakeDev):
+    pass
+
+
+_never = NeverClaims(driver_active=True)
+_real_find, _real_claim, _real_sleep = E.usb.core.find, usb.util.claim_interface, E.time.sleep
+
+
+def _refuse(dev, i):
+    raise E.usb.core.USBError("Resource busy")
+
+
+E.usb.core.find = lambda **kw: _never
+usb.util.claim_interface = _refuse
+E.time.sleep = lambda _s: None
+try:
+    with contextlib.redirect_stderr(_io.StringIO()):
+        E._get_claimed_device()
+    check("a claim that never succeeds exits", False, "returned")
+except SystemExit as exc:
+    check("a claim that never succeeds exits", exc.code == 1, exc.code)
+finally:
+    E.usb.core.find, usb.util.claim_interface, E.time.sleep = \
+        _real_find, _real_claim, _real_sleep
+check("but gives interface 3 back to usbhid first",
+      _never.attached == [E.INTERFACE] and _never.driver_active,
+      "attached=%s" % _never.attached)
+
+# Unless it never took it: a claim refused because the running Monitor Mode
+# holds the interface is not this run's to hand back, and libusb reports an
+# interface another process holds as having no kernel driver.
+E._detached = False
+_held = NeverClaims(driver_active=False)
+E.usb.core.find = lambda **kw: _held
+usb.util.claim_interface = _refuse
+E.time.sleep = lambda _s: None
+err = _io.StringIO()
+try:
+    with contextlib.redirect_stderr(err):
+        E._get_claimed_device()
+except SystemExit:
+    pass
+finally:
+    E.usb.core.find, usb.util.claim_interface, E.time.sleep = \
+        _real_find, _real_claim, _real_sleep
+check("an interface another process holds is left alone",
+      _held.attached == [] and "not reattached" not in err.getvalue(),
+      "attached=%s %s" % (_held.attached, err.getvalue().strip()[-60:]))
+
+
 # And main() is where that handler goes on, so every mode gets it.
 import inspect                                    # noqa: E402
 src = inspect.getsource(E.main)

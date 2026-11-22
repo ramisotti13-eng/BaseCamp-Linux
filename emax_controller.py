@@ -53,9 +53,14 @@ def make_packet(*args):
         pkt[i] = v
     return pkt
 
+_detached = False   # this run took interface 3 away from usbhid
+
+
 def _claim(dev):
+    global _detached
     if dev.is_kernel_driver_active(INTERFACE):
         dev.detach_kernel_driver(INTERFACE)
+        _detached = True
     usb.util.claim_interface(dev, INTERFACE)
 
 def _release(dev, expect_gone=False):
@@ -141,6 +146,13 @@ def _get_claimed_device():
                 dev = usb.core.find(idVendor=VID, idProduct=PID) or dev
             except usb.core.USBError:
                 pass  # still settling, as in _reclaim; next try uses the old one
+    # A try that detached usbhid from interface 3 before its claim failed
+    # left it with no driver, and nothing after this exit would give it back.
+    # Only then, though: refused because the running Monitor Mode holds the
+    # interface, it is not ours to touch. _release says so if it cannot; the
+    # release itself is expected to fail, nothing is held.
+    if _detached:
+        _release(dev, expect_gone=True)
     print("Failed to claim interface", file=sys.stderr); sys.exit(1)
 
 
