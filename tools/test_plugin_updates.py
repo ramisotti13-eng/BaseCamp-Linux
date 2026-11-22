@@ -30,6 +30,7 @@ os.environ["HOME"] = _TMP_HOME
 _RUN = tempfile.mkdtemp(prefix="plupd-", dir="/tmp")
 os.environ["XDG_RUNTIME_DIR"] = _RUN
 
+import customtkinter as ctk                         # noqa: E402
 import gui                                          # noqa: E402
 from devices.everest_max import panel as emp        # noqa: E402
 from devices.plugins import panel as plp            # noqa: E402
@@ -58,18 +59,21 @@ plp.fetch_plugin_index = lambda timeout=8: [dict(p) for p in INDEX]
 # The repository as a download would unpack it: the newer Now Playing.
 _REPO = tempfile.mkdtemp(prefix="plupd-repo-")
 downloads = []
+PUBLISHED = {"version": "9.9"}
+_ZIPS = []      # a single install clears its download after five seconds
 
 
 def _fake_download(url):
     downloads.append(url)
     tmp = tempfile.mkdtemp(prefix="plupd-zip-")
+    _ZIPS.append(tmp)
     root = os.path.join(tmp, "plugins-main")
     src = os.path.join(gui.__file__.rsplit("/", 1)[0], "plugins", "now_playing")
     shutil.copytree(src, os.path.join(root, "now_playing"))
     manifest = os.path.join(root, "now_playing", "plugin.json")
     with open(manifest) as f:
         data = json.load(f)
-    data["version"] = "9.9"
+    data["version"] = PUBLISHED["version"]
     with open(manifest, "w") as f:
         json.dump(data, f)
     return tmp, root, "now_playing"
@@ -155,6 +159,124 @@ def checks():
           and not (nav_item._badge and nav_item._badge.winfo_ismapped()),
           nav_item.badge())
 
+    # An update that cannot be put in place says so, and names the plugin.
+    # The folder of a plugin someone works on is often a link to their own
+    # checkout, which the update cannot remove: Update all said nothing then,
+    # and the old version went on running (#105).
+    dest = os.path.join(plp._PLUGINS_DIR, "now_playing")
+    own = os.path.join(_REPO, "own_now_playing")
+    shutil.copytree(dest, own)
+    shutil.rmtree(dest)
+    os.symlink(own, dest)
+    PUBLISHED["version"] = "10.0"
+    INDEX[0]["version"] = "10.0"
+    panel._restart_lbl.configure(text="")
+    panel._fetch_available()
+    pump(1.5)
+    panel._update_all()
+    end = time.time() + 6
+    while time.time() < end and getattr(panel, "_updating_all", False):
+        app.update()
+        time.sleep(0.05)
+    pump(0.5)
+    fail = app.T("pluginmgr_install_fail", err="")
+    msg = panel._restart_lbl.cget("text")
+    check("an update that cannot be put in place says so", fail in msg, msg)
+    check("and names the plugin", "Now Playing" in msg, msg)
+    check("and the link, and where it leads", "now_playing" in msg
+          and "own_now_playing" in msg and "Errno" not in msg, msg)
+    check("the installed version is left as it was",
+          pm._manifests.get("now_playing", {}).get("version") == "9.9",
+          pm._manifests.get("now_playing", {}).get("version"))
+    check("and so is the link", os.path.islink(dest)
+          and os.path.isfile(os.path.join(own, "plugin.json")))
+    check("Update all is offered again", panel._update_all_btn.winfo_ismapped()
+          and panel._update_all_btn.cget("state") == "normal",
+          panel._update_all_btn.cget("text"))
+
+    # The plugin's own Update button said nothing either.
+    panel._restart_lbl.configure(text="")
+    panel._install_available(dict(INDEX[0]))
+    end = time.time() + 6
+    while time.time() < end and not panel._restart_lbl.cget("text"):
+        app.update()
+        time.sleep(0.05)
+    msg = panel._restart_lbl.cget("text")
+    check("so does the plugin's own Update button",
+          fail in msg and "Now Playing" in msg, msg)
+
+    # A second copy of the plugin under another folder name is the one that
+    # gets loaded when its name sorts later; an update beside it changes
+    # nothing that runs, and has to say so instead of reporting success.
+    os.unlink(dest)
+    shutil.copytree(own, dest)
+    twin = os.path.join(plp._PLUGINS_DIR, "zz_now_playing_copy")
+    shutil.copytree(own, twin)
+    pm.discover()
+    panel._restart_lbl.configure(text="")
+    panel._update_all()
+    end = time.time() + 6
+    while time.time() < end and getattr(panel, "_updating_all", False):
+        app.update()
+        time.sleep(0.05)
+    pump(0.5)
+    msg = panel._restart_lbl.cget("text")
+    check("a copy elsewhere that runs instead is named",
+          fail in msg and "zz_now_playing_copy" in msg, msg)
+    shutil.rmtree(twin)
+    pm.discover()
+
+    # A copy whose version was raised by hand is never offered the published
+    # one: FransM's Pipe Text said 2.0, the published one 1.2.3, and the old
+    # code ran on without a word (#105). Said beside the plugin, with a way
+    # back, but not pushed through the sidebar or Update all.
+    with open(os.path.join(dest, "plugin.json")) as f:
+        data = json.load(f)
+    data["version"] = "99.0"
+    with open(os.path.join(dest, "plugin.json"), "w") as f:
+        json.dump(data, f)
+    pm.discover()
+    panel._restart_lbl.configure(text="")
+    panel._fetch_available()
+    pump(1.5)
+    panel._select("now_playing", True)
+    pump(0.3)
+
+    def texts(widget):
+        out = []
+        for w in widget.winfo_children():
+            try:
+                out.append((w, w.cget("text")))
+            except Exception:
+                pass
+            out += texts(w)
+        return out
+
+    shown = texts(panel._detail)
+    note = app.T("pluginmgr_newer_installed", have="99.0", pub="10.0")
+    back = app.T("pluginmgr_install_published", ver="10.0")
+    check("a higher installed version is pointed out beside the plugin",
+          any(t == note for _w, t in shown), [t for _w, t in shown][:6])
+    buttons = [w for w, t in shown if t == back and isinstance(w, ctk.CTkButton)]
+    check("with a button for the published version", len(buttons) == 1,
+          [t for _w, t in shown][:8])
+    app._on_plugins_fetched(plp.fetch_plugin_index())
+    check("but neither the sidebar nor Update all count it",
+          nav_item.badge() == 0 and not panel._update_all_btn.winfo_ismapped(),
+          nav_item.badge())
+    if buttons:
+        buttons[0].invoke()
+        end = time.time() + 6
+        while time.time() < end and pm._manifests.get("now_playing", {}).get("version") != "10.0":
+            app.update()
+            time.sleep(0.05)
+        pump(0.5)
+    check("the button puts the published version in place",
+          pm._manifests.get("now_playing", {}).get("version") == "10.0",
+          pm._manifests.get("now_playing", {}).get("version"))
+    check("and the note goes with it",
+          not any(t == note for _w, t in texts(panel._detail)))
+
 
 def run():
     try:
@@ -169,7 +291,7 @@ def run():
 
 app.after(1500, run)
 app.mainloop()
-for d in (_TMP_HOME, _RUN, _REPO):
+for d in [_TMP_HOME, _RUN, _REPO] + _ZIPS:
     shutil.rmtree(d, ignore_errors=True)
 print()
 if failures:

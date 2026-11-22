@@ -72,6 +72,14 @@ def updates_for(plugins, manifests):
     return out
 
 
+def _home_short(path):
+    """A path as it is shown: the home directory as ~."""
+    home = os.path.expanduser("~")
+    if path == home or path.startswith(home + os.sep):
+        return "~" + path[len(home):]
+    return path
+
+
 def _download_repo(url):
     """Fetch the repository a plugin URL points into, as one zip.
 
@@ -156,6 +164,18 @@ class PluginManagerPanel(ctk.CTkFrame):
         installed_ver = _version_tuple(installed_info.get("version", "0"))
         avail_ver     = _version_tuple(avail.get("version", "0"))
         return avail if avail_ver > installed_ver else None
+
+    def _published_older(self, pid, installed_info):
+        """The published pinfo when the installed copy claims a higher
+        version, else None. A version raised by hand, often left over from
+        when someone wrote the plugin themselves, hid every later update
+        without a word (#105)."""
+        avail = self._available_info(pid)
+        if not avail:
+            return None
+        installed_ver = _version_tuple(installed_info.get("version", "0"))
+        avail_ver     = _version_tuple(avail.get("version", "0"))
+        return avail if avail_ver < installed_ver else None
 
     # ── UI ────────────────────────────────────────────────────────────────────
 
@@ -446,6 +466,25 @@ class PluginManagerPanel(ctk.CTkFrame):
                              lambda p=update_info: self._install_available(p),
                              width=130, height=UI.CTRL_H_SM).pack(side="right",
                                                                   padx=10, pady=6)
+        # Said here only, not in the sidebar or by Update all: someone working
+        # on their own copy raises its version on purpose and is not to be
+        # pressed to throw it away.
+        older = self._published_older(pid, info) if installed else None
+        if older:
+            box = ctk.CTkFrame(self._detail, fg_color=BG2, corner_radius=6,
+                               border_width=1, border_color=YLW)
+            box.pack(fill="x", pady=(10, 0))
+            ctk.CTkLabel(box, text=self.T("pluginmgr_newer_installed",
+                                          have=info.get("version", ""),
+                                          pub=older.get("version", "")),
+                         font=(UI.FONT_FAMILY, 11), text_color=FG, anchor="w",
+                         justify="left", wraplength=560).pack(fill="x", padx=10,
+                                                              pady=(8, 4))
+            UI.GhostButton(box, self.T("pluginmgr_install_published",
+                                       ver=older.get("version", "")),
+                           lambda p=older: self._install_available(p),
+                           width=150, height=UI.CTRL_H_SM).pack(anchor="w",
+                                                                padx=10, pady=(0, 8))
 
         body = ctk.CTkFrame(self._detail, fg_color="transparent")
         body.pack(fill="x", pady=(10, 0))
@@ -715,30 +754,48 @@ class PluginManagerPanel(ctk.CTkFrame):
 
         def run():
             failed = []
+            folders = []
+            temps = []
             for plugins in by_source.values():
                 try:
                     tmp, root, _sub = _download_repo(plugins[0]["url"])
                 except Exception as e:
                     failed.append(str(e))
                     continue
+                temps.append(tmp)
                 for pinfo in plugins:
                     try:
-                        folder = _plugin_dir_in(
-                            root, _repo_branch_path(pinfo["url"])[2])
+                        folders.append(_plugin_dir_in(
+                            root, _repo_branch_path(pinfo["url"])[2]))
                     except Exception as e:
-                        failed.append(f"{pinfo.get('id')}: {e}")
-                        continue
-                    self.after(0, lambda d=folder: self._install_from_folder(d, True))
-                self.after(5000, lambda t=tmp: shutil.rmtree(t, ignore_errors=True))
-            self.after(0, lambda: self._update_all_done(failed))
+                        failed.append(f"{pinfo.get('name') or pinfo.get('id')}: {e}")
+            self.after(0, lambda: self._update_all_install(folders, failed, temps))
 
         threading.Thread(target=run, daemon=True).start()
 
-    def _update_all_done(self, failed):
+    def _update_all_install(self, folders, failed, temps):
+        """Put the downloaded plugins in place, one after another, and say
+        which could not be. Each install wrote its own line under the list
+        and a failed one wrote nothing at all, so an update that could not
+        replace a folder left the old version running without a word (#105)."""
+        installed = 0
+        for folder in folders:
+            err = self._install_from_folder(folder, True)
+            if err:
+                failed.append(err)
+            else:
+                installed += 1
+        for tmp in temps:
+            shutil.rmtree(tmp, ignore_errors=True)
+        self._update_all_done(failed, installed)
+
+    def _update_all_done(self, failed, installed=0):
         self._updating_all = False
         if failed:
-            self._restart_lbl.configure(
-                text=self.T("pluginmgr_install_fail", err="; ".join(failed)))
+            text = self.T("pluginmgr_install_fail", err="; ".join(failed))
+            if installed:
+                text = self.T("pluginmgr_install_ok") + "\n" + text
+            self._restart_lbl.configure(text=text)
         self._populate()
 
     def _browse_folder(self):
@@ -767,27 +824,34 @@ class PluginManagerPanel(ctk.CTkFrame):
                 text_color=RED)
 
     def _install_from_folder(self, src, from_browser=False):
+        """Put the plugin in folder `src` in place of the installed one.
+
+        Returns None once it is the copy that runs, otherwise what went wrong,
+        beginning with the plugin's name. From the Plugins list (Install,
+        Update, Update all) that went nowhere, so an update that could not
+        remove the old folder (a link to someone's own checkout, files they
+        may not delete) left the old version running without a word (#105).
+        """
+        label = os.path.basename(os.path.normpath(src))
         try:
             manifest_path = os.path.join(src, "plugin.json")
             if not os.path.isfile(manifest_path):
-                msg = self.T("pluginmgr_install_fail", err="No plugin.json found")
-                if not from_browser:
-                    self._install_status.configure(text=msg, text_color=RED)
-                    self._install_btn.configure(state="normal")
-                return False
-
+                raise ValueError("No plugin.json found")
             with open(manifest_path) as f:
                 manifest = json.load(f)
             pid = manifest.get("id", "")
+            label = manifest.get("name") or pid or label
             if not pid:
-                msg = self.T("pluginmgr_install_fail", err="No id in plugin.json")
-                if not from_browser:
-                    self._install_status.configure(text=msg, text_color=RED)
-                    self._install_btn.configure(state="normal")
-                return False
+                raise ValueError("No id in plugin.json")
 
             dest = os.path.join(_PLUGINS_DIR, pid)
-            if os.path.exists(dest):
+            if os.path.islink(dest):
+                # Most likely someone's own checkout. Python refuses to remove
+                # through a link anyway, with a message that says nothing.
+                raise RuntimeError(self.T(
+                    "pluginmgr_is_link", path=_home_short(dest),
+                    target=_home_short(os.path.realpath(dest))))
+            if os.path.lexists(dest):
                 shutil.rmtree(dest)
 
             shutil.copytree(src, dest)
@@ -795,25 +859,34 @@ class PluginManagerPanel(ctk.CTkFrame):
             if os.path.isdir(cache):
                 shutil.rmtree(cache)
 
-            self._restart_lbl.configure(text=self.T("pluginmgr_install_ok"))
-            if not from_browser:
-                self._install_status.configure(
-                    text=self.T("pluginmgr_install_ok"), text_color=GRN)
-                self._install_btn.configure(state="normal")
-
-            self._app._plugin_manager.discover()
-            self._populate()
-            # Refresh available list to show "Installed"
-            self._show_available(self._available)
-            return True
-
+            # Another folder with the same id, later in the alphabet, is the
+            # one the manager keeps, and the update beside it changes nothing.
+            pm = self._app._plugin_manager
+            pm.discover()
+            runs = pm._manifests.get(pid, {}).get("_path", "")
+            if runs and os.path.abspath(runs) != os.path.abspath(dest):
+                raise RuntimeError(self.T("pluginmgr_other_copy",
+                                          path=_home_short(runs)))
         except Exception as e:
-            if not from_browser:
-                self._install_status.configure(
-                    text=self.T("pluginmgr_install_fail", err=str(e)),
-                    text_color=RED)
+            err = f"{label}: {e}"
+            msg = self.T("pluginmgr_install_fail", err=err)
+            if from_browser:
+                self._restart_lbl.configure(text=msg)
+            else:
+                self._install_status.configure(text=msg, text_color=RED)
                 self._install_btn.configure(state="normal")
-            return False
+            # Rebuilt, so that a button left at "..." is a button again.
+            self._show_available(self._available)
+            return err
+
+        self._restart_lbl.configure(text=self.T("pluginmgr_install_ok"))
+        if not from_browser:
+            self._install_status.configure(
+                text=self.T("pluginmgr_install_ok"), text_color=GRN)
+            self._install_btn.configure(state="normal")
+        # Refresh available list to show "Installed"
+        self._show_available(self._available)
+        return None
 
     def _install_from_github(self, url, pinfo=None):
         try:
