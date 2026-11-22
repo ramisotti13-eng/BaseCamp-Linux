@@ -59,6 +59,13 @@ STYLES = {"Analog": "analog", "Digital": "digital"}
 
 # ── Shared modules ─────────────────────────────────────────────────────────────
 
+# Before anything goes online. The AppImage's OpenSSL looks for certificates
+# where the machine it was built on keeps them; on Arch, Debian and openSUSE
+# that is nowhere, and the update check and the plugin list failed without a
+# word. See shared/tls.py.
+from shared.tls import ensure_ca_bundle
+ensure_ca_bundle()
+
 from shared.config import (
     _real_home, CONFIG_DIR,
     STYLE_FILE, BUTTON_FILE, OBS_FILE, OBS_BACKUP_FILE, MAIN_MODE_FILE,

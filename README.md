@@ -114,7 +114,7 @@ USB permissions still need to be set up once (see below).
 paru -S basecamp-linux
 ```
 
-The udev rule is installed automatically. Just unplug and replug the keyboard after installation.
+The udev rule is installed automatically. Just unplug and replug the keyboard after installation. Updates come through the app itself, see [Automatic updates](#automatic-updates).
 
 ---
 
@@ -772,7 +772,7 @@ Click "Update now" and the app downloads the new version in the background with 
 
 Source updates are verified against a SHA-256 checksum that ships alongside the tarball on the GitHub release. A tarball without a published checksum is treated as suspect, and a checksum mismatch aborts the install before anything is extracted. The extraction itself uses Python's `tarfile.data_filter`, which refuses path-traversal entries, symlinks pointing outside the destination, and setuid bits.
 
-If you installed via AUR or from source, the popup does not appear since those workflows have their own update mechanism (`yay -Syu basecamp-linux` and `git pull` respectively). The sidebar still names the new version so you know there is something to pull.
+The AUR package installs the AppImage, so it gets the popup and the source patches like any other AppImage install. `paru -Syu` only brings something when a new AppImage is published, and pacman goes on showing the version of the AppImage it installed, not the one you run. From source the popup does not appear, since `git pull` is the update there; the sidebar still names the new version so you know there is something to pull.
 
 ### File picker
 
@@ -798,6 +798,16 @@ Save that as `~/.config/autostart/basecamp-linux.desktop`. If you installed from
 ---
 
 ## Troubleshooting
+
+### No update ever shows up (Arch, openSUSE and others)
+
+Up to 3.2.0 the AppImage could not make HTTPS connections on distributions that keep their certificates somewhere else than Fedora does: the update check failed without a word, and the plugin list stayed empty. 3.2.1 fixes that, but an older AppImage cannot fetch 3.2.1 by itself. Start it once like this and take the update it then offers:
+
+```bash
+SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt ./BaseCamp-Linux-x86_64-fedora.AppImage
+```
+
+On openSUSE the file is `/etc/ssl/ca-bundle.pem`. The AUR package does this for you from 3.1.4-2 on.
 
 ### Keyboard Firmware
 
