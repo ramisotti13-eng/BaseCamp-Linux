@@ -2639,6 +2639,13 @@ class DisplayPadPanel(ctk.CTkFrame):
         # note and the taking of it are under one lock.
         self._tile_lock = threading.Lock()
         self._tile_dirty = set()  # keys whose picture changed, not yet drawn
+        # Tiles left undrawn while nobody could see the grid (#105), drawn
+        # once it shows: this panel being packed again, or the window coming
+        # back from the tray. A toplevel binding fires for its descendants
+        # too, which is what catches the window, and costs a flag check.
+        self._tiles_waiting = False
+        self.bind("<Map>", self._on_grid_mapped, add="+")
+        self.winfo_toplevel().bind("<Map>", self._on_grid_mapped, add="+")
         self._tile_pass_due = False   # a pass is booked and has not run yet
         # Set the moment the application starts going away, so a worker
         # about to open the device does not do it into an interpreter that
@@ -4757,12 +4764,43 @@ class DisplayPadPanel(ctk.CTkFrame):
             self._tile_pass_due = False
             dirty, self._tile_dirty = self._tile_dirty, set()
         owned = self._plugin_key_slots()
+        for idx in dirty:
+            self._drop_foreign_frame(idx, owned)
+        if not self._grid_on_screen():
+            # A clock with seconds redrew its tile every second, reading and
+            # scaling a file each time, with the window in the tray (#105).
+            # What changed is remembered, and drawn once when it shows.
+            with self._tile_lock:
+                self._tile_dirty |= dirty
+            self._tiles_waiting = True
+            return
         for idx in sorted(dirty):
             try:
-                self._drop_foreign_frame(idx, owned)
                 self._refresh_panel_tile(idx)
             except Exception:
                 pass
+
+    def _grid_on_screen(self):
+        """Whether the key grid can be seen: this screen is the one shown and
+        the window is neither in the tray nor minimised."""
+        try:
+            return bool(self.winfo_viewable())
+        except Exception:
+            return False
+
+    def _on_grid_mapped(self, _event=None):
+        if not self._tiles_waiting:
+            return
+        self._tiles_waiting = False
+        with self._tile_lock:
+            if self._tile_pass_due or not self._tile_dirty:
+                return
+            self._tile_pass_due = True
+        try:
+            self.after(0, self._draw_dirty_tiles)
+        except Exception:
+            with self._tile_lock:
+                self._tile_pass_due = False
 
     def _drop_foreign_frame(self, idx, owned=None):
         """Give key `idx` its icon back if the live map holds a widget frame
@@ -4995,6 +5033,11 @@ class DisplayPadPanel(ctk.CTkFrame):
     def _gui_tick(self):
         if not self._gui_frames_sm:
             self._gui_tick_id = None
+            return
+        if not self._grid_on_screen():
+            # The GIF previews animate thirty times a second for nobody while
+            # the grid cannot be seen (#105). Look in again now and then.
+            self._gui_tick_id = self.after(500, self._gui_tick)
             return
         now = time.monotonic()
         for k, frames in self._gui_frames_sm.items():

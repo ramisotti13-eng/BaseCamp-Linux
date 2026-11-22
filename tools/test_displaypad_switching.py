@@ -480,6 +480,32 @@ def scenario():
     ok = yield from wait_until(lambda: not pad_matches(MAIN), 10)
     check("and Main comes back whole after it", ok, pad_matches(MAIN))
 
+    yield from hidden_scenario()
+
+
+def hidden_scenario():
+    """Nothing is drawn for a grid nobody can see (#105)."""
+    calls = []
+    real = panel._refresh_panel_tile
+
+    def counted(idx):
+        calls.append(idx)
+        return real(idx)
+
+    panel._refresh_panel_tile = counted
+    try:
+        app.withdraw()
+        yield 3.5                       # the clock pushes about three times
+        hidden = list(calls)
+        app.deiconify()
+        ok = yield from wait_until(lambda: 1 in calls[len(hidden):], 4)
+        check("no key tile is redrawn while the window is hidden (#105)",
+              hidden == [], hidden)
+        check("and the clock's tile is brought up to date when it shows again",
+              ok, calls[len(hidden):])
+    finally:
+        panel._refresh_panel_tile = real
+
 
 def _finish():
     try:
