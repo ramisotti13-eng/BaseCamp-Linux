@@ -25,7 +25,7 @@ from shared.ui_helpers import (
     BG, BG2, BG3, FG, FG2, BLUE, YLW, GRN, RED, BORDER, cap_scroll_speed,
     native_open_image, native_open_folder, parse_desktop_apps,
     pick_dp_library_image, pick_dp_fullscreen_image,
-    attach_clipboard_menu,
+    attach_clipboard_menu, menu_order,
 )
 from shared.config import (
     CONFIG_DIR,
@@ -723,44 +723,48 @@ _PANEL_TILE   = 84   # key tile on the screen (was 48 in the old column)
 _TILE_REDRAW_MIN = 0.5
 _INSPECTOR_W  = 236  # width of the key inspector beside the grid
 
+def _action_type_entries(app, include_page=True):
+    """(id, label) pairs of the action menu, in menu order.
+
+    None first, since it is what a key starts as and how one is cleared. Then
+    the built-in actions and, below a separator, the plugins', each by name in
+    the language the interface is in (#109). They came in the order they had
+    been written, which with a dozen plugin actions meant reading the whole
+    list to find one.
+
+    Ids and labels come from here together, because the menu is matched back
+    to an id by position and two lists kept in step by hand would drift.
+    """
+    ids = [t for t in _ACTION_TYPES if include_page or t != "page"]
+
+    def label(tid):
+        return "OBS" if tid == "obs" else app.T(f"action_type_{tid}")
+
+    entries = [(ids[0], label(ids[0]))]
+    entries += sorted(((t, label(t)) for t in ids[1:]),
+                      key=lambda e: menu_order(e[1]))
+    pm = getattr(app, "_plugin_manager", None)
+    if pm:
+        plugin = sorted(pm.get_action_type_labels(), key=lambda e: menu_order(e[1]))
+        if plugin:
+            entries.append(("_separator", "-- Plugins --"))
+            entries.extend(plugin)
+    return entries
+
+
 def action_type_ids(app, include_page=True):
-    """Internal action type ids in menu order, plugin types appended.
+    """Internal action type ids in menu order, plugin types after a separator.
 
     Lives at module level because the actions dialog and the key inspector in
     the panel show the same menu, and two copies of this list would drift the
     first time a plugin type is added.
     """
-    base = list(_ACTION_TYPES) if include_page else [t for t in _ACTION_TYPES
-                                                     if t != "page"]
-    pm = getattr(app, "_plugin_manager", None)
-    if pm:
-        plugin_ids = pm.get_action_type_ids()
-        if plugin_ids:
-            base.append("_separator")
-            base.extend(plugin_ids)
-    return base
+    return [tid for tid, _label in _action_type_entries(app, include_page)]
 
 
 def action_type_labels(app, include_page=True):
     """Translated labels, index-aligned with action_type_ids()."""
-    labels = [app.T("action_type_none"), app.T("action_type_shell"),
-              app.T("action_type_url"), app.T("action_type_folder"),
-              app.T("action_type_app")]
-    if include_page:
-        labels.append(app.T("action_type_page"))
-    labels.append("OBS")
-    labels.append(app.T("action_type_macro"))
-    labels.append(app.T("action_type_keypress"))
-    labels.append(app.T("action_type_text"))
-    labels.append(app.T("action_type_set_key"))
-    pm = getattr(app, "_plugin_manager", None)
-    if pm:
-        plugin_labels = pm.get_action_type_labels()
-        if plugin_labels:
-            labels.append("-- Plugins --")
-            for _tid, lbl in plugin_labels:
-                labels.append(lbl)
-    return labels
+    return [lbl for _tid, lbl in _action_type_entries(app, include_page)]
 
 
 class DisplayPadImageDialog(ctk.CTkToplevel):
@@ -1986,13 +1990,6 @@ class DisplayPadActionsDialog(ctk.CTkToplevel):
         # always include it — matching what _load_page built the dropdown with.
         # Using the shorter (no-page) list here would make selecting 'Switch page'
         # on a sub-page fail to resolve and silently reset the key to 'none'.
-        if label == "── Plugins ──":
-            cur = self._act_type[idx].get()
-            labels = self._type_labels(include_page=True)
-            types = self._get_action_types(include_page=True)
-            if cur in types:
-                self._type_menus[idx].set(labels[types.index(cur)])
-            return
         old_type = self._act_type[idx].get()
         types = self._get_action_types(include_page=True)
         labels = self._type_labels(include_page=True)
@@ -2000,6 +1997,12 @@ class DisplayPadActionsDialog(ctk.CTkToplevel):
             internal = types[labels.index(label)]
         except (ValueError, IndexError):
             internal = "none"
+        if internal == "_separator":
+            # A heading, not a type. Matched by its text, which had changed
+            # under this check, so picking it made "_separator" the key's type.
+            if old_type in types:
+                self._type_menus[idx].set(labels[types.index(old_type)])
+            return
         self._act_type[idx].set(internal)
         # A value carried over from the previous type is meaningless for the new
         # one (a mountpoint like /home/frans left over after switching from

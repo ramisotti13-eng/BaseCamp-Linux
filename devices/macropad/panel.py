@@ -23,7 +23,7 @@ import customtkinter as ctk
 
 import shared.ui as UI
 from shared.ui_helpers import (
-    AccordionSection, pick_color, cap_scroll_speed,
+    AccordionSection, pick_color, cap_scroll_speed, menu_order,
     BG, BG2, BG3, FG, FG2, BLUE, GRN, RED, YLW, BORDER,
 )
 from shared.config import (
@@ -86,31 +86,33 @@ def _hex(r, g, b):
     return "#%02x%02x%02x" % (int(r) & 0xFF, int(g) & 0xFF, int(b) & 0xFF)
 
 
-def action_type_ids(app):
-    """Internal ids in menu order, with any plugin types appended."""
-    ids = list(_ACTION_TYPES)
+def _action_type_entries(app):
+    """(id, label) pairs of the action menu, in menu order: None first, then
+    the built-in actions and, below a separator, the plugins', each by name
+    (#109). Ids and labels come from one place so they cannot drift apart."""
+    def label(tid):
+        return "OBS" if tid == "obs" else app.T(f"action_type_{tid}")
+
+    entries = [(_ACTION_TYPES[0], label(_ACTION_TYPES[0]))]
+    entries += sorted(((t, label(t)) for t in _ACTION_TYPES[1:]),
+                      key=lambda e: menu_order(e[1]))
     pm = getattr(app, "_plugin_manager", None)
     if pm:
-        plugin_ids = pm.get_action_type_ids()
-        if plugin_ids:
-            ids.append("_separator")
-            ids.extend(plugin_ids)
-    return ids
+        plugin = sorted(pm.get_action_type_labels(), key=lambda e: menu_order(e[1]))
+        if plugin:
+            entries.append(("_separator", "-- Plugins --"))
+            entries.extend(plugin)
+    return entries
+
+
+def action_type_ids(app):
+    """Internal ids in menu order, with any plugin types after a separator."""
+    return [tid for tid, _label in _action_type_entries(app)]
 
 
 def action_type_labels(app):
     """Translated labels, index aligned with action_type_ids()."""
-    labels = [app.T("action_type_none"), app.T("action_type_shell"),
-              app.T("action_type_url"), app.T("action_type_folder"),
-              app.T("action_type_app"), "OBS", app.T("action_type_macro"),
-              app.T("action_type_keypress"), app.T("action_type_text")]
-    pm = getattr(app, "_plugin_manager", None)
-    if pm:
-        plugin_labels = pm.get_action_type_labels()
-        if plugin_labels:
-            labels.append("-- Plugins --")
-            labels.extend(label for _tid, label in plugin_labels)
-    return labels
+    return [lbl for _tid, lbl in _action_type_entries(app)]
 
 
 class MacroPadPanel(ctk.CTkFrame):

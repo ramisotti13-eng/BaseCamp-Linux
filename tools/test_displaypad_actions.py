@@ -489,10 +489,58 @@ def hue_checks():
         pass
 
 
+def order_checks():
+    """The action menu in alphabetical order (#109), and its separator."""
+    import unicodedata
+    pm = app._plugin_manager
+    pm._action_types["zz_widget"] = {"label": "Zebra Widget", "handler": lambda _v: None,
+                                     "owner": "demo", "value_options": None}
+    pm._action_types["aa_widget"] = {"label": "Äpfel Widget", "handler": lambda _v: None,
+                                     "owner": "demo", "value_options": None}
+    ids = dpp.action_type_ids(app)
+    labels = dpp.action_type_labels(app)
+
+    def key(s):
+        return unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode().casefold()
+
+    sep = ids.index("_separator")
+    builtin, plugins = labels[1:sep], labels[sep + 1:]
+    check("'None' stays first", ids[0] == "none", ids[:2])
+    check("the built-in actions are in alphabetical order (#109)",
+          builtin == sorted(builtin, key=key), builtin)
+    check("and so are the plugins' below the separator",
+          plugins == sorted(plugins, key=key), plugins)
+    check("an umlaut sorts with its letter, not after z",
+          plugins.index("Äpfel Widget") < plugins.index("Zebra Widget"), plugins)
+    check("labels and ids still line up",
+          labels[ids.index("shell")] == app.T("action_type_shell")
+          and labels[ids.index("zz_widget")] == "Zebra Widget",
+          (labels[ids.index("shell")], labels[ids.index("zz_widget")]))
+
+    # Picking the separator line changes nothing: it is a heading, not a type.
+    panel = app._displaypad_panel
+    panel._open_actions_dialog()
+    app.update()
+    dialog = panel._actions_dialog_win
+    dialog._on_type_change(labels[ids.index("keypress")], 4)
+    app.update()
+    dialog._on_type_change(labels[sep], 4)
+    app.update()
+    check("choosing the separator leaves the key's type alone",
+          dialog._act_type[4].get() == "keypress", dialog._act_type[4].get())
+    for tid in ("zz_widget", "aa_widget"):
+        pm._action_types.pop(tid, None)
+    try:
+        dialog.destroy()
+    except Exception:
+        pass
+
+
 def run():
     try:
         checks()
         hue_checks()
+        order_checks()
     except Exception:
         import traceback
         traceback.print_exc()

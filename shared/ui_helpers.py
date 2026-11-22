@@ -3,6 +3,7 @@ import os
 import sys
 import re
 import math
+import unicodedata
 import colorsys
 import threading
 import time
@@ -48,6 +49,14 @@ ANIM_MS    = 12
 
 _DESKTOP_EXEC_RE = re.compile(r"%[a-zA-Z]")
 _desktop_apps_cache = None
+
+
+def menu_order(label):
+    """Where a label sorts in a menu: by its letters, an umlaut or an accent
+    with its base letter rather than after z, case ignored (#109)."""
+    plain = unicodedata.normalize("NFKD", str(label))
+    plain = "".join(c for c in plain if not unicodedata.combining(c))
+    return (plain.casefold(), str(label))
 
 
 def _run_as_sudouser(cmd):
