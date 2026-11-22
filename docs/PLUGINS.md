@@ -22,6 +22,7 @@ Everest Max, or run background services.
    - [GUI (Panels, Timers)](#gui-panels-timers)
    - [Device Access](#device-access)
    - [DisplayPad Integration](#displaypad-integration)
+   - [Everest Max D1-D4 keys](#everest-max-d1-d4-keys)
    - [Action Registration](#action-registration)
 6. [UI Styling](#ui-styling)
 7. [Thread Safety](#thread-safety)
@@ -426,16 +427,18 @@ DisplayPad action config. Your plugin can read the config to find which button
 it should render the widget on:
 
 ```python
-from shared.config import _load_displaypad_actions
-
 def _find_my_button(self):
     """Find which DisplayPad button has our action type assigned."""
-    actions = _load_displaypad_actions()
+    actions = self.ctx.get_displaypad_actions()   # the page on the pad now
     for i, act in enumerate(actions):
         if act.get("type") == "my_action_type_id":
             return i
-    return None  # not assigned to any button
+    return None  # not assigned to any button on this page
 ```
+
+Ask the context, not `shared.config._load_displaypad_actions()`: that one
+answers for the main page unless given a page, so a widget assigned on any
+other page was never found (#82).
 
 This way the user controls where the widget appears by assigning the action
 type in the DisplayPad settings, and the plugin automatically renders there.
@@ -446,6 +449,28 @@ When a plugin action type is assigned to a button and no image is set, the
 DisplayPad panel automatically shows a small preview tile with the action
 label and a blue border. This lets users see at a glance which buttons have
 plugin actions assigned.
+
+### Everest Max D1-D4 keys
+
+```python
+ctx.push_keyboard_dbutton_image(0, cover)   # D1, a PIL Image of any size
+```
+
+**`ctx.push_keyboard_dbutton_image(button, pil_image)`** puts a picture on one
+of the four keys above the Everest Max numpad (button 0-3 for D1-D4). It is
+thread-safe and returns at once: `True` if the picture was taken, `False` when
+no Everest Max is connected or the button is out of range.
+
+These keys are not a screen. They keep their picture in the keyboard's flash,
+so every new picture is an erase and a rewrite, takes 45 to 60 seconds, and
+pauses Monitor Mode while it runs (it starts again afterwards if it was
+running). Base Camp for Windows does the same for its Spotify covers. So:
+
+- push when the content changes, a new track say, never on a timer
+- a picture the key already shows is not written again, and while an upload
+  runs only the latest picture per key is kept, so pushing the same thing
+  twice costs nothing
+- it is not for animation or anything live
 
 ### Action Registration
 

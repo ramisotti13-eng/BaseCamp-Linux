@@ -93,6 +93,24 @@ class PluginContext:
         if dp and hasattr(dp, "push_plugin_image"):
             dp.push_plugin_image(key_index, pil_image)
 
+    def push_keyboard_dbutton_image(self, button, pil_image):
+        """Put a picture on one of the Everest Max's D1-D4 keys (button 0-3).
+        Thread-safe, returns at once: True if the picture was taken, False
+        when there is no Everest Max or the button is not 0-3.
+
+        Not for animation. The keys keep their pictures in the keyboard's
+        flash: each new picture is an erase and a rewrite, takes 45 to 60
+        seconds, and pauses Monitor Mode while it runs. A picture the key
+        already shows is not written again, and only the latest picture per
+        key is written, so push when the content changes (a new track), not
+        on a timer.
+        """
+        panel = getattr(self._app, "_everest_panel", None)
+        present = getattr(self._app, "_dev_present", {}).get("everest_max")
+        if panel is None or not present or not hasattr(panel, "push_dbutton_image"):
+            return False
+        return panel.push_dbutton_image(button, pil_image)
+
     def get_displaypad_current_page(self):
         """Return the DisplayPad's currently active page number (0 = main
         page), or 0 if the DisplayPad isn't connected. Use this instead of

@@ -63,6 +63,7 @@
   "image_uploading": "D{d}: Uploading image…",
   "image_uploaded": "D{d}: Image uploaded",
   "image_error": "D{d}: Error",
+  "image_error_detail": "D{d}: upload failed, {err}",
   "gif_frame_title": "GIF: {n} frames",
   "gif_frame_info": "Frame {frame} / {total}",
   "gif_frame_cancel": "Cancel",

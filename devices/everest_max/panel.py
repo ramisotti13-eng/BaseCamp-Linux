@@ -3,6 +3,7 @@ import os
 import sys
 import json
 import time
+import hashlib
 import threading
 import subprocess
 import tkinter as tk
@@ -69,6 +70,7 @@ class EverestMaxPanel(ctk.CTkFrame):
 
         # ── Local state ──────────────────────────────────────────────────────
         self._cpu_proc        = None
+        self._init_dbutton_push()
         self._sections        = []
         self._custom_rgb_win  = None
         self._multi_upload_win = None
@@ -1178,6 +1180,10 @@ class EverestMaxPanel(ctk.CTkFrame):
                 new_fname = thumb_fname or _save_to_library(path, gif_frame)
                 if new_fname:
                     _save_icon_last(idx, new_fname)
+                # Whatever a plugin put there is gone; its next picture has
+                # to be written even if it is the one it sent before.
+                with self._dpush_lock:
+                    self._dpush_sent.pop(idx, None)
             if was_running:
                 self._app.after(0, self._start_cpu_auto)
             err_hint = (stderr_data.strip().splitlines() or [""])[-1]
@@ -1185,12 +1191,126 @@ class EverestMaxPanel(ctk.CTkFrame):
             def finish():
                 self._numpad_info.configure(
                     text=(self.T("image_uploaded", d=idx+1) if ok
-                          else f"D{idx+1}: Fehler — {err_hint}" if err_hint
-                          else self.T("image_error", d=idx+1)),
+                          else self.T("image_error_detail", d=idx+1, err=err_hint)
+                          if err_hint else self.T("image_error", d=idx+1)),
                     text_color=GRN if ok else RED)
             self._app.after(0, finish)
 
         threading.Thread(target=do_upload, daemon=True).start()
+
+    # ── Pictures on D1-D4 from plugins (#113) ────────────────────────────────
+
+    def _init_dbutton_push(self):
+        self._dpush_lock = threading.Lock()
+        self._dpush_pending = {}     # key -> (file, digest), the latest only
+        self._dpush_inflight = {}    # key -> digest being uploaded right now
+        self._dpush_sent = {}        # key -> digest of what the key shows
+        self._dpush_busy = False
+        self._dpush_resume = False   # Monitor Mode ran before the pause
+
+    def push_dbutton_image(self, idx, pil_image):
+        """Put a picture on D1-D4 (idx 0-3) for a plugin. Thread-safe and
+        returns at once; whether the picture was taken.
+
+        The keys keep their pictures in the keyboard's flash, so every one is
+        an erase and a rewrite of two sectors, and Monitor Mode has to let go
+        of the keyboard for it: measured on an Everest Max, 45 to 60 seconds
+        per picture, the same as uploading one by hand. Base Camp for Windows
+        does the same for its Spotify covers, and only when the song changes.
+        So here as well: a picture the key already shows is not written
+        again, pictures that arrive while one is being written go in the same
+        pause, and per key only the latest is written.
+        """
+        if not (isinstance(idx, int) and 0 <= idx <= 3):
+            return False
+        try:
+            img = pil_image.convert("RGB").resize((72, 72), Image.LANCZOS)
+        except Exception:
+            return False
+        digest = hashlib.sha1(img.tobytes()).hexdigest()
+        path = os.path.join(CONFIG_DIR, f"everest_plugin_d{idx + 1}.png")
+        with self._dpush_lock:
+            on_key = self._dpush_inflight.get(idx, self._dpush_sent.get(idx))
+            if digest == on_key:
+                self._dpush_pending.pop(idx, None)
+                return True
+            queued = self._dpush_pending.get(idx)
+            if queued and queued[1] == digest:
+                return True
+            # Replaced whole, so an upload reading the previous picture keeps
+            # reading the previous picture.
+            tmp = path + ".tmp"
+            img.save(tmp, "PNG")
+            os.replace(tmp, path)
+            self._dpush_pending[idx] = (path, digest)
+            if self._dpush_busy:
+                return True
+            self._dpush_busy = True
+        try:
+            self._app.after(0, self._dpush_begin)
+        except Exception:
+            with self._dpush_lock:
+                self._dpush_busy = False
+            return False
+        return True
+
+    def _dpush_begin(self):
+        """On the interface thread, like every other stop of the monitor."""
+        try:
+            was_running = self._stop_cpu_proc()
+        except Exception:
+            was_running = False
+        with self._dpush_lock:
+            self._dpush_resume = self._dpush_resume or was_running
+        threading.Thread(target=self._dpush_run, args=(was_running,),
+                         daemon=True).start()
+
+    def _dpush_run(self, was_running):
+        # The controller hands the keyboard back on its way out; the manual
+        # upload gives it the same moment before claiming it again.
+        time.sleep(2.5 if was_running else 0.5)
+        while True:
+            with self._dpush_lock:
+                batch = dict(self._dpush_pending)
+                self._dpush_pending.clear()
+                self._dpush_inflight = {i: d for i, (_f, d) in batch.items()}
+                if not batch:
+                    self._dpush_busy = False
+                    resume, self._dpush_resume = self._dpush_resume, False
+                    if resume:
+                        # Booked under the lock: a push that arrives now books
+                        # its own pause behind this restart, never before it,
+                        # so a monitor and an upload never hold the keyboard
+                        # at once.
+                        try:
+                            self._app.after(0, self._start_cpu_auto)
+                        except Exception:
+                            pass
+                    return
+            for idx, (path, digest) in sorted(batch.items()):
+                err = ""
+                try:
+                    done = subprocess.run(self._cmd("upload", str(idx), path),
+                                          capture_output=True, text=True,
+                                          timeout=180)
+                    ok = done.returncode == 0
+                    err = ((done.stderr or "").strip().splitlines() or [""])[-1]
+                except Exception as e:
+                    ok, err = False, str(e)
+                with self._dpush_lock:
+                    self._dpush_inflight.pop(idx, None)
+                    if ok:
+                        self._dpush_sent[idx] = digest
+                    else:
+                        self._dpush_sent.pop(idx, None)
+                if ok:
+                    # The key shows the plugin's picture now, not the library
+                    # one on record: uploading that again must not be refused
+                    # as unchanged.
+                    _save_icon_last(idx, None)
+                else:
+                    print(f"[Everest] D{idx + 1}: plugin picture not uploaded: {err}",
+                          flush=True)
 
     def _set_main_mode(self, mode):
         self._sync_card_hints()
