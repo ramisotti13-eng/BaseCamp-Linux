@@ -1017,6 +1017,26 @@ def _invalidate_pages_cache():
     global _PAGES_CACHE
     _PAGES_CACHE = None
 
+
+def _copy_tree(obj):
+    """A copy of parsed JSON down to the last dict and list.
+
+    What the page loaders hand out is the caller's to change. A shallow copy
+    of the cache shared every record with it, so a caller that kept a page's
+    button map and wrote into it was writing into the cache: the DisplayPad
+    panel kept Main's map that way and the widget plugins write their frames
+    into it, after which the cache answered "which icon does this key carry"
+    with a widget frame, and the next save put that frame in the page file as
+    the key's icon (#104, the frames FransM's Main__0.json carries). Pages
+    are small, so a full copy costs well under a millisecond.
+    """
+    if isinstance(obj, dict):
+        return {k: _copy_tree(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_copy_tree(v) for v in obj]
+    return obj
+
+
 def _load_all_displaypad_pages():
     """Return {page_id: {"id","name","v","actions","buttons","fullscreen",
     "timeout"}} by reading every page's own file. Migrates the old combined
@@ -1037,7 +1057,7 @@ def _load_all_displaypad_pages():
     # then copying it separately can hit dict(None) in between.
     cached = _PAGES_CACHE
     if cached is not None:
-        return dict(cached)
+        return _copy_tree(cached)
 
     _migrate_legacy_displaypad_pages()
     out = {}
@@ -1061,7 +1081,7 @@ def _load_all_displaypad_pages():
         out[pid] = data
 
     _PAGES_CACHE = out
-    return dict(out)
+    return _copy_tree(out)
 
 
 def _save_displaypad_page_record(page_id, record):

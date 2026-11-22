@@ -664,7 +664,7 @@ class Plugin:
                 return ImageFont.truetype(fpath, size)
         return ImageFont.load_default()
 
-    def _find_dp_key(self):
+    def _find_dp_key(self, page=None):
         """Which DisplayPad button carries the 'now_playing' action.
 
         Through the context, which answers for the page that is on the pad.
@@ -674,18 +674,50 @@ class Plugin:
         fix the other widget plugins got in #82.
         """
         try:
-            for i, act in enumerate(self.ctx.get_displaypad_actions()):
+            for i, act in enumerate(self.ctx.get_displaypad_actions(page)):
                 if act.get("type") == "now_playing":
                     return i
         except Exception:
             pass
         return None
 
+    def _show_on_key(self, page, key, img):
+        """File the frame under its key, then push it.
+
+        Like every other widget: the frame goes to a file named after page
+        and key, and into the panel's image maps, before the push. Pushing
+        alone put the picture on the pad and nowhere else, so the editor
+        showed the key empty after a restart (#99), and a page switch had
+        nothing to put back on it, which with a track that does not change
+        meant an empty key until the next one started.
+        """
+        try:
+            from shared.config import CONFIG_DIR
+            path = os.path.join(CONFIG_DIR, f"dp_now_playing_p{page}_k{key}.png")
+            tmp = path + ".tmp"
+            img.save(tmp, "PNG")     # a reader must never catch it half written
+            os.replace(tmp, path)
+            dp = self.ctx.get_displaypad()
+            if dp is not None and getattr(dp, "_current_page", page) == page:
+                dp._images[str(key)] = path
+                if hasattr(dp, "_page_images"):
+                    dp._page_images.setdefault(page, {})[str(key)] = path
+        except Exception as e:
+            print(f"[NowPlaying] could not file the key frame: {e}", flush=True)
+        if self.ctx.get_displaypad_current_page() != page:
+            return                   # the pad moved on while this was drawn
+        self.ctx.push_displaypad_image(key, img)
+
     def _update_displaypad(self, info):
         """Render now-playing info onto a DisplayPad button (runs in poll thread)."""
-        # Find which button the user assigned to now_playing
-        self._dp_key = self._find_dp_key()
+        # Find which button the user assigned to now_playing, on the page
+        # that is up now. Read once, so the key and the page it is on agree.
+        page = self.ctx.get_displaypad_current_page()
+        self._dp_key = self._find_dp_key(page)
         if self._dp_key is None:
+            # No key of ours on this page: what was last drawn is not on the
+            # pad any more, so a key given back to Now Playing draws again.
+            self._dp_last_key = None
             return
 
         if not info or not info.get("title"):
@@ -693,7 +725,7 @@ class Plugin:
             # The key index belongs in here: which key this is depends on
             # the page now, so the same track on a different key has to be
             # drawn again (#99).
-            dp_key = ("idle", self._dp_key)
+            dp_key = ("idle", self._dp_key, page)
             if self._dp_last_key == dp_key:
                 return
             self._dp_last_key = dp_key
@@ -701,7 +733,7 @@ class Plugin:
             draw = ImageDraw.Draw(img)
             font = self._get_dp_font(10)
             draw.text((20, 40), "No Media", fill=(80, 80, 120), font=font)
-            self.ctx.push_displaypad_image(self._dp_key, img)
+            self._show_on_key(page, self._dp_key, img)
             return
 
         title = info["title"]
@@ -714,7 +746,7 @@ class Plugin:
         # position). The cover is part of that: a player can hand over the
         # track before it has the picture for it.
         art = info.get("art")
-        dp_key = (title, status, art is not None, self._dp_key)
+        dp_key = (title, status, art is not None, self._dp_key, page)
         if self._dp_last_key == dp_key:
             return
         self._dp_last_key = dp_key
@@ -775,6 +807,6 @@ class Plugin:
                 # Triangle (play icon)
                 draw.polygon([(42, 88), (42, 98), (56, 93)], fill=(245, 197, 66))
 
-            self.ctx.push_displaypad_image(self._dp_key, img)
+            self._show_on_key(page, self._dp_key, img)
         except Exception as e:
             print(f"[NowPlaying] DisplayPad render error: {e}", flush=True)

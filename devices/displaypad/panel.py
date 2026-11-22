@@ -9,6 +9,7 @@ Protocol (reverse-engineered from JeLuF/mountain-displaypad + MountainDisplayPad
 """
 import gc
 import os
+import re
 import sys
 import pwd as _pwd
 import time
@@ -462,6 +463,26 @@ def _legacy_icon_names(kind, page, idx):
     if kind == "folder" and page == 0:
         names.append(f"dp_{kind}_{idx}.png")   # older still, page 0 only
     return [os.path.join(CONFIG_DIR, n) for n in names]
+
+
+_DRAWN_NAME = re.compile(r"^dp_([a-z_]+?)_p(\d+)_k(\d+)\.png$")
+
+
+def _widget_frame_of(path):
+    """(page, key) a widget plugin drew this frame for, or None.
+
+    Read from the name, which every bundled and published widget follows. A
+    picture of the application's own (a label or a folder icon) is not a
+    frame, and nor is anything outside the config directory, so a user's own
+    image is never mistaken for one."""
+    if not path or not isinstance(path, str):
+        return None
+    if os.path.dirname(os.path.abspath(path)) != os.path.abspath(CONFIG_DIR):
+        return None
+    m = _DRAWN_NAME.match(os.path.basename(path))
+    if not m or m.group(1) in _ICON_KINDS:
+        return None
+    return int(m.group(2)), int(m.group(3))
 
 
 def _make_thumb(path, size, rotation=0):
@@ -3243,11 +3264,17 @@ class DisplayPadPanel(ctk.CTkFrame):
         quit. Scheduling onto a Tk interpreter that is already gone raised out
         of the thread and printed a traceback on every exit taken with no pad
         attached; there is nothing left to schedule for, so drop it.
+
+        The same refusal comes before the window is up: until mainloop() runs,
+        Tk waits a second for it and then raises "main thread is not in main
+        loop". Says whether it was scheduled, for a caller that has to try
+        again rather than lose it (#106).
         """
         try:
             self.after(delay, func)
+            return True
         except (tk.TclError, RuntimeError):
-            pass
+            return False
 
     def _on_min_ms_change(self, *_):
         """Keep the GIF frame floor across restarts (#73). Silently ignores
@@ -3509,8 +3536,10 @@ class DisplayPadPanel(ctk.CTkFrame):
         for p in list(self._page_actions.keys()):
             if p in referenced or p == 0:
                 continue
+            # A widget's last frame is held in memory now (#104), and it says
+            # nothing about whether the page has anything on it.
             imgs = {k: v for k, v in (self._page_images.get(p, {}) or {}).items()
-                    if v and v != self._blank_icon}
+                    if v and v != self._blank_icon and _widget_frame_of(v) is None}
             if imgs or self._page_fullscreen.get(p):
                 continue
             empty = True
@@ -3586,6 +3615,22 @@ class DisplayPadPanel(ctk.CTkFrame):
 
         actions[idx] = entry
         self._page_images.setdefault(page, {})
+
+        # A key given a different action stops showing what the old one drew.
+        # Its frame was kept (it is that widget's key), so moving a key from
+        # one widget to another left the first widget's last picture on it,
+        # in the editor and on the pad, until the new one drew something:
+        # Now Playing with nothing playing never does (#99).
+        if btype != old.get("type", "none"):
+            shown = (self._images if page == self._current_page
+                     else self._page_images[page])
+            if _widget_frame_of(shown.get(str(idx))) is not None:
+                icon = self._stored_icons(page).get(str(idx))
+                if not (icon and _widget_frame_of(icon) is None
+                        and os.path.exists(icon)):
+                    icon = self._blank_icon
+                shown[str(idx)] = icon
+                self._take_key_back(page, idx)
 
         # Auto-generate a label icon for keypress/text keys with no custom image
         # yet, so they show what they do instead of staying blank (issue #31).
@@ -3724,7 +3769,8 @@ class DisplayPadPanel(ctk.CTkFrame):
             cur = self._page_images.get(page, {}).get(str(idx), "")
         auto = (cur.startswith(os.path.join(CONFIG_DIR, "dp_label_"))
                 or cur.startswith(os.path.join(CONFIG_DIR, "dp_folder_")))
-        is_blank = (not cur) or cur == self._blank_icon or not os.path.exists(cur)
+        is_blank = ((not cur) or cur == self._blank_icon or not os.path.exists(cur)
+                    or _widget_frame_of(cur) is not None)   # a picture, not an icon
         if not (is_blank or auto):
             return  # user-assigned image — keep it
         label = action.strip()
@@ -3771,6 +3817,12 @@ class DisplayPadPanel(ctk.CTkFrame):
         if keys:
             keys.discard(int(idx))
 
+    def _stored_icons(self, page):
+        """The icons `page` has on disk, key by key."""
+        if page == 0:
+            return _load_displaypad_buttons()
+        return _load_displaypad_pages().get(str(page), {}).get("buttons") or {}
+
     def _icons_restored(self, page, live, keep=()):
         """`live` with every plugin frame replaced by the icon that key
         actually carries, except on the keys in `keep`.
@@ -3778,19 +3830,29 @@ class DisplayPadPanel(ctk.CTkFrame):
         The stored config is where that icon comes from: it is the one record
         of it a frame cannot have overwritten, since this is the only place
         that writes it and every panel-side assignment takes the key back
-        first."""
+        first. A frame an older version did store there all the same (#104)
+        is not taken for an icon; that key has none.
+
+        On a key in `keep` the widget's frame stays, but only its own: one
+        drawn for another page or another key is a picture that landed in the
+        wrong map, and the key gets its icon back like any other."""
         imgs = dict(live)
-        marked = self._plugin_frame_keys.get(page, set()) - set(keep)
-        if not marked:
-            return imgs
-        if page == 0:
-            stored = _load_displaypad_buttons()
-        else:
-            stored = _load_displaypad_pages().get(str(page), {}).get("buttons") or {}
-        for idx in marked:
+        keep = {int(k) for k in keep}
+        marked = self._plugin_frame_keys.get(page, set())
+        stored = None
+        for idx in {int(k) for k in imgs} | set(marked):
             k = str(idx)
-            if k in stored:
-                imgs[k] = stored[k]
+            frame = _widget_frame_of(imgs.get(k))
+            if idx in keep:
+                if frame is None or frame == (page, idx):
+                    continue
+            elif frame is None and idx not in marked:
+                continue                  # the key's own icon
+            if stored is None:
+                stored = self._stored_icons(page)
+            icon = stored.get(k)
+            if icon and _widget_frame_of(icon) is None:
+                imgs[k] = icon
             else:
                 imgs.pop(k, None)
         return imgs
@@ -3811,13 +3873,25 @@ class DisplayPadPanel(ctk.CTkFrame):
         live = self._page_images.get(page, {})
         owned = self._plugin_key_slots()
         if owned is None:
-            return dict(live)   # cannot tell whose key is whose, leave it alone
+            # Cannot tell whose key is whose, so every widget keeps its frame;
+            # one drawn for another page is still not this page's.
+            owned = range(NUM_KEYS)
         return self._icons_restored(page, live, keep=owned)
 
     def _sync_live_images(self, page=None):
-        """Copy the live map into the page's stored map, frames excluded."""
+        """Copy the live map into the page's map, widget frames included.
+
+        Leaving them out (as this did until #104) meant a page came back with
+        its widget keys showing the icon underneath, and a widget only draws
+        when its value changes: a disk that stays as full as it was, or a
+        battery that is still charging, left the key black until it did. The
+        frame is the last thing that widget drew for this page, which is what
+        the key should show until it draws again. Nothing here is stored:
+        every write to disk goes through _persistable_images, which takes the
+        frames out, and _images_for_page drops a frame drawn for another page.
+        """
         page = self._current_page if page is None else page
-        self._page_images[page] = self._persistable_images(page)
+        self._page_images[page] = dict(self._images)
 
     def _save_sub_pages(self):
         """Persist every non-main page to displaypad_pages.json. Page ids are no
@@ -4476,11 +4550,14 @@ class DisplayPadPanel(ctk.CTkFrame):
         happened to redraw that tile (#96). The floor is what keeps a video
         pushing thirty frames a second from costing thirty redraws.
         """
+        # No path yet is no reason to skip it. A widget may file its frame
+        # under the key only after pushing it, and the pass below reads the
+        # map when it runs, not now: skipping here lost that first frame, and
+        # a widget whose value then held still left a grey tile for good
+        # (#107).
         path = self._images.get(str(idx))
-        if not path:
-            return
         now = time.monotonic()
-        if self._tile_shown.get(idx) == path and \
+        if path and self._tile_shown.get(idx) == path and \
                 now - self._tile_drawn.get(idx, 0.0) < _TILE_REDRAW_MIN:
             return
         self._tile_shown[idx] = path
@@ -4512,11 +4589,42 @@ class DisplayPadPanel(ctk.CTkFrame):
         with self._tile_lock:
             self._tile_pass_due = False
             dirty, self._tile_dirty = self._tile_dirty, set()
+        owned = self._plugin_key_slots()
         for idx in sorted(dirty):
             try:
+                self._drop_foreign_frame(idx, owned)
                 self._refresh_panel_tile(idx)
             except Exception:
                 pass
+
+    def _drop_foreign_frame(self, idx, owned=None):
+        """Give key `idx` its icon back if the live map holds a widget frame
+        that is not this key's on this page.
+
+        Widgets write their frame into the live map themselves, from their
+        own thread. One that composed a frame for the page just left and
+        wrote it a moment after the switch put it into the new page's map,
+        where the editor drew it and the next full upload sent it to the pad:
+        a clock and a disk on a page of function keys (#99, #112). The device
+        queue already refuses such a frame; this is the same refusal for the
+        map. Returns whether anything was changed.
+        """
+        k = str(idx)
+        frame = _widget_frame_of(self._images.get(k))
+        if frame is None:
+            return False
+        if frame == (self._current_page, idx):
+            if owned is None:
+                owned = self._plugin_key_slots()
+            if owned is None or idx in owned:
+                return False
+        icon = self._stored_icons(self._current_page).get(k)
+        if not (icon and _widget_frame_of(icon) is None and os.path.exists(icon)):
+            icon = self._blank_icon
+        self._images[k] = icon
+        _dbg(f"[DBG frames] key {idx}: dropped a frame drawn for page "
+             f"{frame[0]} key {frame[1]}, now on page {self._current_page}")
+        return True
 
     def _refresh_panel_tile(self, idx):
         rot = self._rotation
@@ -4738,7 +4846,10 @@ class DisplayPadPanel(ctk.CTkFrame):
 
     # ── Upload / Animation ────────────────────────────────────────────────────
 
-    def _start_upload(self):
+    def _start_upload(self, _retry=0):
+        owned = self._plugin_key_slots()
+        for idx in range(NUM_KEYS):
+            self._drop_foreign_frame(idx, owned)
         assigned = {int(k): v for k, v in self._images.items()
                     if v and os.path.exists(v)}
         _dbg(f"[DBG upload] page={self._current_page} uploading assigned={assigned}")
@@ -4755,7 +4866,7 @@ class DisplayPadPanel(ctk.CTkFrame):
                 self._uploading = True
                 self._info_label.configure(text=self.T("dp_connecting_pad"), text_color=FG2)
                 self._anim_thread = threading.Thread(
-                    target=self._worker, args=({},), daemon=True)
+                    target=self._worker, args=({}, _retry), daemon=True)
                 self._anim_thread.start()
             else:
                 self._uploading = False
@@ -4781,7 +4892,7 @@ class DisplayPadPanel(ctk.CTkFrame):
 
         self._info_label.configure(text=self.T("dp_connecting_pad"), text_color=FG2)
         self._anim_thread = threading.Thread(
-            target=self._worker, args=(assigned,), daemon=True)
+            target=self._worker, args=(assigned, _retry), daemon=True)
         self._anim_thread.start()
 
     def _stop_animation(self):
@@ -4801,17 +4912,11 @@ class DisplayPadPanel(ctk.CTkFrame):
             usb_dev, hid_dev = _open_interfaces()
         except Exception as e:
             self._usb_lock.release()
-            if _retry < 5:
-                # Device busy at boot — retry after a short delay.
-                # Release flags so the key listener can resume while we wait,
-                # and re-run _start_upload to pick up the latest page state
-                # (user may have switched pages during the retry window).
-                delay = (2 + _retry * 2) * 1000  # 2s, 4s, 6s, 8s, 10s
-                self._uploading = False
-                self._animating = False
-                self._after_safe(delay, self._start_upload)
-                return
-            self._after_safe(0, lambda e=e: self._finish(False, str(e)))
+            # Device busy at boot: retry after a short delay, 2s, 4s, 6s, 8s,
+            # 10s. The count used to start from nothing on every retry, since
+            # _start_upload never passed it on, so this retried for ever and
+            # the error below was never reached.
+            self._retry_upload(e, (2 + _retry * 2) * 1000, _retry)
             return
         try:
             _init_device(hid_dev)
@@ -4893,7 +4998,7 @@ class DisplayPadPanel(ctk.CTkFrame):
                         if bi >= len(evt):
                             continue
                         if (evt[bi] & mask) and not (_prev_evt[bi] & mask):
-                            self.after(0, lambda ki=ki: self._execute_action_k(ki))
+                            self._after_safe(0, lambda ki=ki: self._execute_action_k(ki))
                     if len(evt) >= len(_prev_evt):
                         _prev_evt = bytearray(evt[:len(_prev_evt)])
 
@@ -4966,12 +5071,44 @@ class DisplayPadPanel(ctk.CTkFrame):
                     _key_events.clear()
 
         except Exception as e:
-            self.after(0, lambda e=e: self._finish(False, str(e)))
+            # A page that fails part way is worse than one that fails at the
+            # start: the pad keeps the keys of the page it was on, the keys
+            # written so far belong to the new one, and the widgets paint
+            # their keys over the mixture. It was reported and never tried
+            # again (#112), and after a replug the first key failing took the
+            # whole page with it (#104). It is tried again, from the top.
+            self._retry_upload(e, min(1000 * (1 + _retry), 5000), _retry)
         else:
             self.after(0, lambda: self._finish(True, ""))
         finally:
             _close_interfaces(usb_dev, hid_dev)
             self._usb_lock.release()
+
+    _UPLOAD_RETRIES = 5
+
+    def _retry_upload(self, err, delay_ms, retry):
+        """Called from the upload thread when a page upload did not go
+        through: try the page again in `delay_ms`, or report it.
+
+        The flags drop while it waits so the device worker can listen for
+        keys meanwhile, and the retry starts from _start_upload, which reads
+        the page again: a switch made in the meantime is what gets uploaded.
+        A pad that has gone is not retried at all. Plugging it back in
+        uploads the page anyway, and five failed tries against an empty port
+        would only end in an error about a device the user just unplugged.
+        """
+        self._uploading = False
+        self._animating = False
+        if self._closing.is_set():
+            return
+        if not self._device_present:
+            self._page_switch_waiting = False
+            return
+        if retry < self._UPLOAD_RETRIES:
+            print(f"[DisplayPad] upload failed ({err}), trying again", flush=True)
+            self._after_safe(delay_ms, lambda: self._start_upload(retry + 1))
+            return
+        self._after_safe(0, lambda: self._finish(False, str(err)))
 
     def _finish(self, success, err):
         self._uploading = False
@@ -4992,45 +5129,62 @@ class DisplayPadPanel(ctk.CTkFrame):
         # (at most 0.2s later) — nothing to kick off explicitly here anymore.
 
     def _monitor_loop(self):
-        """Background thread: detect device connect/disconnect and auto-reupload."""
-        while not self._monitor_stop.is_set():
-            path = None
-            if HID_AVAILABLE:
-                try:
-                    for d in hid_compat.enumerate(VID, PID):
-                        if d['interface_number'] == 3:
-                            path = d['path']
-                            break
-                except Exception:
-                    path = None
-            present = path is not None
+        """Background thread: detect device connect/disconnect and auto-reupload.
 
-            if present and not self._device_present:
-                # Device just connected / reconnected
-                self._device_present = True
-                self._dp_path = path
-                self._pad_ready = False
-                has_content = bool(self._images or self._gif_frames)
-                self.after(0, lambda hc=has_content: self._on_device_connected(hc))
-            elif present and self._device_present and path != self._dp_path:
-                # Re-enumerated under a new path without us seeing the gap: the
-                # user unplugged and replugged within a single poll window, so
-                # the pad booted fresh and needs INIT again even though presence
-                # never toggled (issue #44).
-                self._dp_path = path
-                self._pad_ready = False
-                has_content = bool(self._images or self._gif_frames)
-                self.after(0, lambda hc=has_content: self._on_device_connected(hc))
-            elif not present and self._device_present:
-                # Device just disconnected
-                self._device_present = False
-                self._dp_path = None
-                self._pad_ready = False
-                self.after(0, self._on_device_disconnected)
-            elif not present and not self._device_present:
-                # Plugged in but interface 3 missing? Likely the usbhid quirk.
-                self._maybe_warn_usb_quirk()
+        Nothing a single pass throws may end it. It is started while the
+        window is still being built, and a pad it finds then is reported with
+        after(), which Tk refuses until the main loop runs: that refusal ended
+        this thread on every start that took longer than a second, and from
+        then on a replugged pad was never noticed. It came back with only the
+        keys the widgets paint themselves, and the rest stayed dark until a
+        page switch uploaded them (#106, #104).
+        """
+        while not self._monitor_stop.is_set():
+            try:
+                self._monitor_pass()
+            except Exception as e:
+                print(f"[DisplayPad] device check failed: {e}", flush=True)
             self._monitor_stop.wait(timeout=2)
+
+    def _monitor_pass(self):
+        """One look at the bus, and what follows from it."""
+        path = None
+        if HID_AVAILABLE:
+            try:
+                for d in hid_compat.enumerate(VID, PID):
+                    if d['interface_number'] == 3:
+                        path = d['path']
+                        break
+            except Exception:
+                path = None
+        present = path is not None
+
+        if present and (not self._device_present or path != self._dp_path):
+            # Connected, reconnected, or re-enumerated under a new path
+            # without us seeing the gap: the user unplugged and replugged
+            # within a single poll window, so the pad booted fresh and
+            # needs INIT again even though presence never toggled (#44).
+            #
+            # Asked for first and noted after. When the window cannot
+            # take the request yet, nothing is noted, and the next pass
+            # sees the same news and asks again.
+            has_content = bool(self._images or self._gif_frames)
+            if not self._after_safe(
+                    0, lambda hc=has_content: self._on_device_connected(hc)):
+                return
+            self._device_present = True
+            self._dp_path = path
+            self._pad_ready = False
+        elif not present and self._device_present:
+            # Device just disconnected. Noted whatever the window says:
+            # the workers must stop using a pad that is gone.
+            self._device_present = False
+            self._dp_path = None
+            self._pad_ready = False
+            self._after_safe(0, self._on_device_disconnected)
+        elif not present and not self._device_present:
+            # Plugged in but interface 3 missing? Likely the usbhid quirk.
+            self._maybe_warn_usb_quirk()
 
     def _maybe_warn_usb_quirk(self):
         """If the DisplayPad is on the USB bus but its command interface (3)
@@ -5278,7 +5432,10 @@ class DisplayPadPanel(ctk.CTkFrame):
                     deb = (self._dc_antibounce if self._is_double_key(k) else self._debounce)
                     if now - last_fire.get(k, 0) >= deb:
                         last_fire[k] = now
-                        self.after(0, lambda k=k: self._execute_action_k(k))
+                        # Never a bare after() from here: refused before the
+                        # window is up or while it closes, it would end the
+                        # thread that carries every key press (#106).
+                        self._after_safe(0, lambda k=k: self._execute_action_k(k))
             last_evt = data
 
         _release()
@@ -5336,7 +5493,7 @@ class DisplayPadPanel(ctk.CTkFrame):
             if frames:
                 # A GIF arrived -- hand it back and let _start_upload handle it.
                 self._upload_queue.put((ki, bgr, frames, page))
-                self.after(0, self._restart_for_gif)
+                self._after_safe(0, self._restart_for_gif)
                 break
             if page is not None and page != self._current_page:
                 # Drawn for a page that is no longer on the device (#69/#70).
@@ -5363,7 +5520,7 @@ class DisplayPadPanel(ctk.CTkFrame):
         for evt in events:
             for ki, (bi, mask) in enumerate(_KEY_MAP):
                 if bi < len(evt) and (evt[bi] & mask) and not (prev[bi] & mask):
-                    self.after(0, lambda ki=ki: self._execute_action_k(ki))
+                    self._after_safe(0, lambda ki=ki: self._execute_action_k(ki))
             if len(evt) >= len(prev):
                 prev = list(evt[:len(prev)])
 
