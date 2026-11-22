@@ -1,5 +1,11 @@
 # Changelog
 
+## [3.2.4] - 2026-11-22
+
+- **A plugin whose installed version is higher than the published one says so (#105).** After 3.2.3 @FransM's Pipe Text still wrote its frames into `~/.config`, and the cause was its `plugin.json`: it said 2.0, left over from when he wrote the plugin himself, while the published Pipe Text is 1.2.3. A higher installed version means there is nothing to update, so no update was offered, and nothing said why. The plugin's page in the Plugins screen now says when the installed version is higher than the published one, with a button that installs the published version. It is said there only, not in the sidebar's count and not by Update all: someone working on their own copy of a plugin raises its version on purpose and should not be pressed to throw it away.
+
+- **A plugin update that cannot be put in place says so.** Found while looking for the above. Install, Update and Update all in the plugin list wrote nothing at all when a plugin could not be replaced, so the old version went on running without a word. They now name the plugin and what went wrong. A plugin folder that is a link, as it often is for someone working on their own checkout, is left alone and the message says where it leads; Python 3.14 would only have said `[Errno None] None`. A second copy of the same plugin under another folder name, which is the copy that gets loaded when its name sorts later, is named as well, instead of the update reporting success for a copy that never runs. Update all installs everything it can and lists every failure at the end. `tools/test_plugin_updates.py` covers all of it.
+
 ## [3.2.3] - 2026-11-22
 
 - **Plugin updates are hard to miss now.** 3.2.0 already looked for plugin updates by itself, but said so in a way nobody noticed. The count was a "(2)" behind "Plugins" in the sidebar, in the same dim grey as the name, and the message went by after eight seconds, which with the window in the tray, as after an autostart, was before anybody could have seen it. The Plugins entry now carries a filled blue badge with the number, and the message has a **Show** button that opens the Plugins screen and stays for fifteen seconds; started into the tray, the application keeps it until the window is opened. `tools/test_plugin_updates.py` covers both, the tray case included.
