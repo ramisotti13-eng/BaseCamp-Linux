@@ -6,7 +6,7 @@
 
 **Unofficial Linux companion app for Mountain peripherals.**
 
-Mountain Base Camp is only available on Windows. This project brings full device control for the **Everest Max keyboard**, **Everest 60 keyboard**, **Makalu 67 mouse**, **Makalu Max mouse**, **DisplayPad** and **MacroPad** to Linux: display control, RGB lighting, button actions, monitor metrics, DPI, button remapping, multi-page display management and OBS integration.
+Mountain Base Camp is only available on Windows. This project brings full device control for the **Everest Max keyboard**, **Everest 60 keyboard**, **Makalu 67 mouse**, **DisplayPad** and **MacroPad** to Linux (the **Makalu Max** mouse is detected, its settings are being worked on): display control, RGB lighting, button actions, monitor metrics, DPI, button remapping, multi-page display management and OBS integration.
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue) ![Platform](https://img.shields.io/badge/Platform-Linux-black) ![License](https://img.shields.io/badge/License-GPL%20v3%20%2B%20Non--Commercial-red)
 
@@ -47,7 +47,7 @@ Mountain Base Camp is only available on Windows. This project brings full device
 | Mountain Everest 60 ANSI (keyboard) | `0x3282` | `0x0005` | RGB supported |
 | Mountain Everest 60 ISO (keyboard) | `0x3282` | `0x0006` | RGB supported |
 | Mountain Makalu 67 (mouse) | `0x3282` | `0x0003` | Fully supported |
-| Mountain Makalu Max (mouse) | `0x3282` | `0x0002` | Fully supported |
+| Mountain Makalu Max (mouse) | `0x3282` | `0x0002` | Detected, settings do not apply yet ([#115](../../issues/115)) |
 | Mountain DisplayPad | `0x3282` | `0x0009` | Fully supported |
 | Mountain MacroPad | `0x3282` | `0x0008` | Fully supported |
 
@@ -249,7 +249,7 @@ The GUI starts with a splash screen and auto-activates Monitor mode. The app min
   <img src="docs/Display.png" alt="DisplayPad: 12 Button Display" width="900"/>
 </p>
 
-The DisplayPad screen provides full control over all 12 display buttons (102×102 pixels each) with image upload, animated GIF support, multi-page navigation and button actions. Pages are tabs along the top, the selected key is edited in the column on the right, and the row under the keys holds what belongs to the page itself: its name, its auto-timeout, and the minimum milliseconds per GIF frame.
+The DisplayPad screen provides full control over all 12 display buttons (102×102 pixels each) with image upload, animated GIF support, multi-page navigation and button actions. Pages are tabs along the top, the selected key is edited in the column on the right, and the row under the keys holds what belongs to the page itself: its name, its note, its auto-timeout, and the minimum milliseconds per GIF frame.
 
 ### Button Images (K1–K12)
 
@@ -276,13 +276,15 @@ Upload a single image or animated GIF that is **automatically split across all 1
 - **A "Back" key is just a page action** pointing at the page you came from. New pages get one on K1 for convenience, and you can move, retarget or delete it
 - **Create, rename and delete pages** from the tab bar above the keys: "+ New page" adds one, and the row under the keys renames or deletes the page you are on. Deleting warns you first, listing every button and timeout that still points at that page
 - **Per-page auto-timeout:** a page can return to another page (or the previous one) a number of seconds after it is shown, or after the last key press on it. Set it in the same row, under the keys
+- **A cheat sheet per page:** give a page a note (the **Note** button under the keys) and each key a short hint (the field beside the grid), and switching to that page from a key on the pad, the tray or a script brings up a small box with both, the hints laid out the way the keys are. It stays on top without ever taking the focus, so it does not interrupt your typing; it stays until you close it or for as many seconds as you set, and can be moved, hidden for the session or switched off for a page. Pages without a note or hints, and switches the app makes by itself, such as a timeout, stay quiet
 - Each page is stored in its own file under `~/.config/mountain-time-sync/displaypad_pages/`, named after the page
 - Fullscreen GIFs work on any page with page navigation still functional underneath
 - Page switching re-uploads all 12 button images to the device automatically, and plugin widgets bound to a key follow the page they belong to
 
 ### Button Actions (K1–K12)
 
-- **Action types:** Shell command, URL, Folder, App, Page navigation, OBS (Scene/Record/Stream), Macro, Keypress, Text, and **Redefine key** (one key rewrites another key's action). Installed plugins can add their own types to this list
+- **Action types:** Shell command, URL, Folder, App, Page navigation, OBS (Scene/Record/Stream), Macro, Keypress, Text, and **Redefine key** (one key rewrites another key's action). Installed plugins can add their own types to this list. The list is alphabetical, with the plugins' types below a separator
+- A Keypress or Text key without an image of its own gets a label with what it types, and its double-click action, if it is a keystroke, a text or a page switch, in a smaller line underneath
 - **Three slots per key:** the action itself, an optional second action that runs with it ("also on press"), and an optional **double-click** action on a quick second press
 - The **Text** action types out any string when you press the button (great for Everest 60 owners who miss F-keys, or for snippets you find yourself typing all the time)
 - Keypress and Text both work on X11 and Wayland (the app picks `xdotool` or `ydotool` automatically), including F13-F24 for shortcuts no physical key can trigger
@@ -328,6 +330,7 @@ The keyboard panel is split into a persistent **dashboard** at the top and colla
 - **Image upload (D1–D4)**: Upload images to D-buttons via the **Upload Images** dialog or individual per-slot upload buttons, automatically converted and resized (GIF frame picker included). Images are saved to the **Image Library** for quick reuse.
 - **Image Library**: All uploaded images are stored locally as thumbnails. Pick from previously used images with one click instead of browsing the file system every time. Images can be deleted from the library individually.
 - **Main display upload**: Upload any image to the keyboard's main display, with Image Library support for quick reuse
+- **Pictures from plugins (D1–D4)**: plugins can put a picture on a D-key, album art for the track that is playing for example. The keys keep their pictures in flash, so each new one takes 45 to 60 seconds with Monitor Mode paused meanwhile, and a picture the key already shows is never written again
 - **RGB Lighting**: Full RGB effect control (Wave, Tornado, Tornado Rainbow, Reactive, Yeti, Matrix, Off) with speed, brightness, color pickers and direction. Settings are saved to config
 - **Custom RGB Mode**: Per-key color editor with rubber band selection, eyedropper, undo, and named presets. Side LEDs are selectable individually around keyboard and numpad, and a Synthwave preset is built in
 - **System tray**: Minimize to tray, runs in the background
@@ -441,7 +444,9 @@ The Everest 60 panel provides RGB lighting control for the Mountain Everest 60 (
   <img src="docs/gitguiMouse.png" alt="BaseCamp Linux: Mouse Panel" width="860"/>
 </p>
 
-The mouse panel supports both the **Makalu 67** (PID `0x0003`) and **Makalu Max** (PID `0x0002`). The app detects which mouse is connected and shows the model name in the sidebar and the screen header. The Makalu Max supports 8 programmable buttons (vs 6 on the Makalu 67). All settings save to mouse flash and persist across reboots.
+The mouse panel supports the **Makalu 67** (PID `0x0003`). All settings save to mouse flash and persist across reboots.
+
+> **Makalu Max owners:** the Max (PID `0x0002`) is detected and gets its own button layout, but every setting comes back as "Failed" ([#115](../../issues/115)). Base Camp for Windows drives the Max through a different library with a different protocol, which BaseCamp Linux does not speak yet. `tools/makalu_max_probe.py` reads the mouse's settings memory and descriptors into one file, without writing anything to the mouse and without installing anything; attaching that file to #115 is what the Max support needs next.
 
 ### RGB Lighting
 
@@ -674,6 +679,7 @@ BaseCamp Linux has a **plugin system** that lets you extend the app without modi
 - **Action plugins**: Register new button action types for DisplayPad (K1-K12) and Everest Max (D1-D4)
 - **Service plugins**: Run background tasks that start with the app and stop on shutdown
 - **DisplayPad widgets**: Render live images onto DisplayPad buttons (e.g. live data, status indicators)
+- **Everest Max D1–D4 pictures**: Put a picture on a numpad D-key, for things that change now and then rather than live (see [docs/PLUGINS.md](docs/PLUGINS.md))
 - **Combined**: A single plugin can be all of the above at once
 
 ### Plugin Manager
@@ -682,7 +688,7 @@ The **Plugins** tab in the app shows all installed plugins with status, type bad
 
 Below that, **Available plugins** lists everything published in the community repository [basecamp-plugins](https://github.com/ramisotti13-eng/basecamp-plugins), fetched on startup and refreshable with the reload button. One click installs a plugin into your config folder. Current entries are DisplayPad Clock, System Monitor, Philips Hue, Snippets, DisplayPad Pipe Text and DisplayPad Video. You can also install from a GitHub URL or a local folder through the manual install row, so a plugin you are still writing does not have to be published first.
 
-The Plugin Manager also checks for updates. When a plugin you have installed has a newer version in the index, a green pill appears on its card (visible even when collapsed) and an explicit update button shows up when you expand it. One click downloads the new version and replaces the plugin folder. A small restart of the app is needed so the new code is actually loaded.
+The app also checks for plugin updates by itself, shortly after it starts and twice a day after that, whether or not the Plugins screen is ever opened. The sidebar entry then reads "Plugins (2)", a short message says so once, and in the list each plugin with a newer version has a blue dot and the new version number. Select it for its **Update** button, or press **Update all** above the list to bring every one of them up to date from a single download. A restart of the app is needed so the new code is actually loaded.
 
 > Plugins that need a third-party Python package (for example DisplayPad Video, which uses `opencv-python`) only work on a source install. The AppImage ships its own bundled interpreter and cannot see packages you installed with the system `pip`.
 
@@ -691,7 +697,7 @@ The Plugin Manager also checks for updates. When a plugin you have installed has
 A bundled **Now Playing** plugin shows what's currently playing in your browser (YouTube, Spotify, etc.) via MPRIS:
 
 - Panel with title, artist, progress bar, play/pause, volume/mute
-- Live widget on any DisplayPad button
+- Live widget on any DisplayPad button, with the album cover when the player reports one
 - Play/pause action type for button assignment
 - Requires `playerctl` (`sudo dnf install playerctl` / `sudo apt install playerctl` / `sudo pacman -S playerctl`)
 
