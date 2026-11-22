@@ -158,41 +158,77 @@ def _open_interfaces():
     raise last_err if last_err else RuntimeError("DisplayPad open failed")
 
 
+_KEY_REPORT = bytes([0x03, 0x01])   # output report 3 on IF0: report key events
+_if0_reported = False                # an IF0 left without its driver, said once
+
+
+def _key_report_through_driver():
+    """Send IF0's SET_REPORT through the HID driver that owns IF0. True if sent.
+
+    IF0 has no OUT endpoint, so usbhid turns an output report written to its
+    hidraw node into the SET_REPORT control transfer itself: request 0x21/
+    0x09, wValue 0x0203, wIndex 0, data 03 01, byte for byte what the direct
+    route below sends after taking the interface away from the driver.
+    """
+    try:
+        path = next((d['path'] for d in hid_compat.enumerate(VID, PID)
+                     if d['interface_number'] == 0), None)
+    except Exception:
+        return False
+    if path is None:
+        return False
+    h = None
+    for attempt in range(2):
+        try:
+            h = hid_compat.open_path(path)
+            break
+        except Exception:
+            # A node the kernel has only just made is root's until udev has
+            # applied the rule (#86); a moment later it is the user's.
+            if attempt == 0:
+                time.sleep(0.2)
+    if h is None:
+        return False
+    try:
+        n = h.write(_KEY_REPORT)
+        return n is None or n > 0
+    except Exception:
+        return False
+    finally:
+        h.close()
+
+
 def _init_handshake_ctrl(usb_dev):
     """
-    Step 1: temporarily claim IF0 (the keyboard interface). IF0 is only
-    needed for the two control transfers below, so detach its kernel driver
-    first and reattach it afterwards — the keyboard must keep working.
+    The handshake the pad needs before it reports key presses (measured by
+    USB capture on Windows): SET_IDLE (bRequest 0x0A, wValue 0) on IF0, IF1
+    and IF3, and SET_REPORT (output report 3, payload {0x03, 0x01}) on IF0.
 
-    Step 2: SET_IDLE (bRequest 0x0A, wValue 0) on IF0, IF1 (pixels) and IF3
-    (cmd) to suppress repeated reports when nothing is changing. EPIPE /
-    any failure here just means the interface doesn't support it and is
-    ignored (best-effort, matching warnLibusb's non-fatal handling).
+    IF0 (the keyboard interface) belongs to usbhid, which already sent IF0
+    and IF3 their SET_IDLE when it bound them, and it sends the SET_REPORT
+    for us when the report is written to IF0's hidraw node. That is the way
+    taken: the interface stays with its driver.
 
-    Step 3: SET_REPORT (output report 3, payload {0x03, 0x01}) on IF0 to
-    enable the device's event reporting mode (verified by USB capture on
-    Windows).
+    This used to detach usbhid from IF0, send both requests itself and
+    attach it again, on every open, so on every page upload. The pad does
+    not take that for long. Measured on a DisplayPad here: the third
+    re-attach in a session, a few seconds after the second, had the kernel's
+    probe of IF0 time out four times over (`usbhid 3-3:1.0: probe with
+    driver usbhid failed with error -110`), about twenty seconds in which
+    the upload held the device and no page could switch, and IF0 was left
+    with no driver until the pad was replugged. Each detach also rebuilt the
+    pad's hidraw nodes, which is the node churn behind #86.
 
-    Step 4: release IF0 and reattach its kernel driver. IF1 stays claimed
-    by us (already claimed by the caller) for the rest of the session.
+    The direct route is what is left for an IF0 that has no driver (it
+    lost it, as above), and the fallback should the driver's route fail:
+    then the driver is detached as before, and whether it came back is
+    checked rather than assumed.
+
+    SET_IDLE on IF1 is sent here: IF1 is ours, claimed by the caller for the
+    rest of the session. EPIPE or any other failure of a SET_IDLE only means
+    the interface does not support it, and is ignored.
     """
-    if0_was_active = False
-    try:
-        if0_was_active = bool(usb_dev.is_kernel_driver_active(0))
-    except Exception:
-        pass
-    if if0_was_active:
-        try:
-            usb_dev.detach_kernel_driver(0)
-        except Exception:
-            pass
-
-    if0_claimed = False
-    try:
-        usb.util.claim_interface(usb_dev, 0)
-        if0_claimed = True
-    except Exception:
-        pass
+    global _if0_reported
 
     def _set_idle(iface):
         try:
@@ -200,26 +236,51 @@ def _init_handshake_ctrl(usb_dev):
         except Exception:
             pass
 
-    if if0_claimed:
-        _set_idle(0)
     _set_idle(1)  # IF_PIXELS
-    _set_idle(3)  # IF_CMD
 
-    if if0_claimed:
+    try:
+        if0_bound = bool(usb_dev.is_kernel_driver_active(0))
+    except Exception:
+        if0_bound = False
+    if if0_bound and _key_report_through_driver():
+        return
+
+    if if0_bound:
         try:
-            usb_dev.ctrl_transfer(0x21, 0x09, 0x0203, 0x0000,
-                                   bytes([0x03, 0x01]), timeout=500)
+            usb_dev.detach_kernel_driver(0)
         except Exception:
             pass
+    try:
+        usb.util.claim_interface(usb_dev, 0)
+    except Exception:
+        return
+    try:
+        _set_idle(0)
+        _set_idle(3)  # IF_CMD: usbhid's, so normally refused, and harmless
+        try:
+            usb_dev.ctrl_transfer(0x21, 0x09, 0x0203, 0x0000,
+                                  _KEY_REPORT, timeout=500)
+        except Exception:
+            pass
+    finally:
         try:
             usb.util.release_interface(usb_dev, 0)
         except Exception:
             pass
-        if if0_was_active:
-            try:
-                usb_dev.attach_kernel_driver(0)
-            except Exception:
-                pass
+    if not if0_bound:
+        return
+    try:
+        usb_dev.attach_kernel_driver(0)
+    except Exception:
+        pass
+    try:
+        back = bool(usb_dev.is_kernel_driver_active(0))
+    except Exception:
+        back = False
+    if not back and not _if0_reported:
+        _if0_reported = True
+        print("[DisplayPad] the pad's keyboard interface (IF0) did not get "
+              "its driver back; replugging the pad restores it", flush=True)
 
 
 def _close_interfaces(usb_dev, hid_dev):
