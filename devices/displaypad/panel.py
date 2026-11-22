@@ -39,6 +39,8 @@ from shared.config import (
     _load_displaypad_min_ms, _save_displaypad_min_ms,
     _load_displaypad_page_timeouts, _save_displaypad_page_timeouts,
     _load_displaypad_page_names, _save_displaypad_page_names,
+    _load_displaypad_page_hints, _save_displaypad_page_hints,
+    _load_hint_box_settings, _save_hint_box_settings,
     _create_displaypad_page, _rename_displaypad_page, _delete_displaypad_page,
     _load_displaypad_actions_dialog_size, _save_displaypad_actions_dialog_size,
     macro_names,
@@ -1365,6 +1367,206 @@ class PageTimeoutRow(ctk.CTkFrame):
 
 # ── Actions dialog ────────────────────────────────────────────────────────────
 
+class PageHintBox(ctk.CTkToplevel):
+    """The page's note and its keys' hints, beside whatever you are working
+    in (#93).
+
+    It must never take the keyboard from the window you are typing in, or a
+    page switch would steal your typing, so it is a window the window
+    manager does not manage: it is not focused, stays above, and is moved by
+    its own title row. It stays until closed, or for as many seconds as set,
+    and not while the pointer is over it. Built over the application's root,
+    which is fine with that root hidden in the tray.
+    """
+
+    PAD = 12
+    CELL_W = 74
+
+    def __init__(self, panel, page, name, hints, settings):
+        super().__init__(panel._app, fg_color=BG2)
+        self._panel = panel
+        self.page = page
+        self._timeout = int(settings.get("timeout") or 0)
+        self._close_id = None
+        self._hover = False
+        self.overrideredirect(True)
+        try:
+            self.attributes("-topmost", True)
+        except tk.TclError:
+            pass
+        T = panel._app.T
+
+        frame = ctk.CTkFrame(self, fg_color=BG2, border_width=1,
+                             border_color=BORDER, corner_radius=8)
+        frame.pack(fill="both", expand=True)
+        head = ctk.CTkFrame(frame, fg_color="transparent")
+        head.pack(fill="x", padx=self.PAD, pady=(10, 4))
+        title = ctk.CTkLabel(head, text=name, font=(UI.FONT_FAMILY, 13, "bold"),
+                             text_color=FG, anchor="w")
+        title.pack(side="left")
+        close = ctk.CTkButton(head, text="\u2715", width=26, height=22,
+                              font=(UI.FONT_FAMILY, 11), fg_color="transparent",
+                              hover_color=BG3, text_color=FG2,
+                              command=self.close)
+        close.pack(side="right")
+        for w in (head, title):
+            w.bind("<ButtonPress-1>", self._drag_start)
+            w.bind("<B1-Motion>", self._drag)
+            w.bind("<ButtonRelease-1>", self._drag_end)
+
+        if hints["note"].strip():
+            ctk.CTkLabel(frame, text=hints["note"].strip(), justify="left",
+                         anchor="w", wraplength=self.CELL_W * KEYS_PER_ROW,
+                         font=(UI.FONT_FAMILY, 11), text_color=FG
+                         ).pack(fill="x", padx=self.PAD, pady=(0, 6))
+        if hints["keys"]:
+            # Laid out the way the keys are, so where a hint sits in the box is
+            # where the key sits under your hand.
+            grid = ctk.CTkFrame(frame, fg_color="transparent")
+            grid.pack(padx=self.PAD, pady=(2, 6))
+            for idx in range(NUM_KEYS):
+                text = hints["keys"].get(str(idx), "")
+                cell = ctk.CTkFrame(grid, fg_color=BG3 if text else BG2,
+                                    corner_radius=5, width=self.CELL_W, height=46)
+                cell.grid(row=idx // KEYS_PER_ROW, column=idx % KEYS_PER_ROW,
+                          padx=2, pady=2)
+                cell.grid_propagate(False)
+                ctk.CTkLabel(cell, text=f"K{idx + 1}", font=(UI.FONT_FAMILY, 8),
+                             text_color=FG2).place(x=5, y=2)
+                if text:
+                    ctk.CTkLabel(cell, text=text, font=(UI.FONT_FAMILY, 10),
+                                 text_color=FG, wraplength=self.CELL_W - 8,
+                                 justify="center").place(relx=0.5, rely=0.62,
+                                                         anchor="center")
+        foot = ctk.CTkFrame(frame, fg_color="transparent")
+        foot.pack(fill="x", padx=self.PAD, pady=(2, 10))
+        for key, cmd in (("dp_hint_never", self._never),
+                         ("dp_hint_session", self._not_this_session)):
+            ctk.CTkButton(foot, text=T(key), height=22, font=(UI.FONT_FAMILY, 9),
+                          fg_color="transparent", hover_color=BG3,
+                          text_color=FG2, command=cmd).pack(side="right", padx=(4, 0))
+
+        self.bind("<Enter>", lambda _e: self._set_hover(True))
+        self.bind("<Leave>", lambda _e: self._set_hover(False))
+        self._place(settings)
+        self._arm_close()
+
+    def _place(self, settings):
+        self.update_idletasks()
+        w, h = self.winfo_reqwidth(), self.winfo_reqheight()
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        x, y = settings.get("x"), settings.get("y")
+        if x is None or y is None:
+            x, y = sw - w - 24, sh - h - 64
+        x = max(0, min(int(x), sw - w))
+        y = max(0, min(int(y), sh - h))
+        self.geometry(f"+{x}+{y}")
+
+    # Moved by its title row: an unmanaged window has no frame to drag.
+    def _drag_start(self, e):
+        self._drag_from = (e.x_root - self.winfo_x(), e.y_root - self.winfo_y())
+
+    def _drag(self, e):
+        dx, dy = getattr(self, "_drag_from", (0, 0))
+        self.geometry(f"+{e.x_root - dx}+{e.y_root - dy}")
+
+    def _drag_end(self, _e):
+        _save_hint_box_settings(x=self.winfo_x(), y=self.winfo_y())
+
+    def _set_hover(self, inside):
+        self._hover = inside
+        if not inside:
+            self._arm_close()
+
+    def _arm_close(self):
+        if self._close_id is not None:
+            try:
+                self.after_cancel(self._close_id)
+            except tk.TclError:
+                pass
+            self._close_id = None
+        if self._timeout > 0:
+            self._close_id = self.after(self._timeout * 1000, self._timed_out)
+
+    def _timed_out(self):
+        self._close_id = None
+        if self._hover:
+            return              # it is being read; leaving it arms it again
+        self.close()
+
+    def _never(self):
+        _save_displaypad_page_hints(self.page, show=False)
+        self.close()
+
+    def _not_this_session(self):
+        self._panel._hint_pages_quiet.add(self.page)
+        self.close()
+
+    def close(self):
+        if self._panel._hint_box is self:
+            self._panel._hint_box = None
+        try:
+            self.destroy()
+        except tk.TclError:
+            pass
+
+
+class PageNoteDialog(ctk.CTkToplevel):
+    """Write a page's note and say whether its box comes up (#93). The key
+    hints are written in the inspector beside the grid, one key at a time."""
+
+    def __init__(self, panel, page):
+        super().__init__(panel._app, fg_color=BG)
+        self._panel = panel
+        self._page = page
+        T = panel._app.T
+        self.title(T("dp_note_title", name=panel._get_page_name(page)))
+        self.resizable(False, False)
+        hints = _load_displaypad_page_hints(page)
+        settings = _load_hint_box_settings()
+
+        body = ctk.CTkFrame(self, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=16, pady=14)
+        ctk.CTkLabel(body, text=T("dp_note_text"), font=(UI.FONT_FAMILY, 10),
+                     text_color=FG2, justify="left", anchor="w",
+                     wraplength=420).pack(fill="x")
+        self._text = ctk.CTkTextbox(body, width=440, height=140, fg_color=BG3,
+                                    border_color=BORDER, border_width=1,
+                                    text_color=FG, font=(UI.FONT_FAMILY, 11),
+                                    wrap="word")
+        self._text.pack(fill="x", pady=(6, 10))
+        self._text.insert("1.0", hints["note"])
+        self._show = tk.BooleanVar(value=hints["show"])
+        ctk.CTkCheckBox(body, text=T("dp_note_show"), variable=self._show,
+                        font=(UI.FONT_FAMILY, 10), text_color=FG
+                        ).pack(anchor="w")
+        row = ctk.CTkFrame(body, fg_color="transparent")
+        row.pack(fill="x", pady=(10, 0))
+        ctk.CTkLabel(row, text=T("dp_note_timeout"), font=(UI.FONT_FAMILY, 10),
+                     text_color=FG2).pack(side="left")
+        self._secs = tk.StringVar(value=str(settings["timeout"]))
+        ctk.CTkEntry(row, textvariable=self._secs, width=52, height=26,
+                     fg_color=BG3, border_color=BORDER, text_color=FG,
+                     font=(UI.FONT_FAMILY, 10)).pack(side="left", padx=(6, 0))
+        buttons = ctk.CTkFrame(body, fg_color="transparent")
+        buttons.pack(fill="x", pady=(14, 0))
+        UI.PrimaryButton(buttons, T("dp_note_save"), self._save,
+                         width=100).pack(side="right")
+        UI.GhostButton(buttons, T("ui_cancel"), self.destroy,
+                       width=100).pack(side="right", padx=(0, 8))
+
+    def _save(self):
+        note = self._text.get("1.0", "end-1c")
+        _save_displaypad_page_hints(self._page, note=note, show=self._show.get())
+        try:
+            secs = max(0, int(self._secs.get().strip() or 0))
+        except ValueError:
+            secs = None
+        if secs is not None:
+            _save_hint_box_settings(timeout=secs)
+        self.destroy()
+
+
 class DisplayPadActionsDialog(ctk.CTkToplevel):
     """Window: configure shell/url/folder/app/page actions for K1–K12, per page."""
 
@@ -2644,6 +2846,8 @@ class DisplayPadPanel(ctk.CTkFrame):
         # back from the tray. A toplevel binding fires for its descendants
         # too, which is what catches the window, and costs a flag check.
         self._tiles_waiting = False
+        self._hint_box = None            # the page's box, if one is up (#93)
+        self._hint_pages_quiet = set()   # pages told to stay quiet this session
         self.bind("<Map>", self._on_grid_mapped, add="+")
         self.winfo_toplevel().bind("<Map>", self._on_grid_mapped, add="+")
         self._tile_pass_due = False   # a pass is booked and has not run yet
@@ -2913,6 +3117,11 @@ class DisplayPadPanel(ctk.CTkFrame):
             height=UI.CTRL_H_SM, font=(UI.FONT_FAMILY, 10),
             fg_color=BG3, hover_color="#333a44", text_color=FG,
             command=self._on_rename_current_page).pack(side="right", padx=(0, 6))
+        ctk.CTkButton(
+            page_row, text=self.T("dp_page_note_btn"), width=72,
+            height=UI.CTRL_H_SM, font=(UI.FONT_FAMILY, 10),
+            fg_color=BG3, hover_color="#333a44", text_color=FG,
+            command=self._open_page_note).pack(side="right", padx=(0, 6))
 
         self._page_timeout_row = PageTimeoutRow(
             settings, self, self._app, lambda: self._current_page,
@@ -3008,6 +3217,21 @@ class DisplayPadPanel(ctk.CTkFrame):
         self._insp_value.pack(padx=12, pady=(2, 4))
         self._insp_value.bind("<FocusOut>", lambda _e: self._save_inspector())
         self._insp_value.bind("<Return>", lambda _e: self._save_inspector())
+        # What the key does, in a few words, for the page's box (#93). Kept
+        # apart from the action, so it outlives a change of action.
+        self._insp_hint_lbl = ctk.CTkLabel(insp, text=self.T("dp_insp_hint"),
+                                           font=(UI.FONT_FAMILY, 10), text_color=FG2,
+                                           anchor="w")
+        self._insp_hint_lbl.pack(fill="x", padx=12, pady=(6, 0))
+        self._reg(self._insp_hint_lbl, "dp_insp_hint")
+        self._insp_hint_var = tk.StringVar()
+        self._insp_hint = ctk.CTkEntry(
+            insp, textvariable=self._insp_hint_var, width=_INSPECTOR_W - 24,
+            height=28, font=(UI.FONT_FAMILY, 11), fg_color=BG3, text_color=FG,
+            border_color=BORDER)
+        self._insp_hint.pack(padx=12, pady=(2, 4))
+        self._insp_hint.bind("<FocusOut>", self._save_key_hint)
+        self._insp_hint.bind("<Return>", self._save_key_hint)
         self._insp_page = ctk.CTkOptionMenu(
             insp, values=[""], width=_INSPECTOR_W - 24, height=28,
             font=(UI.FONT_FAMILY, 11), fg_color=BG3, button_color=BORDER,
@@ -3044,6 +3268,8 @@ class DisplayPadPanel(ctk.CTkFrame):
 
     def _select_key(self, idx):
         """Mark a key in the grid and show it in the inspector."""
+        if hasattr(self, "_insp_hint_var"):
+            self._save_key_hint()       # clicking a tile moves no focus
         self._selected_key = idx
         for i, cell in self._tile_cells.items():
             cell.configure(border_color=BLUE if i == idx else BG3)
@@ -3063,6 +3289,12 @@ class DisplayPadPanel(ctk.CTkFrame):
             else:
                 self._insp_type.set(labels[0])
             self._insp_value_var.set(act.get("action", ""))
+            if hasattr(self, "_insp_hint_var"):
+                hints = _load_displaypad_page_hints(self._current_page)["keys"]
+                self._insp_hint_var.set(hints.get(str(idx), ""))
+                # Whose text this is. Focus can leave the field after another
+                # key or page has been chosen, and the save must not go there.
+                self._insp_hint_owner = (self._current_page, idx)
             self._apply_inspector_type(btype, act)
         finally:
             self._insp_loading = False
@@ -4083,15 +4315,23 @@ class DisplayPadPanel(ctk.CTkFrame):
             }
         _save_displaypad_pages(out)
 
-    def _switch_to_page(self, page_num, _retry=0):
-        """Switch active page: swap images/actions, refresh GUI, re-upload."""
+    def _switch_to_page(self, page_num, _retry=0, show_hints=False):
+        """Switch active page: swap images/actions, refresh GUI, re-upload.
+
+        `show_hints` is for a switch somebody made, a key on the pad, the tray
+        or a script, as opposed to one the application made (a timeout, the
+        editor following its tabs). Only those bring up the page's box (#93).
+        """
         if page_num == self._current_page:
+            if show_hints:
+                self._show_page_hints(page_num)   # asked for again: show it again
             return
         # Stop running animation before switching (check _animating first,
         # because _uploading may also be True during animation)
         if self._animating:
             self._stop_animation()
-            self.after(500, lambda: self._switch_to_page(page_num))
+            self.after(500, lambda: self._switch_to_page(page_num,
+                                                         show_hints=show_hints))
             return
         # A plugin image upload (System Monitor / Clock push ~1/s) may hold the
         # device. Don't silently drop the switch — that left the panel/device on
@@ -4111,7 +4351,8 @@ class DisplayPadPanel(ctk.CTkFrame):
         self._page_switch_waiting = True
         if self._uploading:
             if _retry < 40:  # ~6s worst case at 150ms
-                self.after(150, lambda: self._switch_to_page(page_num, _retry + 1))
+                self.after(150, lambda: self._switch_to_page(
+                    page_num, _retry + 1, show_hints=show_hints))
             return
         # NOTE: _page_switch_waiting stays True here — it is NOT cleared yet.
         # Clearing it as soon as this guard passes left a window (until the
@@ -4242,6 +4483,54 @@ class DisplayPadPanel(ctk.CTkFrame):
 
         # Start this page's auto-timeout countdown, if any (#45).
         self._arm_page_timeout(page_num)
+        self._page_hints_after_switch(page_num, show_hints)
+
+    # ── The page's box: its note and its keys' hints (#93) ─────────────────────
+
+    def _page_hints_after_switch(self, page, show):
+        if show:
+            self._show_page_hints(page)
+        elif self._hint_box is not None and self._hint_box.page != page:
+            # The application switched by itself: the box describes keys that
+            # are no longer under your hand.
+            self._hint_box.close()
+
+    def _show_page_hints(self, page):
+        """Bring up `page`'s box, if it has anything to say and is wanted."""
+        if self._hint_box is not None:
+            self._hint_box.close()
+        if page in self._hint_pages_quiet:
+            return
+        try:
+            hints = _load_displaypad_page_hints(page)
+        except Exception:
+            return
+        if not hints["show"] or not (hints["note"].strip() or hints["keys"]):
+            return              # an empty page stays silent
+        try:
+            self._hint_box = PageHintBox(self, page, self._get_page_name(page),
+                                         hints, _load_hint_box_settings())
+        except tk.TclError as e:
+            print(f"[DisplayPad] page box: {e}", flush=True)
+            self._hint_box = None
+
+    def _open_page_note(self):
+        PageNoteDialog(self, self._current_page)
+
+    def _save_key_hint(self, _event=None):
+        owner = getattr(self, "_insp_hint_owner", None)
+        if getattr(self, "_insp_loading", False) or owner is None:
+            return
+        page, idx = owner
+        text = self._insp_hint_var.get().strip()
+        keys = _load_displaypad_page_hints(page)["keys"]
+        if keys.get(str(idx), "") == text:
+            return
+        if text:
+            keys[str(idx)] = text
+        else:
+            keys.pop(str(idx), None)
+        _save_displaypad_page_hints(page, keys=keys)
 
     def _get_available_pages(self):
         """Return the sorted list of page ids that exist. Pages are no longer
@@ -4394,6 +4683,8 @@ class DisplayPadPanel(ctk.CTkFrame):
         and will simply fail to resolve a target next time they're used;
         the delete-page UI is expected to have already warned about that."""
         page_id = int(page_id)
+        if self._hint_box is not None and self._hint_box.page == page_id:
+            self._hint_box.close()
         if page_id == 0:
             return False
         if not _delete_displaypad_page(page_id):
@@ -4559,10 +4850,10 @@ class DisplayPadPanel(ctk.CTkFrame):
         # with no explicit target fall back to the old idx+1 sub-page.
         if btype == "page":
             target = self._page_target(step if step is not None else {}, idx)
-            self.after(0, lambda p=target: self._switch_to_page(p))
+            self.after(0, lambda p=target: self._switch_to_page(p, show_hints=True))
             return
         if btype == "back":
-            self.after(0, lambda: self._switch_to_page(0))
+            self.after(0, lambda: self._switch_to_page(0, show_hints=True))
             return
         # OBS action
         if btype == "obs" and action:

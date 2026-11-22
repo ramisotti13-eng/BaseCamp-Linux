@@ -728,6 +728,8 @@ basecamp --ctl '{"cmd":"dp_page","page":"Editor"}'
 basecamp --ctl '{"cmd":"dp_page","page":"prev"}'
 ```
 
+A page can carry a note and a short hint per key (the Note button under the key grid, and the hint field beside it). They come up in a small box whenever you switch to that page, from a key on the pad, the tray or `dp_page`: a cheat sheet for the keys under your hand. The box never takes the focus, so it cannot steal your typing, and a page without a note or hints stays silent. Add `"hints":false` to a `dp_page` command to switch without it.
+
 Note that `page` and `dp_page` are two different things: `page` switches the GUI tab (`displaypad`, `everest60`, `macros`, ...), `dp_page` switches the pad's own key page. The app does not have to be visible for either, minimized to tray is fine.
 
 See **[docs/CONTROL_INTERFACE.md](docs/CONTROL_INTERFACE.md)** for the full command list and the `page` / `set_key` action types.

@@ -135,6 +135,7 @@ DISPLAYPAD_PAGES_FILE      = os.path.join(CONFIG_DIR, "displaypad_pages.json")
 DISPLAYPAD_PAGE_NAMES_FILE = os.path.join(CONFIG_DIR, "displaypad_page_names.json")
 DISPLAYPAD_PAGES_DIR       = os.path.join(CONFIG_DIR, "displaypad_pages")
 DISPLAYPAD_TIMEOUTS_FILE   = os.path.join(CONFIG_DIR, "displaypad_page_timeouts.json")
+DISPLAYPAD_HINT_BOX_FILE   = os.path.join(CONFIG_DIR, "displaypad_hint_box.json")
 DISPLAYPAD_ROTATION_FILE    = os.path.join(CONFIG_DIR, "displaypad_rotation")
 DISPLAYPAD_BRIGHTNESS_FILE  = os.path.join(CONFIG_DIR, "displaypad_brightness")
 DISPLAYPAD_DEBOUNCE_FILE    = os.path.join(CONFIG_DIR, "displaypad_debounce")
@@ -1386,6 +1387,62 @@ def _delete_displaypad_page(page_id):
         return False
     _delete_displaypad_page_record(page_id)
     return True
+
+
+def _load_displaypad_page_hints(page_id):
+    """A page's note, its per-key hints and whether its box is shown (#93).
+
+    Kept in the page's own record, beside its actions rather than in them:
+    an action is rebuilt whenever it is edited, and a hint stored inside it
+    would vanish the first time its key was given another action."""
+    rec = _load_all_displaypad_pages().get(int(page_id)) or {}
+    keys = rec.get("key_hints") or {}
+    return {
+        "note": str(rec.get("note") or ""),
+        "keys": {str(k): str(v) for k, v in keys.items() if str(v).strip()},
+        "show": rec.get("hint_box", True) is not False,
+    }
+
+
+def _save_displaypad_page_hints(page_id, note=None, keys=None, show=None):
+    """Change any of a page's note, key hints (a full {key: text} map) or
+    box switch; what is passed as None is left as it is."""
+    page_id = int(page_id)
+    recs = _load_all_displaypad_pages()
+    rec = recs.get(page_id)
+    if rec is None:
+        rec = {"id": page_id, "v": 2, "actions": list(_EMPTY_ACTIONS),
+               "buttons": {}, "fullscreen": None, "timeout": None}
+    if note is not None:
+        rec["note"] = str(note)
+    if keys is not None:
+        rec["key_hints"] = {str(k): str(v) for k, v in keys.items() if str(v).strip()}
+    if show is not None:
+        rec["hint_box"] = bool(show)
+    _save_displaypad_page_record(page_id, rec)
+
+
+def _load_hint_box_settings():
+    """How the page box behaves: seconds until it closes (0: it stays), and
+    where it was last left (None: the bottom right corner)."""
+    out = {"timeout": 0, "x": None, "y": None}
+    try:
+        data = _read_json(DISPLAYPAD_HINT_BOX_FILE)
+        if isinstance(data, dict):
+            out["timeout"] = max(0, int(data.get("timeout", 0) or 0))
+            for k in ("x", "y"):
+                if isinstance(data.get(k), int):
+                    out[k] = data[k]
+    except Exception:
+        pass
+    return out
+
+
+def _save_hint_box_settings(**changes):
+    data = _load_hint_box_settings()
+    data.update(changes)
+    with open(DISPLAYPAD_HINT_BOX_FILE, "w") as f:
+        json.dump(data, f, indent=2)
 
 
 def _load_displaypad_page_timeouts():

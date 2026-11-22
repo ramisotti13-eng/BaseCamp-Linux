@@ -1140,7 +1140,10 @@ class App(ctk.CTk):
         # on the IPC server thread here, so hand it to the main loop. It may
         # defer itself further while an upload or animation is running, hence
         # "accepted" rather than a completion promise.
-        self.after(0, lambda p=target: panel._switch_to_page(p))
+        # A script or the tray switching pages is somebody switching pages, so
+        # the page's box comes up (#93); "hints": false leaves it down.
+        hints = obj.get("hints", True) is not False
+        self.after(0, lambda p=target: panel._switch_to_page(p, show_hints=hints))
         return {"ok": True, "page": target, "name": known[target], "changed": True}
 
     # ── i18n ──────────────────────────────────────────────────────────────────
