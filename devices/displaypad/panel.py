@@ -1302,7 +1302,10 @@ class DisplayPadActionsDialog(ctk.CTkToplevel):
         # (#84), but this dialog re-reading itself mid-save means every row
         # that has been typed into and not yet written is reverted (#87).
         self._saving = False
-        self._hue_values_map = []
+        # Per row: two Hue rows of different kinds (a light and a scene) used
+        # to share one list, so a pick in the first was looked up in the
+        # second's and stored as the wrong value.
+        self._hue_values_maps = {}   # row -> [value per dropdown entry]
         self._hue_bri_target = {}  # idx -> "group:1" or "light:3"
         # Secondary "also on press" action (issue #16)
         self._sec_type    = [tk.StringVar() for _ in range(12)]
@@ -1555,7 +1558,7 @@ class DisplayPadActionsDialog(ctk.CTkToplevel):
             elif btype in ("hue_toggle", "hue_scene"):
                 self._cmd_entries[i].pack_forget()
                 self._browse_btns[i].pack_forget()
-                self._populate_hue_combo(self._hue_combos[i], btype, cmd, btn_idx=i)
+                self._populate_hue_combo(self._hue_combos[i], btype, cmd, btn_idx=i, row=i)
                 self._hue_combos[i].pack(side="left", padx=4, expand=True, fill="x")
             # "hue_bri": combo for light/group + entry for %
             elif btype == "hue_bri":
@@ -1567,7 +1570,7 @@ class DisplayPadActionsDialog(ctk.CTkToplevel):
                 else:
                     target, pct = "", "50"
                 self._hue_bri_target[i] = target
-                self._populate_hue_combo(self._hue_combos[i], btype, target, btn_idx=None)
+                self._populate_hue_combo(self._hue_combos[i], btype, target, btn_idx=None, row=i)
                 self._hue_combos[i].pack(side="left", padx=4, expand=True, fill="x")
                 self._cmd_entries[i].configure(state="normal", placeholder_text="%")
                 self._act_cmd[i].set(pct)
@@ -1975,14 +1978,14 @@ class DisplayPadActionsDialog(ctk.CTkToplevel):
             self._populate_macro_combo(self._macro_combos[idx], self._act_cmd[idx].get(), btn_idx=idx)
             self._macro_combos[idx].pack(side="left", padx=4, expand=True, fill="x")
         elif internal in ("hue_toggle", "hue_scene"):
-            self._populate_hue_combo(self._hue_combos[idx], internal, self._act_cmd[idx].get(), btn_idx=idx)
+            self._populate_hue_combo(self._hue_combos[idx], internal, self._act_cmd[idx].get(), btn_idx=idx, row=idx)
             self._hue_combos[idx].pack(side="left", padx=4, expand=True, fill="x")
         elif internal == "hue_bri":
             # Split stored value "group:1:50" into target "group:1" + pct "50"
             cur = self._act_cmd[idx].get()
             parts = cur.rsplit(":", 1) if cur.count(":") >= 2 else (cur, "50")
             target, pct = parts[0], parts[1] if len(parts) > 1 else "50"
-            self._populate_hue_combo(self._hue_combos[idx], internal, target, btn_idx=None)
+            self._populate_hue_combo(self._hue_combos[idx], internal, target, btn_idx=None, row=idx)
             self._hue_combos[idx].pack(side="left", padx=4, expand=True, fill="x")
             self._cmd_entries[idx].pack(side="left", padx=(0, 4), fill="x")
             self._cmd_entries[idx].configure(state="normal", placeholder_text="%")
@@ -2191,7 +2194,8 @@ class DisplayPadActionsDialog(ctk.CTkToplevel):
         self._take_plugin_value(val, idx)
         self._apply(idx)
 
-    def _populate_hue_combo(self, combo, hue_type, current_val="", btn_idx=None):
+    def _populate_hue_combo(self, combo, hue_type, current_val="", btn_idx=None,
+                            row=None, _asked=False):
         """Build dropdown values for hue_toggle or hue_scene from the Hue plugin state."""
         pm = getattr(self._app, "_plugin_manager", None)
         hue = None
@@ -2234,25 +2238,51 @@ class DisplayPadActionsDialog(ctk.CTkToplevel):
                     items.append(f"\u2022 {name}")
                     values_map.append(f"light:{lid}")
 
-        self._hue_values_map = values_map
+        self._hue_values_maps[row] = values_map
         if not items:
-            items = ["(no Hue lights found)"]
-            self._hue_values_map = []
+            # Nothing to offer, which is not a value: a combo given only a list
+            # keeps the text it was built with, and CustomTkinter's is its own
+            # class name, "CTkComboBox" (#108). Say why there is nothing, and
+            # leave a stored value standing where it can be read.
+            paired = bool(hue and getattr(hue, "_api_key", ""))
+            asking = (paired and not _asked and hasattr(hue, "refresh_async")
+                      and hue.refresh_async(lambda: self._repopulate_hue_combo(
+                          combo, hue_type, current_val, btn_idx, row)))
+            hint = self._app.T("dp_hue_loading" if asking
+                               else "dp_hue_none" if paired else "dp_hue_unpaired")
+            combo.configure(values=[hint])
+            combo.set(current_val or hint)
+            return
         combo.configure(values=items)
         # Restore current selection
         if current_val and current_val in values_map:
             combo.set(items[values_map.index(current_val)])
-        elif items and self._hue_values_map:
+        else:
             combo.set(items[0])
             if btn_idx is not None:
                 self._act_cmd[btn_idx].set(values_map[0])
 
+    def _repopulate_hue_combo(self, combo, hue_type, current_val, btn_idx, row):
+        """Fill a Hue dropdown in again once the bridge has answered, if the
+        row still asks for the same thing. Asked once: a bridge that answers
+        with nothing gets the hint rather than another question."""
+        try:
+            if not combo.winfo_exists():
+                return
+            if row is not None and self._act_type[row].get() != hue_type:
+                return
+        except Exception:
+            return
+        self._populate_hue_combo(combo, hue_type, current_val, btn_idx,
+                                 row=row, _asked=True)
+
     def _take_hue_value(self, val, idx):
         items = self._hue_combos[idx].cget("values")
+        values_map = self._hue_values_maps.get(idx, [])
         try:
             pos = list(items).index(val) if isinstance(items, (list, tuple)) else 0
-            if pos < len(self._hue_values_map):
-                target = self._hue_values_map[pos]
+            if pos < len(values_map):
+                target = values_map[pos]
                 if self._act_type[idx].get() == "hue_bri":
                     # Store target, entry field holds the %
                     self._hue_bri_target[idx] = target

@@ -414,9 +414,85 @@ def checks():
           panel._get_action_dict(11))
 
 
+def hue_checks():
+    """The Hue dropdowns of the Button Actions window (#108, plugins #16)."""
+    panel = app._displaypad_panel
+    pm = app._plugin_manager
+    for tid, label in (("hue_toggle", "Hue: Toggle Light"),
+                       ("hue_scene", "Hue: Activate Scene")):
+        pm._action_types[tid] = {"label": label, "handler": lambda _v: None,
+                                 "owner": "hue_control", "value_options": None}
+
+    class PairedHue:
+        """A paired bridge nothing has asked yet, which answers when asked."""
+        _api_key = "key"
+        _bridge_ip = "192.0.2.1"
+
+        def __init__(self):
+            self._lights, self._groups, self._scenes = {}, {}, {}
+
+        def refresh_async(self, on_done=None):
+            def answer():
+                self._groups = {"1": {"name": "Woonkamer"}}
+                self._lights = {"1": {"name": "links"}, "2": {"name": "rechts"}}
+                self._scenes = {"UxU": {"name": "Relax", "group": "1"}}
+                if on_done:
+                    on_done()
+            app.after(200, answer)
+            return True
+
+    hue = PairedHue()
+    pm._instances["hue_control"] = hue
+    ids = dpp.action_type_ids(app)
+    labels = dpp.action_type_labels(app)
+    panel._open_actions_dialog()
+    app.update()
+    dialog = panel._actions_dialog_win
+
+    def as_type(idx, tid):
+        # As the type menu does it: the handler sees the old type and the new
+        # label, so it knows the value in the field belongs to the old one.
+        dialog._on_type_change(labels[ids.index(tid)], idx)
+        app.update()
+
+    as_type(2, "hue_toggle")
+    as_type(3, "hue_scene")
+    shown = (dialog._hue_combos[2].get(), dialog._hue_combos[3].get())
+    check("an empty Hue dropdown does not show its class name (#108)",
+          "CTkComboBox" not in shown, shown)
+    check("it says the bridge is being asked instead",
+          shown == (app.T("dp_hue_loading"),) * 2, shown)
+
+    end = time.time() + 3
+    while time.time() < end and not hue._lights:
+        app.update()
+        time.sleep(0.05)
+    app.update()
+    lights = list(dialog._hue_combos[2].cget("values"))
+    scenes = list(dialog._hue_combos[3].cget("values"))
+    check("once it answers, the light row lists its groups and lights",
+          len(lights) == 3, lights)
+    check("and the scene row its scene", len(scenes) == 1 and "Relax" in scenes[0],
+          scenes)
+    # Picked after the scene row was filled, which is what used to decide
+    # which list every row was read against.
+    dialog._take_hue_value(lights[2], 2)
+    check("a light picked in one row is stored as that light, not a scene",
+          dialog._act_cmd[2].get() == "light:2", dialog._act_cmd[2].get())
+    dialog._take_hue_value(scenes[0], 3)
+    check("and the scene row stores the scene", dialog._act_cmd[3].get() == "1:UxU",
+          dialog._act_cmd[3].get())
+    pm._instances.pop("hue_control", None)
+    try:
+        dialog.destroy()
+    except Exception:
+        pass
+
+
 def run():
     try:
         checks()
+        hue_checks()
     except Exception:
         import traceback
         traceback.print_exc()
