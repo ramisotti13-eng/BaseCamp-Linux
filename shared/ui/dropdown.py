@@ -154,6 +154,10 @@ class InlineDropdown:
     def _arm(self):
         self._click_armed = True
 
+    def is_open(self):
+        """Asked by CustomTkinter 6 whenever the pointer enters the control (#116)."""
+        return self._panel is not None
+
     def close(self, *_args):
         panel = self._drop()
         if panel is not None:
@@ -167,6 +171,13 @@ class InlineDropdown:
         global _showing
         if _showing is self:
             _showing = None
+        # CustomTkinter 6 remembers on the control that its list is open, so
+        # that the next click closes it, and only asks again when the pointer
+        # enters the control. Closed by Escape, the wheel or a pick with the
+        # pointer still on it, the control would spend the next click closing
+        # a list that is already gone.
+        if getattr(self._anchor, "_close_on_next_click", False):
+            self._anchor._close_on_next_click = False
         panel, self._panel, self._canvas, self._bar = self._panel, None, None, None
         self._active = None
         self._pointer_in = False
