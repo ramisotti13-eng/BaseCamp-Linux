@@ -48,7 +48,7 @@ import gui                                         # noqa: E402
 from devices.displaypad import panel as dpp        # noqa: E402
 from devices.everest_max import panel as emp       # noqa: E402
 from shared import hid_compat                      # noqa: E402
-from shared.config import (CONFIG_DIR,             # noqa: E402
+from shared.config import (CONFIG_DIR, FRAME_DIR,             # noqa: E402
                            _save_displaypad_page_record)
 
 failures = []
@@ -294,17 +294,19 @@ _FRAME_NAME = re.compile(r"dp_([a-z_]+?)_p(\d+)_k(\d+)\.png$")
 
 
 def _frames():
-    """Every widget frame on disk, by its pixels: bytes -> "F:<page>:<key>"."""
+    """Every widget frame there is, by its pixels: bytes -> "F:<page>:<key>".
+    In memory since #105, in the config directory before."""
     out = {}
-    for name in os.listdir(CONFIG_DIR):
-        m = _FRAME_NAME.match(name)
-        if not m:
-            continue
-        try:
-            out[dpp._image_to_bgr102(os.path.join(CONFIG_DIR, name), 0)] = \
-                f"F:{int(m.group(2))}:{int(m.group(3))}"
-        except Exception:
-            pass
+    for where in (CONFIG_DIR, FRAME_DIR):
+        for name in os.listdir(where):
+            m = _FRAME_NAME.match(name)
+            if not m:
+                continue
+            try:
+                out[dpp._image_to_bgr102(os.path.join(where, name), 0)] = \
+                    f"F:{int(m.group(2))}:{int(m.group(3))}"
+            except Exception:
+                pass
     return out
 
 
@@ -427,7 +429,7 @@ def scenario():
         check("after a replug: every key of Main is back", ok, pad_matches(MAIN))
 
     # A widget key given another action, and later the widget back (#99).
-    disk = os.path.join(CONFIG_DIR, "dp_mon_p0_k5.png")
+    disk = os.path.join(FRAME_DIR, "dp_mon_p0_k5.png")
     # A widget that has nothing to draw yet, like Now Playing with nothing
     # playing: FransM moved a key from a disk monitor to it.
     app._plugin_manager._action_types["quiet_widget"] = {
@@ -452,7 +454,7 @@ def scenario():
     # switch, the way a widget that reads the page late used to (#99, #107).
     panel._switch_to_page(KEYS)
     yield from wait_until(lambda: not pad_matches(KEYS), 8)
-    late = os.path.join(CONFIG_DIR, f"dp_mon_p{KEYS}_k5.png")
+    late = os.path.join(FRAME_DIR, f"dp_mon_p{KEYS}_k5.png")
     shutil.copy(disk, late)
     panel._images["5"] = late
     panel._page_images.setdefault(KEYS, {})["5"] = late

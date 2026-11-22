@@ -21,6 +21,9 @@ import time
 
 _TMP_HOME = tempfile.mkdtemp(prefix="basecamp-dpush-test-")
 os.environ["HOME"] = _TMP_HOME
+# Widget frames live in the runtime directory (#105): never in the one of
+# the application you are running.
+os.environ["XDG_RUNTIME_DIR"] = tempfile.mkdtemp(prefix="basecamp-test-run-")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from PIL import Image                                   # noqa: E402

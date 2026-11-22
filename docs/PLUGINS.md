@@ -404,6 +404,24 @@ had been given to something else entirely (#69). The panel now keeps every
 frame it is handed out of what it stores, and the key keeps the icon it was
 given.
 
+**Write such a frame file to `FRAME_DIR`, not to the config directory.** A
+widget that redraws every second writes a file every second, so from 3.2.3 on
+the app gives frames a directory in `$XDG_RUNTIME_DIR`, which is memory
+(#105). Name the file `dp_<plugin>_p<page>_k<key>.png`, which is how the panel
+tells a frame from an icon, and fall back for an application older than 3.2.3:
+
+```python
+def _frame_dir():
+    try:
+        from shared.config import FRAME_DIR       # BaseCamp 3.2.3 and later
+        return FRAME_DIR
+    except ImportError:
+        from shared.config import CONFIG_DIR
+        return CONFIG_DIR
+
+path = os.path.join(_frame_dir(), f"dp_myplugin_p{page}_k{key}.png")
+```
+
 **Tips:**
 - Only re-upload when content actually changes (not every poll cycle) --
   each upload takes ~200ms of USB time

@@ -33,6 +33,9 @@ if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
 
 _TMP_HOME = tempfile.mkdtemp(prefix="basecamp-dp-actions-test-")
 os.environ["HOME"] = _TMP_HOME
+# Widget frames live in the runtime directory (#105): never in the one of
+# the application you are running.
+os.environ["XDG_RUNTIME_DIR"] = tempfile.mkdtemp(prefix="basecamp-test-run-")
 
 import gui                                       # noqa: E402
 from devices.displaypad import panel as dpp      # noqa: E402

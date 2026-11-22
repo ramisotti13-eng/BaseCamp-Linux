@@ -28,7 +28,7 @@ from shared.ui_helpers import (
     attach_clipboard_menu, menu_order,
 )
 from shared.config import (
-    CONFIG_DIR,
+    CONFIG_DIR, FRAME_DIR,
     _load_displaypad_buttons, _save_displaypad_buttons,
     _load_displaypad_fullscreen, _save_displaypad_fullscreen, _clear_displaypad_fullscreen,
     _load_displaypad_actions, _save_displaypad_actions,
@@ -529,6 +529,7 @@ def _legacy_icon_names(kind, page, idx):
 
 
 _DRAWN_NAME = re.compile(r"^dp_([a-z_]+?)_p(\d+)_k(\d+)\.png$")
+_FRAME_HOMES = {os.path.abspath(FRAME_DIR), os.path.abspath(CONFIG_DIR)}
 
 
 def _widget_frame_of(path):
@@ -536,11 +537,13 @@ def _widget_frame_of(path):
 
     Read from the name, which every bundled and published widget follows. A
     picture of the application's own (a label or a folder icon) is not a
-    frame, and nor is anything outside the config directory, so a user's own
-    image is never mistaken for one."""
+    frame, and nor is anything outside the two places widgets write to, so a
+    user's own image is never mistaken for one. Frames live in FRAME_DIR, in
+    memory (#105); a widget not updated since still writes them to the config
+    directory."""
     if not path or not isinstance(path, str):
         return None
-    if os.path.dirname(os.path.abspath(path)) != os.path.abspath(CONFIG_DIR):
+    if os.path.dirname(os.path.abspath(path)) not in _FRAME_HOMES:
         return None
     m = _DRAWN_NAME.match(os.path.basename(path))
     if not m or m.group(1) in _ICON_KINDS:

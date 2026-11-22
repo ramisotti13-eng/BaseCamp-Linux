@@ -105,6 +105,34 @@ def _ensure_owned_dir(path):
 CONFIG_DIR       = os.path.join(_real_home, ".config", "mountain-time-sync")
 _ensure_owned_dir(CONFIG_DIR)
 
+
+def _frame_dir():
+    """Where widget plugins put the frames they draw for a key (#105).
+
+    A clock, a system monitor or a pipe text key redraws up to once a second,
+    and each redraw is a new file. The frames only carry a widget's picture to
+    the pad and the editor and are never part of the configuration, so they go
+    to the runtime directory, which is memory, rather than wearing the disk the
+    configuration lives on. Without a usable one (no session, or started as
+    root for another user) they stay in the configuration directory, as they
+    did before.
+    """
+    run = os.environ.get("XDG_RUNTIME_DIR", "")
+    try:
+        if (run and os.path.isabs(run) and os.path.isdir(run)
+                and os.stat(run).st_uid == os.geteuid()
+                and os.access(run, os.W_OK | os.X_OK)
+                and not (os.geteuid() == 0 and _real_uid not in (None, 0))):
+            path = os.path.join(run, "basecamp-linux", "frames")
+            os.makedirs(path, mode=0o700, exist_ok=True)
+            return path
+    except OSError:
+        pass
+    return CONFIG_DIR
+
+
+FRAME_DIR        = _frame_dir()
+
 STYLE_FILE       = os.path.join(CONFIG_DIR, "style")
 BUTTON_FILE      = os.path.join(CONFIG_DIR, "buttons.json")
 OBS_FILE         = os.path.join(CONFIG_DIR, "obs.json")

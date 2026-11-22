@@ -692,8 +692,11 @@ class Plugin:
         meant an empty key until the next one started.
         """
         try:
-            from shared.config import CONFIG_DIR
-            path = os.path.join(CONFIG_DIR, f"dp_now_playing_p{page}_k{key}.png")
+            try:
+                from shared.config import FRAME_DIR      # in memory (#105)
+            except ImportError:
+                from shared.config import CONFIG_DIR as FRAME_DIR
+            path = os.path.join(FRAME_DIR, f"dp_now_playing_p{page}_k{key}.png")
             tmp = path + ".tmp"
             img.save(tmp, "PNG")     # a reader must never catch it half written
             os.replace(tmp, path)
