@@ -592,9 +592,30 @@ def _make_folder_icon(base_path, label, out_path):
     return out_path
 
 
-def _make_label_icon(text, out_path):
+def _double_caption(double):
+    """What a key's auto label shows under its own caption for its
+    double-click action, or "" when there is nothing short to show (#111).
+    A keystroke or a text is shown as itself and a page switch as where it
+    goes; a command or an address would not fit and is left out."""
+    if not isinstance(double, dict):
+        return ""
+    kind = double.get("type", "none")
+    if kind in ("keypress", "text"):
+        return str(double.get("action", "")).strip()
+    if kind == "page":
+        where = str(double.get("target") or double.get("action") or "").strip()
+        return "\u2192 " + where if where else ""
+    return ""
+
+
+def _make_label_icon(text, out_path, sub="", only_if_changed=False):
     """Render a short label centered on a dark tile — the auto-generated icon
-    for keypress/text actions so those keys aren't blank (issue #31)."""
+    for keypress/text actions so those keys aren't blank (issue #31).
+
+    `sub` goes underneath in a smaller, dimmer face: the key's double-click
+    action, so F1 with F13 on a double-click says both (#111). With
+    `only_if_changed` the file is left alone when it already holds this
+    picture, which keeps a redraw of every label from rewriting them all."""
     from PIL import ImageFont
     img = Image.new("RGB", (ICON_SIZE, ICON_SIZE), (28, 28, 36))
     draw = ImageDraw.Draw(img)
@@ -607,6 +628,19 @@ def _make_label_icon(text, out_path):
             except Exception:
                 continue
         return ImageFont.load_default()
+
+    # The second line first: what it takes is what the caption has left.
+    sub = (sub or "").strip()
+    sub_h = 0
+    if sub:
+        for size in (15, 13, 11):
+            sub_font = _font(size)
+            if draw.textlength(sub, font=sub_font) <= ICON_SIZE - 8:
+                break
+        while len(sub) > 1 and draw.textlength(sub, font=sub_font) > ICON_SIZE - 8:
+            sub = sub[:-2] + "\u2026"
+        sub_h = draw.textbbox((0, 0), "Ag", font=sub_font)[3] + 8
+    room = ICON_SIZE - 6 - sub_h
 
     # Wrap into up to 3 lines, shrinking the font until it fits the tile.
     label = (text or "").strip()
@@ -625,17 +659,30 @@ def _make_label_icon(text, out_path):
             lines.append(cur)
         lines = lines[:3]
         line_h = (draw.textbbox((0, 0), "Ag", font=font)[3]) + 2
-        if line_h * len(lines) <= ICON_SIZE - 6 and all(
+        if line_h * len(lines) <= room and all(
                 draw.textlength(ln, font=font) <= ICON_SIZE - 6 for ln in lines):
             break
     total_h = line_h * len(lines)
-    y = max(2, (ICON_SIZE - total_h) // 2)
+    y = max(2, (room + 6 - total_h) // 2)
     for ln in lines:
         tw = draw.textlength(ln, font=font)
         x = max(2, (ICON_SIZE - tw) // 2)
         draw.text((x + 1, y + 1), ln, fill=(0, 0, 0), font=font)
         draw.text((x, y), ln, fill=(255, 255, 255), font=font)
         y += line_h
+    if sub:
+        sy = ICON_SIZE - sub_h + 2
+        draw.line([(16, sy - 3), (ICON_SIZE - 17, sy - 3)], fill=(60, 60, 78))
+        tw = draw.textlength(sub, font=sub_font)
+        draw.text((max(2, (ICON_SIZE - tw) // 2), sy), sub,
+                  fill=(160, 160, 185), font=sub_font)
+    if only_if_changed and os.path.exists(out_path):
+        try:
+            with Image.open(out_path) as old:
+                if old.convert("RGB").tobytes() == img.tobytes():
+                    return out_path
+        except Exception:
+            pass
     img.save(out_path, "PNG")
     return out_path
 
@@ -2703,6 +2750,7 @@ class DisplayPadPanel(ctk.CTkFrame):
                 acts[0] = _back_act()
 
         self._migrate_generated_icon_names()
+        self._redraw_double_captions()
 
         self._images = dict(self._page_images.get(0, {}))
         # A value that is not a path is dropped rather than carried into the
@@ -3728,7 +3776,7 @@ class DisplayPadPanel(ctk.CTkFrame):
 
         # Auto-generate a label icon for keypress/text keys with no custom image
         # yet, so they show what they do instead of staying blank (issue #31).
-        self._maybe_auto_label_icon(page, idx, btype, action)
+        self._maybe_auto_label_icon(page, idx, btype, action, entry.get("double"))
 
         # ── Button image ──────────────────────────────────────────────────────
         # Only the current page owns the live `self._images` map; a 'set_key'
@@ -3851,7 +3899,32 @@ class DisplayPadPanel(ctk.CTkFrame):
         finally:
             self._syncing_editors = False
 
-    def _maybe_auto_label_icon(self, page, idx, btype, action):
+    def _redraw_double_captions(self):
+        """Give the double-click caption to labels drawn before it existed.
+
+        A label is drawn when its key is saved, so one saved before #111 kept
+        its single line until someone edited the key again. Only the
+        application's own label files are touched, in place, so nothing
+        stored changes; and a file is written only when its picture does,
+        so this costs a start nothing once it has been done.
+        """
+        for page, actions in list(self._page_actions.items()):
+            imgs = self._page_images.get(page, {})
+            for idx, act in enumerate(actions):
+                if not isinstance(act, dict) or act.get("type") not in ("keypress", "text"):
+                    continue
+                sub = _double_caption(act.get("double"))
+                path = imgs.get(str(idx), "")
+                if not sub or path != _generated_icon_name("label", page, idx) \
+                        or not os.path.exists(path):
+                    continue
+                try:
+                    _make_label_icon(str(act.get("action", "")).strip(), path, sub,
+                                     only_if_changed=True)
+                except Exception as e:
+                    print(f"[DisplayPad] label for page {page} key {idx + 1}: {e}")
+
+    def _maybe_auto_label_icon(self, page, idx, btype, action, double=None):
         """Render and assign a text label icon for keypress/text keys (issue
         #31). Only fills an empty slot or replaces a previous auto-icon — a
         user-assigned image is never overwritten."""
@@ -3870,7 +3943,7 @@ class DisplayPadPanel(ctk.CTkFrame):
         label = action.strip()
         icon_path = _generated_icon_name("label", page, idx)
         try:
-            _make_label_icon(label, icon_path)
+            _make_label_icon(label, icon_path, _double_caption(double))
         except Exception:
             return
         self._page_images.setdefault(page, {})[str(idx)] = icon_path

@@ -536,11 +536,39 @@ def order_checks():
         pass
 
 
+def double_caption_checks():
+    """The double-click action under a key's own caption (#111)."""
+    from PIL import Image as _I
+    panel = app._displaypad_panel
+    page = panel._current_page
+    panel._save_page_action(page, 9, "keypress", "F1")
+    path = dpp._generated_icon_name("label", page, 9)
+    plain = list(_I.open(path).convert("L").getdata())
+    panel._save_page_action(page, 9, "keypress", "F1",
+                            double={"type": "keypress", "action": "F13"})
+    with_double = list(_I.open(path).convert("L").getdata())
+    lower = slice(len(plain) * 3 // 4, len(plain))
+    check("a key with a double-click shows it under its caption (#111)",
+          any(with_double[lower]) and with_double[lower] != plain[lower])
+    check("the caption itself moves up to make room",
+          plain[: len(plain) // 2] != with_double[: len(plain) // 2])
+    panel._save_page_action(page, 9, "keypress", "F1",
+                            double={"type": "none", "action": ""})
+    check("and is drawn alone again without one",
+          list(_I.open(path).convert("L").getdata()) == plain)
+    check("a page switch on double-click reads as one",
+          dpp._double_caption({"type": "page", "action": "Main", "target": "Main"})
+          == "\u2192 Main")
+    check("a double-click that is not something short to show adds nothing",
+          dpp._double_caption({"type": "shell", "action": "gnome-terminal"}) == "")
+
+
 def run():
     try:
         checks()
         hue_checks()
         order_checks()
+        double_caption_checks()
     except Exception:
         import traceback
         traceback.print_exc()
