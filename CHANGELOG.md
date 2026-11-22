@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [3.2.1] - 2026-11-22
 
 - **The AppImage makes HTTPS connections on Arch and other distributions, so updates and the plugin list show up there (#94).** Found when the 3.1.4 package from the AUR, started on Arch, said nothing about 3.2.0. The AppImage carries the OpenSSL of the Fedora machine it is built on, and that OpenSSL looks for trusted certificates under `/etc/pki/tls` and nowhere else. Arch keeps them under `/etc/ssl/certs`, openSUSE under `/etc/ssl` as well, so every HTTPS request of the application failed with `CERTIFICATE_VERIFY_FAILED`: the update check, which swallows its errors and so just never said there was an update, the plugin list and its downloads, Now Playing's album covers, and any plugin going online. That is also why @Thargorrr found no working way of updating an AUR install in #94. When the compiled-in locations hold nothing, the application now points OpenSSL at the system's own bundle as it starts; a `SSL_CERT_FILE` or `SSL_CERT_DIR` you set yourself is left alone, and programs the application starts do not get it. An older AppImage cannot fetch this release by itself, since the fetch is what fails: the README's Troubleshooting section has the one-line start that lets it. The AUR package does that for you from 3.1.4-2 on, through a small start script in `/usr/bin`, with the AppImage itself moved to `/opt/basecamp-linux`. `tools/test_ca_bundle.py` checks the choice of bundle, and in a mount namespace with the compiled-in locations hidden, that a running process takes the bundle up.
 

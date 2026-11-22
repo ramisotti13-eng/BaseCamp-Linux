@@ -776,7 +776,7 @@ class UpdateAvailableDialog(ctk.CTkToplevel):
 
 # ── App ────────────────────────────────────────────────────────────────────────
 
-APP_VERSION = "3.2.0"
+APP_VERSION = "3.2.1"
 
 # Window size. The minimum is what the widest screen needs: sidebar plus a
 # 6x2 key grid plus the inspector column, measured rather than guessed.
