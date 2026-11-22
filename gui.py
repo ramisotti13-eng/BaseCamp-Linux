@@ -90,6 +90,7 @@ from shared.config import (
     _list_library, _list_main_library,
     OBS_INTERNAL_ORDER,
     shipped_path,
+    _toolkit_notice_seen, _mark_toolkit_notice_seen,
 )
 # not os.path.join(_RES, ...): _RES is the frozen bundle, and the language
 # files travel with the source overlay. See shipped_path().
@@ -908,6 +909,9 @@ class App(ctk.CTk):
         # on the release, otherwise we fall back to AppImage.
         self._update_kind = ""
         self.after(2000, self._check_for_update)
+        # A source install can pull a CustomTkinter newer than this version
+        # knows; say so once rather than leave it to the console (#116).
+        self.after(1500, self._check_toolkit)
         # Which installed plugins have a newer published version. Asked for
         # here, a little after start and then twice a day: the Plugins screen
         # is only built when someone opens it, so leaving it to that screen
@@ -2048,6 +2052,33 @@ class App(ctk.CTk):
             except Exception:
                 pass
         return "source"
+
+    def _check_toolkit(self):
+        """Tell a source install once that its CustomTkinter is newer than this
+        version handles. The dropdowns then use CustomTkinter's own menus
+        (install_inline_dropdown declined), which work, but without the fix
+        for #66, and the next CustomTkinter may break something else as well.
+        The AppImage carries the CustomTkinter it was tested with, and there is
+        no source to compare against in it anyway."""
+        from shared.ui import dropdown
+        if _FROZEN or not dropdown.DECLINED:
+            return
+        ver = getattr(ctk, "__version__", "?")
+        key = f"{APP_VERSION}|{ver}"
+        if _toolkit_notice_seen(key):
+            return
+        _mark_toolkit_notice_seen(key)
+        parts = (ver.split(".") + ["0"])[:2]
+        try:
+            UI.ConfirmDialog(
+                self, self.T("toolkit_notice_title"),
+                self.T("toolkit_notice_body", ver=ver),
+                self.T("toolkit_notice_ok"),
+                detail=self.T("toolkit_notice_detail", below=".".join(parts)))
+        except Exception as e:
+            print(f"[BaseCamp] CustomTkinter {ver} is newer than this version "
+                  f"supports; update BaseCamp or install customtkinter<"
+                  f"{'.'.join(parts)} ({e})", file=sys.stderr)
 
     def _check_for_update(self):
         """Async fetch latest release tag from GitHub and compare with APP_VERSION.

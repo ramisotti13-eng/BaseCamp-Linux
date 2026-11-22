@@ -53,6 +53,40 @@ missing = sorted(n for n in called if not hasattr(dropdown.InlineDropdown, n))
 check("it has every method the option menu and combo box call",
       called and not missing, "missing %s of %s" % (missing, sorted(called)))
 
+check("nothing is declined with this CustomTkinter", dropdown.DECLINED == (),
+      dropdown.DECLINED)
+
+# ── A CustomTkinter that asks for something the list does not have ──────────
+
+import types                                                  # noqa: E402
+
+modules = (ctk_optionmenu, ctk_combobox)
+real_calls = dropdown._menu_calls
+
+
+def back_to_stock():
+    for m in modules:
+        m.DropdownMenu = m._basecamp_stock_dropdown
+        m._basecamp_inline_dropdown = False
+
+
+back_to_stock()
+dropdown._menu_calls = lambda _m: {"open", "cget", "configure", "frobnicate"}
+check("a call the list cannot answer is found",
+      dropdown.toolkit_gap() == ["frobnicate"], dropdown.toolkit_gap())
+took = dropdown.install_inline_dropdown()
+check("the list then stays out and CustomTkinter keeps its own menu",
+      took is False and all(m.DropdownMenu is m._basecamp_stock_dropdown
+                            for m in modules))
+check("and what was missing is kept for the notice",
+      dropdown.DECLINED == ("frobnicate",), dropdown.DECLINED)
+dropdown._menu_calls = real_calls
+check("with no source to read (the AppImage) nothing counts as missing",
+      dropdown._menu_calls([types.ModuleType("no_source")]) == set())
+check("put back once there is nothing missing",
+      dropdown.install_inline_dropdown() is True and dropdown.DECLINED == ()
+      and all(m.DropdownMenu is dropdown.InlineDropdown for m in modules))
+
 root = ctk.CTk()
 root.geometry("400x300")
 values = ["Alpha", "Beta", "Gamma"]

@@ -131,6 +131,8 @@ Two packages are optional and only unlock extras: `tkinterdnd2` for dragging ima
 
 > **About `hid`:** two unrelated PyPI packages install a module of that name, `hid` and `hidapi`, and they have different APIs. Either works; distribution packages such as `python3-hid` or `python-hidapi` are usually the second one. The app handles both (`shared/hid_compat.py`), so install whichever your system offers.
 
+> **About CustomTkinter 6:** `pip install customtkinter` installs version 6 now. The app works with 5.2 and with 6.0 from 3.2.2 on. Older versions print `AttributeError: 'InlineDropdown' object has no attribute 'is_open'` under 6.0 whenever the pointer enters a dropdown (#116): update with `git pull`, or keep 5.2 with `pip install "customtkinter<6"`. The AppImage carries its own copy and is not affected. From 3.2.2 on the app checks this itself at start: if a later CustomTkinter asks for something it does not know yet, the dropdowns fall back to CustomTkinter's own menus and a window says once what to do.
+
 > **GPU monitoring** requires `nvidia-smi` (NVIDIA only).
 
 > **Language:** the interface ships in English and German and follows your system locale on first start. Settings has a Language selector if you want the other one.

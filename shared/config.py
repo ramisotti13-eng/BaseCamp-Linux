@@ -136,6 +136,8 @@ DISPLAYPAD_PAGE_NAMES_FILE = os.path.join(CONFIG_DIR, "displaypad_page_names.jso
 DISPLAYPAD_PAGES_DIR       = os.path.join(CONFIG_DIR, "displaypad_pages")
 DISPLAYPAD_TIMEOUTS_FILE   = os.path.join(CONFIG_DIR, "displaypad_page_timeouts.json")
 DISPLAYPAD_HINT_BOX_FILE   = os.path.join(CONFIG_DIR, "displaypad_hint_box.json")
+# Which installed CustomTkinter the user was told about, so it is said once (#116).
+TOOLKIT_NOTICE_FILE        = os.path.join(CONFIG_DIR, "toolkit_notice.json")
 DISPLAYPAD_ROTATION_FILE    = os.path.join(CONFIG_DIR, "displaypad_rotation")
 DISPLAYPAD_BRIGHTNESS_FILE  = os.path.join(CONFIG_DIR, "displaypad_brightness")
 DISPLAYPAD_DEBOUNCE_FILE    = os.path.join(CONFIG_DIR, "displaypad_debounce")
@@ -1420,6 +1422,24 @@ def _save_displaypad_page_hints(page_id, note=None, keys=None, show=None):
     if show is not None:
         rec["hint_box"] = bool(show)
     _save_displaypad_page_record(page_id, rec)
+
+
+def _toolkit_notice_seen(key):
+    """Whether the notice about an unsupported CustomTkinter was shown for
+    `key` (this application's version and CustomTkinter's) already."""
+    try:
+        data = _read_json(TOOLKIT_NOTICE_FILE)
+    except Exception:
+        return False
+    return isinstance(data, dict) and data.get("seen") == key
+
+
+def _mark_toolkit_notice_seen(key):
+    try:
+        with open(TOOLKIT_NOTICE_FILE, "w") as f:
+            json.dump({"seen": key}, f)
+    except OSError:
+        pass
 
 
 def _load_hint_box_settings():

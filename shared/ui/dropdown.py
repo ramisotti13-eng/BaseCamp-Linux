@@ -570,20 +570,66 @@ def _key(event):
 
 # ── installation ──────────────────────────────────────────────────────────
 
+# What the installed CustomTkinter asks of a dropdown's menu and InlineDropdown
+# cannot answer, as found by install_inline_dropdown(). Empty while the list is
+# in place; the application tells the user when it is not (#116).
+DECLINED = ()
+
+
+def _menu_calls(modules):
+    """The methods the option menu and the combo box call on their menu, read
+    from CustomTkinter's own source. Empty where there is no source to read, as
+    in the AppImage, which carries the CustomTkinter it was tested with."""
+    import inspect
+    import re
+    calls = set()
+    for module in modules:
+        try:
+            src = inspect.getsource(module)
+        except Exception:
+            return set()
+        calls |= set(re.findall(r"self\._dropdown_menu\.(\w+)", src))
+    return calls
+
+
+def toolkit_gap(modules=None):
+    """Names CustomTkinter calls on a dropdown's menu that InlineDropdown lacks.
+
+    CustomTkinter 6.0 began asking the menu is_open(), and a list without it
+    printed an AttributeError every time the pointer entered a dropdown (#116).
+    A version that asks for something new again is caught here, before the
+    list is put in place, instead of in the user's console.
+    """
+    if modules is None:
+        try:
+            from customtkinter.windows.widgets import ctk_combobox, ctk_optionmenu
+        except Exception:
+            return []
+        modules = (ctk_optionmenu, ctk_combobox)
+    return sorted(n for n in _menu_calls(modules) if not hasattr(InlineDropdown, n))
+
+
 def install_inline_dropdown():
     """Point CustomTkinter's option menu and combo box at the list above.
 
     Reaching into a CustomTkinter internal, the same way the wheel fix in
     ui_helpers does: if a future version renames the class or hands it
     different arguments, the dropdown has to fall back to the Tk menu rather
-    than stop the application from starting. Returns whether it took.
+    than stop the application from starting. The same holds for a version that
+    calls something on the menu this list does not have: its own menu then
+    stays, and DECLINED says what was missing. Returns whether it took.
     """
+    global DECLINED
     try:
         from customtkinter.windows.widgets import ctk_combobox, ctk_optionmenu
     except Exception:
         return False
     modules = (ctk_optionmenu, ctk_combobox)
     if any(getattr(m, "DropdownMenu", None) is None for m in modules):
+        return False
+    gap = toolkit_gap(modules)
+    DECLINED = tuple(gap)
+    if gap:
         return False
     if all(getattr(m, "_basecamp_inline_dropdown", False) for m in modules):
         return True

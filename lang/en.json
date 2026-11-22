@@ -566,5 +566,9 @@
   "mp_effect_reactive_b": "Reactive B",
   "mp_effect_reactive_c": "Reactive C",
   "mp_effect_custom": "Custom",
-  "mp_effect_off": "Off"
+  "mp_effect_off": "Off",
+  "toolkit_notice_title": "CustomTkinter is newer than this version",
+  "toolkit_notice_body": "CustomTkinter {ver} is installed, and this version of BaseCamp Linux does not support it fully yet. The dropdowns use CustomTkinter's own menus for now. Update BaseCamp Linux, or install the CustomTkinter version it supports.",
+  "toolkit_notice_detail": "Update:  git pull\nOr:  pip install \"customtkinter<{below}\"",
+  "toolkit_notice_ok": "OK"
 }
