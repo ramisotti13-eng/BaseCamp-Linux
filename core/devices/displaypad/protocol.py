@@ -18,10 +18,9 @@ stand in for it, a test's stand-in pad or, later, a Windows backend.
 hidapi is reached through shared.hid_compat and looked up at call time, so a
 test that replaces hid_compat.enumerate or open_path reaches this code too.
 """
-import gc
 import time
 
-from shared import hid_compat
+from shared import gc_guard, hid_compat
 
 HID_AVAILABLE = hid_compat.HID_AVAILABLE
 
@@ -165,7 +164,8 @@ def open_interfaces():
         raise RuntimeError("PyUSB not installed (pip install pyusb)")
     # Force GC so previous Device wrappers are fully freed before find() — prevents
     # libusb refcount assertion when old Python objects haven't been collected yet.
-    gc.collect()
+    # Through gc_guard: with the Qt window the collection runs on its GUI thread.
+    gc_guard.collect()
     device_path = find_command_path()
     if device_path is None:
         raise RuntimeError("DisplayPad Interface 3 not found")

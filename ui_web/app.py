@@ -47,7 +47,7 @@ _INSTALL_HINT = ("The new interface needs pywebview and a web view for it: Qt We
 
 class WindowControls:
     """The page's window buttons on a pywebview window. `tray()` says
-    whether the tray helper runs; close then only hides the window."""
+    whether a tray icon is up; close then only hides the window."""
 
     def __init__(self, window, tray=None, shell=None):
         self._w = window
@@ -139,7 +139,7 @@ def parse_args(argv=None):
                     help="stand-in devices and a throw-away configuration (no hardware)")
     ap.add_argument("--debug", action="store_true", help="the web inspector")
     ap.add_argument("--minimized", action="store_true", help="start with the window hidden")
-    ap.add_argument("--no-tray", action="store_true", help="do not start the tray icon helper")
+    ap.add_argument("--no-tray", action="store_true", help="no tray icon")
     from ui_web import demo_photos
     demo_photos.add_argument(ap)
     args, _unknown = ap.parse_known_args(argv)
@@ -168,6 +168,7 @@ def main(argv=None, webview=None, build=None, tray=None, shell_options=None):
                   "is already loaded here.", file=sys.stderr)
             return 2
 
+    toolkit = None
     if webview is None:
         # The toolkit's environment first (backend, X11 under Wayland, Qt
         # WebEngine's sandbox), then the backend itself: ui_web/launch.py.
@@ -179,6 +180,7 @@ def main(argv=None, webview=None, build=None, tray=None, shell_options=None):
             if home:
                 demo.cleanup(home)
             return 2
+        toolkit = backend
         import webview
 
     if not args.demo:
@@ -210,12 +212,14 @@ def main(argv=None, webview=None, build=None, tray=None, shell_options=None):
     index = os.path.join(STATIC_DIR, "index.html")
     if tray is None:
         tray = not (args.demo or args.no_tray)
-    options = {"tray": tray, "monitor": not args.demo}
+    # With the Qt window the tray icon is Qt's own (ui_web/qt_tray.py).
+    title = TITLE + (" (demo)" if args.demo else "")
+    options = {"tray": tray, "monitor": not args.demo, "toolkit": toolkit, "title": title}
     options.update(shell_options or {})
     shell = Shell(app, None, bridge, min_size=MIN_SIZE, size=SIZE, **options)
     # The size and position of the last run (3.x's file), never below the minimum.
     window = webview.create_window(
-        TITLE + (" (demo)" if args.demo else ""), url=index, js_api=bridge.api,
+        title, url=index, js_api=bridge.api,
         min_size=MIN_SIZE, frameless=True,
         easy_drag=False, background_color=BACKGROUND, hidden=args.minimized,
         **shell.window_kwargs())
@@ -224,12 +228,21 @@ def main(argv=None, webview=None, build=None, tray=None, shell_options=None):
     controls = WindowControls(window, tray=shell.tray_running, shell=shell)
     bridge.attach_webview(window, controls)
     window.events.loaded += lambda *_a: bridge.page_loaded()
+    # Virtual pads in windows of their own (ui_web/pad_windows.py).
+    from shared.config import CONFIG_DIR
+    from ui_web.pad_windows import PadWindows
+    pad_windows = PadWindows(app, bridge, STATIC_DIR, webview, CONFIG_DIR,
+                             lambda: shell.quitting, background=BACKGROUND)
+    shell.pad_windows = pad_windows
 
     def closing(*_a):
-        # A close that only hides the window keeps the page alive.
+        # A close that only hides the window keeps the page alive. One that
+        # ends the application takes the pad windows along (the toolkit
+        # would keep running while one is open); they stay marked open.
         keep = shell.on_closing()
         if keep is not False:
             bridge.page_gone()
+            pad_windows.app_quitting()
         return keep
     window.events.closing += closing
     shell.bind_window()
@@ -241,9 +254,26 @@ def main(argv=None, webview=None, build=None, tray=None, shell_options=None):
 
     bridge.start()
     start_core(app)
+    # Phones in the LAN (remote access): a server only while it is switched on.
+    from ui_web.remote_server import RemoteHost
+    remote_host = RemoteHost(app, bridge, STATIC_DIR).start()
     shell.start()
+    collector = None
+    if toolkit == "qt":
+        # The QApplication pywebview will use, before anything makes one
+        # (restore() may ask for the screens): it reports a Qt-wide quit to
+        # the pad windows, and Python's garbage collector runs on its
+        # thread only (ui_web/qt_gui.py).
+        from ui_web import qt_gui
+        _qapp, collector = qt_gui.make_application(pad_windows.system_quit)
     try:
-        kwargs = {"http_server": True, "debug": args.debug}
+        # The pad windows open at the last quit come back with the window
+        # (also --minimized: they are windows of their own). After the core
+        # runs: the virtual pads answer through its scheduler.
+        pad_windows.restore()
+        # func runs on a thread of its own once the toolkit is set up (the
+        # QApplication exists), just before its loop: the Qt tray goes up.
+        kwargs = {"func": shell.gui_started, "http_server": True, "debug": args.debug}
         icon = _icon()
         if icon:
             kwargs["icon"] = icon
@@ -253,7 +283,12 @@ def main(argv=None, webview=None, build=None, tray=None, shell_options=None):
             kwargs.pop("icon", None)
             webview.start(**kwargs)
     finally:
+        if collector is not None:
+            collector.stop()
         shell.save_geometry()
+        pad_windows.stop()
+        # Before the bridge stops (shell.shutdown): no phone calls in after it.
+        remote_host.stop()
         shell.shutdown()
         if home:
             demo.cleanup(home)

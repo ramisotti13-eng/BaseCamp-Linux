@@ -54,6 +54,91 @@ _TYPES = {
 }
 
 
+# ── Pieces of a handler (the remote server uses them too) ─────────────────────
+
+def send(handler, code, obj=None, body=None, ctype="application/json", headers=()):
+    """Answer with `obj` as JSON, or `body` as `ctype`. A refusal (4xx/5xx)
+    closes the connection. `headers`: more (name, value) pairs."""
+    if body is None:
+        body = json.dumps(obj, ensure_ascii=True).encode("utf-8")
+    handler.send_response(code)
+    handler.send_header("Content-Type", ctype)
+    handler.send_header("Content-Length", str(len(body)))
+    handler.send_header("Cache-Control", "no-store")
+    handler.send_header("X-Content-Type-Options", "nosniff")
+    for name, value in headers:
+        handler.send_header(name, value)
+    if code >= 400:
+        # A refused request's body may still be unread: it must not
+        # be taken for the next request on this connection.
+        handler.send_header("Connection", "close")
+        handler.close_connection = True
+    handler.end_headers()
+    if handler.command != "HEAD":
+        handler.wfile.write(body)
+
+
+def read_json(handler):
+    """The request's JSON body, or None when it has none. Raises ValueError
+    (or UnicodeDecodeError) for one that is not JSON."""
+    try:
+        n = int(handler.headers.get("Content-Length") or 0)
+    except ValueError:
+        n = 0
+    raw = handler.rfile.read(n) if n > 0 else b""
+    if not raw.strip():
+        return None
+    return json.loads(raw.decode("utf-8"))
+
+
+def serve_static(handler, root, rel):
+    """The file `rel` under `root` (a realpath), or 404 for anything that is
+    not a file inside it. A directory gives its index.html."""
+    full = os.path.realpath(os.path.join(root, rel))
+    if os.path.isdir(full):
+        full = os.path.join(full, "index.html")
+    if not (full == root or full.startswith(root + os.sep)) or not os.path.isfile(full):
+        return send(handler, 404, body=b"not found", ctype="text/plain; charset=utf-8")
+    ext = os.path.splitext(full)[1].lower()
+    ctype = _TYPES.get(ext) or mimetypes.guess_type(full)[0] or "application/octet-stream"
+    with open(full, "rb") as f:
+        body = f.read()
+    send(handler, 200, body=body, ctype=ctype)
+
+
+def stream_events(handler, q, should_stop):
+    """Server-sent events: each string taken from queue `q` is one message,
+    until `should_stop()` is true, a None is taken or the client goes."""
+    try:
+        handler.send_response(200)
+        handler.send_header("Content-Type", "text/event-stream")
+        handler.send_header("Cache-Control", "no-store")
+        handler.send_header("Connection", "keep-alive")
+        handler.end_headers()
+        handler.wfile.write(b"retry: 2000\n: connected\n\n")
+        handler.wfile.flush()
+        idle = 0.0
+        while not should_stop():
+            try:
+                data = q.get(timeout=0.5)
+            except queue.Empty:
+                idle += 0.5
+                if idle >= KEEPALIVE_S:
+                    idle = 0.0
+                    handler.wfile.write(b": keep-alive\n\n")
+                    handler.wfile.flush()
+                continue
+            if data is None:
+                break
+            idle = 0.0
+            handler.wfile.write(b"data: " + data.encode("ascii") + b"\n\n")
+            handler.wfile.flush()
+    except (BrokenPipeError, ConnectionError, OSError):
+        pass
+    finally:
+        handler.close_connection = True
+
+
 class DevServer:
     """The bridge and a static directory over HTTP. `port` 0 picks a free one."""
 
@@ -156,31 +241,10 @@ def _handler_for(server):
 
         # ── Replies ────────────────────────────────────────────────────────
         def _send(self, code, obj=None, body=None, ctype="application/json"):
-            if body is None:
-                body = json.dumps(obj, ensure_ascii=True).encode("utf-8")
-            self.send_response(code)
-            self.send_header("Content-Type", ctype)
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("X-Content-Type-Options", "nosniff")
-            if code >= 400:
-                # A refused request's body may still be unread: it must not
-                # be taken for the next request on this connection.
-                self.send_header("Connection", "close")
-                self.close_connection = True
-            self.end_headers()
-            if self.command != "HEAD":
-                self.wfile.write(body)
+            send(self, code, obj, body, ctype)
 
         def _body(self):
-            try:
-                n = int(self.headers.get("Content-Length") or 0)
-            except ValueError:
-                n = 0
-            raw = self.rfile.read(n) if n > 0 else b""
-            if not raw.strip():
-                return None
-            return json.loads(raw.decode("utf-8"))
+            return read_json(self)
 
         # ── GET ────────────────────────────────────────────────────────────
         def do_GET(self):
@@ -200,17 +264,7 @@ def _handler_for(server):
 
         def _static(self, path):
             rel = urllib.parse.unquote(path).lstrip("/") or "index.html"
-            full = os.path.realpath(os.path.join(self.srv.static_dir, rel))
-            root = self.srv.static_dir
-            if os.path.isdir(full):
-                full = os.path.join(full, "index.html")
-            if not (full == root or full.startswith(root + os.sep)) or not os.path.isfile(full):
-                return self._send(404, body=b"not found", ctype="text/plain; charset=utf-8")
-            ext = os.path.splitext(full)[1].lower()
-            ctype = _TYPES.get(ext) or mimetypes.guess_type(full)[0] or "application/octet-stream"
-            with open(full, "rb") as f:
-                body = f.read()
-            self._send(200, body=body, ctype=ctype)
+            serve_static(self, self.srv.static_dir, rel)
 
         def _image(self, query):
             path = (query.get("path") or [""])[0]
@@ -227,32 +281,9 @@ def _handler_for(server):
         def _events(self):
             q = self.srv.open_stream()
             try:
-                self.send_response(200)
-                self.send_header("Content-Type", "text/event-stream")
-                self.send_header("Cache-Control", "no-store")
-                self.send_header("Connection", "keep-alive")
-                self.end_headers()
-                self.wfile.write(b"retry: 2000\n: connected\n\n")
-                self.wfile.flush()
-                idle = 0.0
-                while not self.srv.closing.is_set():
-                    try:
-                        data = q.get(timeout=0.5)
-                    except queue.Empty:
-                        idle += 0.5
-                        if idle >= KEEPALIVE_S:
-                            idle = 0.0
-                            self.wfile.write(b": keep-alive\n\n")
-                            self.wfile.flush()
-                        continue
-                    idle = 0.0
-                    self.wfile.write(b"data: " + data.encode("ascii") + b"\n\n")
-                    self.wfile.flush()
-            except (BrokenPipeError, ConnectionError, OSError):
-                pass
+                stream_events(self, q, self.srv.closing.is_set)
             finally:
                 self.srv.close_stream(q)
-                self.close_connection = True
 
         # ── POST ───────────────────────────────────────────────────────────
         def do_POST(self):

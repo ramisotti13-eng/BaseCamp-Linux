@@ -12,7 +12,8 @@ export function frame(el, active, withPages) {
   const rail = h("nav", { class: "rail", "aria-label": "DisplayPad" },
     railItem("displaypad", active),
     h("a", { href: "#/displaypad/keys", class: active === "keys" ? "on" : "", "aria-current": active === "keys" ? "page" : null }, icon("keys"), t("dp_rail_keys")),
-    h("a", { href: "#/displaypad/settings", class: active === "settings" ? "on" : "", "aria-current": active === "settings" ? "page" : null }, icon("sliders"), t("dp_rail_settings")));
+    h("a", { href: "#/displaypad/settings", class: active === "settings" ? "on" : "", "aria-current": active === "settings" ? "page" : null }, icon("sliders"), t("dp_rail_settings")),
+    h("a", { href: "#/displaypad/pads", class: active === "pads" ? "on" : "", "aria-current": active === "pads" ? "page" : null }, icon("vpad"), t("vp_rail")));
   const col = withPages ? h("section", { class: "col" }) : null;
   const main = h("section", { class: "main" });
   const root = h("div", { class: "devpage" + (withPages ? "" : " nocol") }, rail, col, main);

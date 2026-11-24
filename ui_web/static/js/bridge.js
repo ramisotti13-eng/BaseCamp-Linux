@@ -9,6 +9,10 @@
 //   bc.win.minimize() / toggleMaximize() / close()
 //
 // Transports: pywebview (window.pywebview.api), devserver (HTTP + EventSource), mock (?mock).
+// The HTTP transport also serves the phone page (remote.html): a 401 from any /api/ request
+// (the phone is not paired, or no longer) fires the window event "bc:unpaired". A closed event
+// stream is asked once with HEAD whether that is why; otherwise it connects again, and fires
+// "bc:reconnected" when it is back (events may have been missed in between).
 // Events arrive as batches, in order: [topic, payload] pairs from the mock, {topic, payload}
 // objects from the Python side (devserver SSE, and the "bc:events" DOM event in the window).
 
@@ -60,22 +64,43 @@ function pywebviewTransport() {
   };
 }
 
+const unpaired = () => window.dispatchEvent(new Event("bc:unpaired"));
+
 function devserverTransport() {
+  const api = async (url, opts) => {
+    const r = await fetch(url, opts);
+    if (r.status === 401) unpaired();
+    return r;
+  };
   const post = async (url, body) => {
-    const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const r = await api(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     return r.json();
   };
-  let es = null;
+  let es = null, opened = false, probing = false;
   const connect = () => {
     es = new EventSource("/api/events");
+    es.onopen = () => {
+      if (opened) window.dispatchEvent(new Event("bc:reconnected"));
+      opened = true;
+    };
     es.onmessage = (m) => { try { emit(JSON.parse(m.data)); } catch (e) { console.error("bad event", e); } };
+    // EventSource retries a dropped stream by itself; an answer other than 200 (401, 503) closes it
+    // for good. Asked with HEAD /api/call (not /api/events: the devserver would open a stream):
+    // 401 means not paired and it stays closed, anything else connects again a little later.
+    es.onerror = () => {
+      if (es.readyState !== 2 || probing) return;
+      probing = true;
+      api("/api/call", { method: "HEAD" })
+        .then((r) => r.status !== 401, () => true)
+        .then((again) => { probing = false; if (again) setTimeout(connect, 3000); });
+    };
   };
   connect();
   return {
     name: "devserver",
     call: (cmd, params) => post("/api/call", { cmd, params: params || {} }),
     image: async (path, size) => {
-      const r = await fetch("/api/image?path=" + encodeURIComponent(path) + "&size=" + encodeURIComponent(size || 128));
+      const r = await api("/api/image?path=" + encodeURIComponent(path) + "&size=" + encodeURIComponent(size || 128));
       const j = await r.json();
       return (j && j.url) || null;
     },

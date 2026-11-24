@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>BaseCamp Linux</title>
+<link rel="icon" href="img/logo_mark.png">
+<link rel="stylesheet" href="css/tokens.css">
+<link rel="stylesheet" href="css/padwin.css">
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-prev" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" d="M15 5l-7 7 7 7"/></symbol>
+    <symbol id="i-next" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></symbol>
+    <symbol id="i-pin" viewBox="0 0 24 24"><path fill="currentColor" d="M16 9V4h1a1 1 0 000-2H7a1 1 0 000 2h1v5a3 3 0 01-3 3v2h6v7l1 1 1-1v-7h6v-2a3 3 0 01-3-3z"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path stroke="currentColor" stroke-width="2" fill="none" d="M6 6l12 12M18 6L6 18"/></symbol>
+  </defs>
+</svg>
+
+<!-- The title bar. pywebview finds the drag region once, when the page has loaded, and starts a
+     move on a mousedown in it: it is part of the page, and the buttons sit beside it, not in it. -->
+<div class="pw" id="pw">
+  <header class="pwbar">
+    <div class="pwdrag pywebview-drag-region" id="pwdrag"><span class="nm h" id="pwname"></span><span class="pg" id="pwpage"></span></div>
+    <nav class="pwnav" id="pwnav" hidden>
+      <button class="pwbtn" id="pwprev" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-prev"/></svg></button>
+      <button class="pwbtn" id="pwnext" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-next"/></svg></button>
+    </nav>
+    <button class="pwbtn" id="pwpin" type="button" aria-pressed="false"><svg aria-hidden="true" focusable="false"><use href="#i-pin"/></svg></button>
+    <button class="pwbtn close" id="pwclose" type="button"><svg aria-hidden="true" focusable="false"><use href="#i-close"/></svg></button>
+  </header>
+  <main class="pwstage" id="pwstage">
+    <div class="notice" id="pwnotice" role="alert" hidden></div>
+  </main>
+</div>
+<div id="toasts" aria-live="polite"></div>
+
+<script type="module" src="js/padwin.js"></script>
+</body>
+</html>

@@ -648,7 +648,7 @@ class UpdateAvailableDialog(ctk.CTkToplevel):
 
 # ── App ────────────────────────────────────────────────────────────────────────
 
-APP_VERSION = "4.0.0-beta.2"
+APP_VERSION = "4.0.0-beta.3"
 
 #: Why the web interface could not start, when run() started this one in its
 #: place (None otherwise). The window says so once per version.

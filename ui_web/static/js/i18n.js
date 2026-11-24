@@ -35,6 +35,17 @@ export async function load() {
   document.documentElement.lang = lang;
 }
 
+/** The bundled strings (strings.js) in `code`: German for "de", else English. For a page that
+ *  cannot ask the core (the phone page: i18n.strings is not on its allowlist). */
+export function useBundled(code) {
+  lang = code === "de" ? "de" : "en";
+  const col = lang === "de" ? 1 : 0;
+  const next = {};
+  for (const [k, v] of Object.entries(STRINGS)) if (Array.isArray(v) && typeof v[col] === "string") next[k] = v[col];
+  dict = next;
+  document.documentElement.lang = lang;
+}
+
 /** {code: name} and the current code, from i18n.languages (tolerant). */
 export async function languages() {
   const r = await bc.call("i18n.languages");

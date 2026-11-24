@@ -1,0 +1,151 @@
+/* The phone page (remote.html): touch first, the app's tokens (tokens.css), dark like the app.
+   Tiles and buttons are at least 48 px; nothing depends on hover; the safe areas of a notch or a
+   rounded corner stay free (viewport-fit=cover); nothing scrolls sideways at 360 px. */
+* { box-sizing: border-box; }
+html { color-scheme: dark; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+html, body { margin: 0; background: var(--bg); color: var(--fg); }
+body { min-height: 100vh; min-height: 100dvh; font: 16px/1.4 var(--font-text); -webkit-font-smoothing: antialiased;
+  overflow-x: hidden; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+button, input { font: inherit; color: inherit; touch-action: manipulation; }
+button { cursor: pointer; }
+svg { display: block; }
+img { -webkit-user-drag: none; }
+[hidden] { display: none !important; }
+.h { font-family: var(--font-head); font-style: italic; text-transform: uppercase; letter-spacing: .02em; font-weight: 400; }
+.dim { color: var(--fg-dim); }
+:focus-visible { outline: 2px solid var(--beak-hi); outline-offset: 2px; }
+
+/* ── buttons ─────────────────────────────────────────────────────────────── */
+.btn { min-height: 48px; padding: 0 22px; border: 0; border-radius: 3px; background: var(--card-3); color: var(--fg);
+  font-size: 14px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; }
+.btn.primary { background: var(--logo-blue); }
+.btn.primary:active { background: var(--logo-blue-hi); }
+.btn.big { min-height: 52px; width: 100%; font-size: 15px; }
+.btn[disabled] { opacity: .5; cursor: default; }
+.ib { width: 48px; height: 48px; flex: none; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px;
+  background: none; color: var(--fg-dim); }
+.ib svg { width: 24px; height: 24px; }
+.ib:active { background: var(--card-3); color: var(--fg); }
+.ib[disabled] { opacity: .3; cursor: default; }
+.ib[aria-pressed="true"] { color: var(--beak); }
+@media (hover: hover) {
+  .ib:not([disabled]):hover { color: var(--fg); background: var(--card-2); }
+  .btn.primary:not([disabled]):hover { background: var(--logo-blue-hi); }
+  .paditem:hover { background: var(--card-2); }
+}
+
+/* ── screens and the top bar ─────────────────────────────────────────────── */
+.screen { min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; }
+.screen.center { align-items: center; justify-content: center; gap: 18px; text-align: center;
+  padding: max(24px, env(safe-area-inset-top)) max(24px, env(safe-area-inset-right))
+    max(24px, env(safe-area-inset-bottom)) max(24px, env(safe-area-inset-left)); }
+.bar { display: flex; align-items: center; gap: 10px; min-height: 56px; background: var(--bar); border-bottom: 1px solid #000;
+  padding: max(4px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) 4px max(16px, env(safe-area-inset-left)); }
+.bar h1 { margin: 0; font-size: 24px; }
+.bar .logo { width: 30px; height: 30px; object-fit: contain; }
+
+/* ── the menu ────────────────────────────────────────────────────────────── */
+.menulist { flex: 1; width: 100%; max-width: 640px; margin: 0 auto;
+  padding: 16px max(12px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left)); }
+.pads { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.paditem { width: 100%; min-height: 76px; display: grid; grid-template-columns: 56px minmax(0, 1fr) 24px; align-items: center; gap: 14px;
+  padding: 10px 12px 10px 14px; border: 0; border-left: 4px solid var(--logo-blue); border-radius: 3px; background: var(--card);
+  text-align: left; color: var(--fg); }
+.paditem:active { background: var(--card-2); border-left-color: var(--beak); }
+.paditem > svg { width: 24px; height: 24px; color: var(--fg-faint); }
+.paditem .txt { display: flex; flex-direction: column; min-width: 0; }
+.paditem .nm { font-size: 22px; line-height: 1.15; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.paditem .sub { font-size: 14px; color: var(--fg-dim); }
+.mini { justify-self: center; display: grid; grid-template-columns: repeat(var(--cols), 5px); gap: 2px; }
+.mini i { width: 5px; height: 5px; border-radius: 1px; background: var(--fg-faint); }
+.menulist .empty { margin: 24px 4px; }
+.menulist .hint { margin: 28px 4px 0; font-size: 14px; }
+
+/* ── a pad ───────────────────────────────────────────────────────────────── */
+.padview { position: fixed; inset: 0; min-height: 0; display: grid; overflow: hidden;
+  grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-areas: "bar" "stage" "nav"; }
+.padbar { grid-area: bar; gap: 4px; padding-left: max(4px, env(safe-area-inset-left)); }
+.padbar .ttl { flex: 1; min-width: 0; padding: 0 4px; }
+.padbar .nm { font-size: 21px; line-height: 1.1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.padbar .pg { font-size: 14px; line-height: 1.25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pagenav { grid-area: nav; display: flex; align-items: center; justify-content: space-between; gap: 8px; background: var(--bar);
+  border-top: 1px solid #000;
+  padding: 6px max(10px, env(safe-area-inset-right)) max(6px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left)); }
+.pagenav .ib { width: 76px; height: 48px; background: var(--card-2); color: var(--fg); }
+.pagenav .ib:active { background: var(--card-3); }
+.pagenav .pgnum { flex: 1; min-width: 0; text-align: center; font-size: 14px; color: var(--fg-dim); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; }
+
+/* The tiles: as large as fit in the stage's width and height, square. The stage is the
+   container the sizes are taken from (its content box). */
+.stage { --side: clamp(4px, (100vw - 340px) / 5, 12px); grid-area: stage; position: relative; min-height: 0; display: grid;
+  place-items: center; container-type: size;
+  padding: 8px max(var(--side), env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(var(--side), env(safe-area-inset-left)); }
+.pagenav:not([hidden]) ~ .stage { padding-bottom: 8px; }
+.padgrid { --gap: 6px; display: grid; gap: var(--gap); width: 100%;
+  grid-template-columns: repeat(var(--cols), minmax(0, 1fr)); }
+.padgrid .tile { aspect-ratio: 1 / 1; }
+@supports (width: 1cqw) {
+  .padgrid { --gap: clamp(3px, .8cqw, 14px); width: auto;
+    --tile: min((100cqw - (var(--cols) - 1) * var(--gap)) / var(--cols), (100cqh - (var(--rows) - 1) * var(--gap)) / var(--rows));
+    grid-template-columns: repeat(var(--cols), var(--tile)); grid-auto-rows: var(--tile); }
+}
+.tile { position: relative; min-width: 0; padding: 0; border: 0; border-radius: 8px; overflow: hidden; background: var(--card-2);
+  box-shadow: inset 0 0 0 1px var(--line); transition: transform .08s ease-out, box-shadow .08s ease-out;
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.tile.empty { background: var(--card); box-shadow: inset 0 0 0 1px #1f222c; }
+.tile .face { position: absolute; inset: 0; display: block; container-type: inline-size; }
+.tile img { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
+.tile.down { transform: scale(.93); box-shadow: inset 0 0 0 2px var(--beak); }
+.tile.hit::after { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+  background: rgba(253, 157, 2, .22); box-shadow: inset 0 0 0 3px var(--beak-hi); animation: tilehit .38s ease-out forwards; }
+@keyframes tilehit { from { opacity: 1; } to { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .tile { transition: none; } .tile.hit::after { animation-duration: .01s; } }
+/* Text over a key's picture (the layer key-text.js draws; sizes in cqw of the tile's face) */
+.keytext { position: absolute; left: 3%; right: 3%; text-align: center; line-height: 1.15; overflow: hidden; overflow-wrap: anywhere; pointer-events: none; }
+.keytext.top { top: 3%; } .keytext.bottom { bottom: 3%; } .keytext.center { top: 50%; transform: translateY(-50%); }
+
+.notice { position: absolute; z-index: 3; top: 10px; left: 50%; transform: translateX(-50%); width: max-content; max-width: calc(100% - 24px);
+  padding: 12px 16px; background: var(--card-2); border-left: 4px solid var(--beak); border-radius: 3px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .5); font-size: 15px; }
+.notice.locked { border-left-color: var(--danger); }
+.padview.absent .padgrid { opacity: .35; filter: grayscale(1); }
+
+/* Landscape on a phone: the page arrows move up beside the title, the tiles get the height. */
+@media (orientation: landscape) and (max-height: 560px) {
+  .padview { grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto minmax(0, 1fr);
+    grid-template-areas: "bar nav" "stage stage"; }
+  .padbar { min-height: 52px; padding-right: 4px; }
+  .padview:has(.pagenav[hidden]) .padbar { padding-right: max(8px, env(safe-area-inset-right)); }
+  .pagenav { border-top: 0; border-bottom: 1px solid #000; gap: 6px;
+    padding: max(4px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) 4px 4px; }
+  .pagenav .ib { width: 52px; height: 44px; }
+  .pagenav .pgnum { flex: none; min-width: 6.5em; }
+  .stage, .pagenav:not([hidden]) ~ .stage { padding: 6px max(10px, env(safe-area-inset-right)) max(6px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left)); }
+}
+@media (min-width: 600px) and (min-height: 600px) {
+  .stage, .pagenav:not([hidden]) ~ .stage { padding: 16px; }
+}
+
+/* ── pairing ─────────────────────────────────────────────────────────────── */
+.pair { width: 100%; max-width: 420px; margin: 0 auto; display: flex; flex-direction: column; align-items: stretch; gap: 6px;
+  padding: max(32px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left)); }
+.pairlogo { width: 56px; height: 56px; object-fit: contain; align-self: center; }
+.pair h1 { margin: 14px 0 0; font-size: 30px; text-align: center; }
+.pair > p.dim { margin: 4px 0 18px; text-align: center; }
+.pairform { display: flex; flex-direction: column; gap: 12px; }
+.pairform .lbl { font-size: 14px; color: var(--fg-dim); letter-spacing: .06em; text-transform: uppercase; }
+.field.code { width: 100%; height: 60px; padding: 0 12px; border: 1px solid var(--line); border-radius: 3px; background: var(--card-2);
+  font-family: var(--font-text); font-size: 26px; letter-spacing: .25em; text-align: center; text-transform: uppercase; }
+.field.code:focus { border-color: var(--logo-blue-hi); outline: none; box-shadow: 0 0 0 2px var(--logo-blue-hi); }
+.pairmsg { min-height: 1.4em; margin: 10px 0 0; text-align: center; color: var(--fg-dim); }
+.pairmsg.err { color: var(--danger); }
+
+/* ── toasts ──────────────────────────────────────────────────────────────── */
+#toasts { position: fixed; z-index: 60; left: 50%; transform: translateX(-50%); bottom: calc(16px + env(safe-area-inset-bottom));
+  width: min(calc(100vw - 24px), 440px); display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
+.toast { pointer-events: auto; padding: 12px 16px; background: var(--card-2); border-left: 4px solid var(--logo-blue); border-radius: 3px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .5); font-size: 15px; }
+.toast.err { border-left-color: var(--danger); }
+.toast.ok { border-left-color: var(--ok); }

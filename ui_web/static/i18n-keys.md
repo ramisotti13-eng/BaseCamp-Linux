@@ -792,3 +792,101 @@ Existing keys reused (already in `lang/*.json`): `dp_fullscreen`, `dp_pick_fulls
 | `settings_ui_classic_confirm` | BaseCamp Linux starts again in the classic interface. Your settings stay as they are. | BaseCamp Linux startet neu in der klassischen Ansicht. Deine Einstellungen bleiben, wie sie sind. |
 | `settings_ui_restart` | Restart | Neu starten |
 | `settings_ui_classic_btn` | Classic interface | Klassische Ansicht |
+| `remote_pads` | Pads | Pads |
+| `remote_displaypad` | DisplayPad | DisplayPad |
+| `remote_grid` | {rows} × {cols} keys | {rows} × {cols} Tasten |
+| `remote_real_pad` | The pad on the PC | Das Pad am PC |
+| `remote_virtual_pad` | Virtual pad | Virtuelles Pad |
+| `remote_no_pads` | No pads yet. Create a virtual pad in BaseCamp Linux on the PC, or plug in the DisplayPad. | Noch keine Pads. Lege in BaseCamp Linux am PC ein virtuelles Pad an oder schließe das DisplayPad an. |
+| `remote_home_hint` | Tip: put this page on your home screen (browser menu, "Add to Home screen"). | Tipp: Lege diese Seite auf den Startbildschirm (Browsermenü, "Zum Startbildschirm hinzufügen"). |
+| `remote_back` | Back to the pads | Zurück zu den Pads |
+| `remote_prev_page` | Previous page | Vorherige Seite |
+| `remote_next_page` | Next page | Nächste Seite |
+| `remote_page_of` | Page {n} of {count} | Seite {n} von {count} |
+| `remote_fullscreen` | Full screen | Vollbild |
+| `remote_fullscreen_exit` | Leave full screen | Vollbild beenden |
+| `remote_key` | Key {n} | Taste {n} |
+| `remote_locked` | The PC is locked. Unlock it to press keys from the phone. | Der PC ist gesperrt. Entsperre ihn, um vom Handy aus Tasten zu drücken. |
+| `remote_dp_absent` | The DisplayPad is not connected. | Das DisplayPad ist nicht angeschlossen. |
+| `remote_pad_gone` | This pad was deleted on the PC. | Dieses Pad wurde am PC gelöscht. |
+| `remote_press_failed` | The key could not be pressed: {err} | Die Taste ließ sich nicht drücken: {err} |
+| `remote_offline` | No connection to the PC. Is BaseCamp Linux running and remote access on? | Keine Verbindung zum PC. Läuft BaseCamp Linux und ist der Fernzugriff an? |
+| `remote_retry` | Try again | Erneut versuchen |
+| `remote_loading` | Loading… | Lädt… |
+| `remote_pair_title` | Pair this phone | Dieses Handy koppeln |
+| `remote_pair_intro` | In BaseCamp Linux on the PC, open remote access in the settings, choose "Pair a device" and type the code shown there. | Öffne in BaseCamp Linux am PC in den Einstellungen den Fernzugriff, wähle "Gerät koppeln" und gib den Code ein, der dort steht. |
+| `remote_pair_code` | Code | Code |
+| `remote_pair_btn` | Pair | Koppeln |
+| `remote_pairing` | Pairing… | Wird gekoppelt… |
+| `remote_pair_wrong` | Wrong or expired code. Ask the PC for a new one. | Falscher oder abgelaufener Code. Lass dir am PC einen neuen geben. |
+| `remote_pair_failed` | Pairing failed: {err} | Koppeln fehlgeschlagen: {err} |
+| `remote_unpaired` | This phone is no longer paired with the PC. | Dieses Handy ist nicht mehr mit dem PC gekoppelt. |
+| `vp_rail` | Virtual pads | Virtuelle Pads |
+| `vp_new_pad` | New pad | Neues Pad |
+| `vp_pad_name_title` | New virtual pad | Neues virtuelles Pad |
+| `vp_pad_name_prompt` | Name of the pad: | Name des Pads: |
+| `vp_rename_pad_title` | Rename pad | Pad umbenennen |
+| `vp_rename_pad` | Rename {name} | {name} umbenennen |
+| `vp_delete_pad` | Delete {name} | {name} löschen |
+| `vp_delete_pad_title` | Delete pad | Pad löschen |
+| `vp_delete_pad_msg` | Delete "{name}" with all its pages and keys? | "{name}" mit allen Seiten und Tasten löschen? |
+| `vp_empty` | No virtual pad yet. Build one here and press its keys from your phone or with the mouse. | Noch kein virtuelles Pad. Bau hier eins und drück seine Tasten am Handy oder mit der Maus. |
+| `vp_page` | Page | Seite |
+| `vp_new_page` | New page | Neue Seite |
+| `vp_rows` | Rows | Zeilen |
+| `vp_cols` | Columns | Spalten |
+| `vp_edit` | Edit | Bearbeiten |
+| `vp_hint_press` | A click presses the key, as on the phone. | Ein Klick drückt die Taste, wie am Handy. |
+| `vp_hint_edit` | A click picks the key to change. | Ein Klick wählt die Taste zum Ändern. |
+| `vp_grid_label` | Keys of {name} | Tasten von {name} |
+| `vp_text_saved` | Text on key {k} saved | Text auf Taste {k} gespeichert |
+| `vp_home_eyebrow` | No DisplayPad? | Kein DisplayPad? |
+| `vp_home_title` | Build a virtual pad | Virtuelles Pad bauen |
+| `vp_home_btn` | Build | Bauen |
+| `vp_win_open` | Open as window | Als Fenster öffnen |
+| `vp_win_show` | Show the window | Fenster zeigen |
+| `vp_win_open_pad` | Open {name} as window | {name} als Fenster öffnen |
+| `vp_win_is_open` | In a window | Im Fenster |
+| `vp_win_on_top` | Always on top | Immer im Vordergrund |
+| `vp_win_close` | Close window | Fenster schließen |
+| `vp_win_gone` | This pad no longer exists. The window closes. | Dieses Pad gibt es nicht mehr. Das Fenster schließt sich. |
+| `vp_win_failed` | The pad could not be loaded: {err} | Das Pad ließ sich nicht laden: {err} |
+| `rset_rail` | Remote access | Fernzugriff |
+| `rset_title` | Remote access | Fernzugriff |
+| `rset_enabled` | Remote access for phones | Fernzugriff für Handys |
+| `rset_intro` | Phones in this network open the pads of this PC in their browser and press the keys. | Handys in diesem Netzwerk öffnen die Pads dieses PCs im Browser und drücken die Tasten. |
+| `rset_port` | Port | Port |
+| `rset_port_in_use` | Port {port} is in use by another program. | Port {port} wird von einem anderen Programm benutzt. |
+| `rset_cannot_listen` | Remote access cannot use port {port}: {err} | Der Fernzugriff kann Port {port} nicht nutzen: {err} |
+| `rset_try_again` | Try again | Erneut versuchen |
+| `rset_unencrypted` | Use it in a network you trust: the connection is not encrypted. | Nutze ihn in einem Netzwerk, dem du vertraust: die Verbindung ist nicht verschlüsselt. |
+| `rset_allow_shell` | Phones may set shell commands | Handys dürfen Shell-Befehle festlegen |
+| `rset_allow_shell_help` | Covers shell, program and plugin actions. Even without it, keys and texts a phone sets can type on this PC: pair only your own devices. | Gilt für Shell-, Programm- und Plugin-Aktionen. Auch ohne können Tasten und Texte, die ein Handy festlegt, auf diesem PC tippen: kopple nur deine eigenen Geräte. |
+| `rset_allow_locked` | Phones may press keys while the PC is locked | Handys dürfen Tasten drücken, während der PC gesperrt ist |
+| `rset_allow_locked_help` | Keys then also run while the session is locked. | Tasten laufen dann auch, während die Sitzung gesperrt ist. |
+| `rset_lock_unwatched` | The lock of this session cannot be followed here, so keys also run while the PC is locked. | Die Sperre dieser Sitzung kann hier nicht verfolgt werden, Tasten laufen deshalb auch bei gesperrtem PC. |
+| `rset_pair` | Pair a device | Gerät koppeln |
+| `rset_pair_off` | Switch remote access on to pair a device. | Schalte den Fernzugriff ein, um ein Gerät zu koppeln. |
+| `rset_pair_how` | Scan the QR code with the phone's camera, or open an address below on the phone and type the code. | Scanne den QR-Code mit der Kamera des Handys oder öffne eine Adresse unten auf dem Handy und gib den Code ein. |
+| `rset_code` | Code | Code |
+| `rset_expires_in` | Valid for {time} | Noch {time} gültig |
+| `rset_expired` | The code has run out. | Der Code ist abgelaufen. |
+| `rset_addresses` | Addresses | Adressen |
+| `rset_no_address` | No network address found. Is the PC in a network? | Keine Netzwerkadresse gefunden. Ist der PC in einem Netzwerk? |
+| `rset_firewall_hint` | If the phone cannot open the page, allow port {port} (TCP) in the PC's firewall. | Öffnet das Handy die Seite nicht, gib Port {port} (TCP) in der Firewall des PCs frei. |
+| `rset_address_hint` | If the phone loses the pairing after the PC got a new address, pair again with the code, or give the PC a fixed address in your router. | Verliert das Handy die Kopplung, weil der PC eine neue Adresse bekommen hat, kopple es erneut mit dem Code oder gib dem PC in deinem Router eine feste Adresse. |
+| `rset_qr_label` | QR code for {url} | QR-Code für {url} |
+| `rset_pair_done` | Done | Fertig |
+| `rset_paired_toast` | {name} is paired. | {name} ist gekoppelt. |
+| `rset_devices` | Paired devices | Gekoppelte Geräte |
+| `rset_no_devices` | No device paired yet. | Noch kein Gerät gekoppelt. |
+| `rset_device_dates` | Paired {paired} · last seen {seen} | Gekoppelt {paired} · zuletzt gesehen {seen} |
+| `rset_rename` | Rename {name} | {name} umbenennen |
+| `rset_rename_title` | Rename device | Gerät umbenennen |
+| `rset_rename_prompt` | Name of the device: | Name des Geräts: |
+| `rset_remove` | Remove {name} | {name} entfernen |
+| `rset_remove_title` | Remove device | Gerät entfernen |
+| `rset_remove_msg` | Remove "{name}"? This phone can then no longer press keys until it is paired again. | "{name}" entfernen? Dieses Handy kann dann keine Tasten mehr drücken, bis es neu gekoppelt ist. |
+| `rset_remove_btn` | Remove | Entfernen |
+| `rset_shell_confirm_title` | Allow shell commands from phones? | Shell-Befehle von Handys erlauben? |
+| `rset_shell_allow` | Allow | Erlauben |

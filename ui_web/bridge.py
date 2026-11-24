@@ -17,8 +17,9 @@ The page's methods (JsApi, and the same names on Bridge):
     image(path, size)        -> "data:image/png;base64,..." or None; only
                                 files under the configuration, frame and
                                 resources directories, pictures a
-                                DisplayPad key carries and files picked in
-                                this session (pick_file)
+                                DisplayPad key or a virtual pad's key
+                                carries and files picked in this session
+                                (pick_file)
     pick_file(opts)          -> a path or None; opts {title, kind: image|any}
     open_external(url)       -> True when an http(s) URL was handed to the
                                 system browser
@@ -290,10 +291,11 @@ class Bridge:
         self._cache_entries = cache_entries
         self._cache_bytes = cache_bytes
         self.cache_hits = 0
-        # The webview: set by attach_webview(); events go to it once its
-        # page has loaded.
-        self._webview = None
-        self._page_ready = False
+        # The windows events go to (each once its page has loaded): the
+        # main one via attach_webview(), more via add_window().
+        self._windows = []
+        self._windows_lock = threading.Lock()
+        self._main = None
         self._remove_webview_sink = None
         self.api = JsApi(self)
 
@@ -303,35 +305,58 @@ class Bridge:
         return self
 
     def stop(self):
-        self._page_ready = False
+        with self._windows_lock:
+            for h in self._windows:
+                h._ready = False
         self.events.stop()
 
     # ── The pywebview window ───────────────────────────────────────────────
+    def add_window(self, window):
+        """Deliver events to one more pywebview window. Returns a handle:
+        loaded() once its page has loaded, gone() while it cannot take
+        JS, remove() for good."""
+        h = _WindowHandle(self, window)
+        with self._windows_lock:
+            self._windows.append(h)
+            if self._remove_webview_sink is None:
+                self._remove_webview_sink = self.events.add_sink(self._to_windows)
+        return h
+
     def attach_webview(self, webview_window, controls=None):
-        """Deliver events to a pywebview window (from its page's load on)
-        and use `controls` for the window buttons."""
-        self._webview = webview_window
+        """Deliver events to the main pywebview window (from its page's
+        load on) and use `controls` for the window buttons."""
+        if self._main is not None:
+            self._main.remove()
+        self._main = self.add_window(webview_window)
         if controls is not None:
             self._window = controls
-        if self._remove_webview_sink is None:
-            self._remove_webview_sink = self.events.add_sink(self._to_webview)
 
     def page_loaded(self):
-        """The window's page has loaded (pywebview's loaded event, or the
-        page's own ready())."""
-        self._page_ready = True
+        """The main window's page has loaded (pywebview's loaded event, or
+        the page's own ready())."""
+        if self._main is not None:
+            self._main.loaded()
 
     def page_gone(self):
-        """The window is closing or loading another page: no evaluate_js."""
-        self._page_ready = False
+        """The main window is closing or loading another page."""
+        if self._main is not None:
+            self._main.gone()
 
-    def _to_webview(self, batch):
-        w = self._webview
-        if w is None or not self._page_ready:
+    def _to_windows(self, batch):
+        with self._windows_lock:
+            targets = [h for h in self._windows if h._ready]
+        if not targets:
             return
         js = EVENT_JS % json.dumps(batch, ensure_ascii=True)
-        run = getattr(w, "run_js", None) or w.evaluate_js
-        run(js)
+        for h in targets:
+            # A window may have gone (or been removed) since the snapshot,
+            # for example closed by an earlier delivery of this batch.
+            if not h._ready:
+                continue
+            try:
+                h._run(js)
+            except Exception:
+                log.exception("delivering events to a window failed")
 
     # ── What the page calls ────────────────────────────────────────────────
     def call(self, cmd, params=None):
@@ -366,13 +391,25 @@ class Bridge:
             return True
         if real in self._picked:
             return True
-        pad = self._core.service("displaypad")
-        pictures = getattr(pad, "pictures", None)
-        if pictures is not None:
+        return self._key_picture(real)
+
+    def key_picture(self, path):
+        """Is `path` a picture a DisplayPad key or a virtual pad's key
+        carries now? (What the remote server serves beside the library.)"""
+        if not isinstance(path, str) or not path or "\x00" in path:
+            return False
+        return self._key_picture(_norm(path))
+
+    def _key_picture(self, real):
+        for name in ("displaypad", "vpads"):
+            pictures = getattr(self._core.service(name), "pictures", None)
+            if pictures is None:
+                continue
             try:
-                return real in {_norm(p) for p in pictures()}
+                if real in {_norm(p) for p in pictures()}:
+                    return True
             except Exception:
-                log.exception("asking the DisplayPad for its pictures failed")
+                log.exception("asking %s for its pictures failed", name)
         return False
 
     def image(self, path, size=None):
@@ -489,6 +526,35 @@ class Bridge:
 
     def win_close(self):
         return self._window_do("close")
+
+
+class _WindowHandle:
+    """One window the bridge delivers events to (see Bridge.add_window)."""
+
+    def __init__(self, bridge, window):
+        self._bridge = bridge
+        self._window = window
+        self._ready = False
+
+    def loaded(self):
+        self._ready = True
+
+    def gone(self):
+        self._ready = False
+
+    def remove(self):
+        self._ready = False
+        b = self._bridge
+        with b._windows_lock:
+            if self in b._windows:
+                b._windows.remove(self)
+        if b._main is self:
+            b._main = None
+
+    def _run(self, js):
+        w = self._window
+        run = getattr(w, "run_js", None) or w.evaluate_js
+        run(js)
 
 
 class JsApi:

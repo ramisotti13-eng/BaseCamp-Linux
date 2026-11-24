@@ -37,6 +37,24 @@ function card(d) {
   return el;
 }
 
+// No DisplayPad plugged in: a virtual pad (keys on the phone, under the DisplayPad's tab) can stand in.
+const VPAD_ART =
+  '<svg viewBox="0 0 120 200" aria-hidden="true"><rect x="6" y="4" width="108" height="192" rx="16" fill="#23262f" stroke="#5d6375" stroke-width="2"/>' +
+  '<rect x="16" y="22" width="88" height="150" rx="4" fill="#101217"/>' +
+  [0, 1, 2, 3].map((r) => [0, 1, 2].map((c) => `<rect x="${22 + c * 27}" y="${32 + r * 34}" width="22" height="22" rx="3" fill="${(r + c) % 3 ? "#3a3f4d" : "#0038e2"}"/>`).join("")).join("") +
+  '<rect x="48" y="182" width="24" height="4" rx="2" fill="#5d6375"/></svg>';
+
+function vpadCard() {
+  const tpl = document.createElement("template");
+  tpl.innerHTML = VPAD_ART;   // our own static drawing, no user data
+  const svg = tpl.content.firstChild;
+  svg.setAttribute("class", "pic");
+  return h("section", { class: "dev vpcard", "aria-label": t("vp_home_title") },
+    h("div", { class: "acc" }), h("div", { class: "eyebrow h" }, t("vp_home_eyebrow")), h("h2", { class: "name h" }, t("vp_home_title")),
+    svg,
+    h("a", { class: "cta", href: "#/displaypad/pads" }, icon("plus"), t("vp_home_btn")));
+}
+
 function mkSvg(id) {
   const tpl = document.createElement("template");
   tpl.innerHTML = artFor(id).trim();   // our own static drawings, no user data
@@ -65,9 +83,11 @@ function footLink(url, label, ic) {
 function render(el, version) {
   clear(el);
   const list = devices.DEVICES.filter((d) => devices.isPresent(d.id));
+  const cards = list.map(card);
+  if (!devices.isPresent("displaypad")) cards.push(vpadCard());
   el.append(h("div", { class: "home" },
-    list.length ? h("div", { class: "devices" }, list.map(card))
-      : h("p", { class: "home-empty" }, t("home_no_devices")),
+    list.length ? null : h("p", { class: "home-empty" }, t("home_no_devices")),
+    h("div", { class: "devices" }, cards),
     h("div", { class: "banners" },
       banner("b1", t("home_help_eyebrow"), t("home_help_title"), LINKS.help),
       banner("b2", t("home_plugins_eyebrow"), t("home_plugins_title"), LINKS.plugins, [icon("wrench"), t("home_plugins_btn")])),

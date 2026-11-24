@@ -943,3 +943,99 @@ svg.e60pic { width: 330px; height: auto; }
 /* Settings > Application: the autostart switch and, on its line, the way to the classic interface */
 #settings-app-row { display: flex; align-items: center; gap: 12px; flex-wrap: nowrap; }
 #settings-app-row .uiswitch { margin-left: auto; white-space: nowrap; height: 32px; padding: 0 14px; flex: none; }
+
+/* Virtual pads (vp-pads.js): the bar (page, rows, columns, edit), the pad as the phone shows it with
+   its tiles as large as the stage allows, and the key inspector under it in edit mode. */
+.vpbar { container: vpbar / inline-size; width: 100%; display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 16px; flex: none; }
+.vpbar .grp { display: flex; flex-direction: column; min-width: 0; }
+.vpbar .lab { margin-bottom: 6px; }
+.vpbar .field { height: 38px; }
+.vpbar .pagerow { align-items: center; gap: 4px; }
+.vpbar .pagesel { width: 150px; flex: none; }
+.vpbar .num { width: 66px; }
+.vpbar .vpedit { margin-left: auto; height: 38px; padding: 0 14px; display: inline-flex; align-items: center; gap: 8px; }
+.vpbar .vpedit[aria-pressed="true"] { background: var(--logo-blue); }
+.vpbar .vpwin { margin-left: auto; height: 38px; padding: 0 14px; display: inline-flex; align-items: center; gap: 8px; }
+.vpbar .vpwin.on { color: var(--beak); }
+.vpbar .vpwin + .vpedit { margin-left: 0; }
+/* A narrow bar (the main window at 1100 px): "Open as window" keeps its icon (and its name as a
+   tooltip) and the page menu gets narrower, so the bar stays one line. */
+@container vpbar (max-width: 779px) {
+  .vpbar .vpwin { width: 40px; padding: 0; justify-content: center; }
+  .vpbar .vpwin .lbl { display: none; }
+  .vpbar .pagesel { width: 120px; }
+}
+@container vpbar (max-width: 600px) {
+  .vpbar .vpedit { width: 40px; padding: 0; justify-content: center; }
+  .vpbar .vpedit .lbl { display: none; }
+}
+.row .sub .winmark { display: inline-block; margin-left: 6px; color: var(--beak); vertical-align: -2px; }
+.row .sub .winmark svg { width: 13px; height: 13px; }
+.vpstage { width: 100%; flex: 1 1 0; min-height: 170px; margin-top: 14px; display: grid; place-items: center; container-type: size; }
+.vpstage .padgrid { --gap: 8px; display: grid; gap: var(--gap); grid-template-columns: repeat(var(--cols), 64px); grid-auto-rows: 64px; }
+@supports (width: 1cqw) {
+  .vpstage .padgrid { --gap: clamp(4px, 1.2cqw, 12px);
+    --tile: min((100cqw - (var(--cols) - 1) * var(--gap)) / var(--cols), (100cqh - (var(--rows) - 1) * var(--gap)) / var(--rows), 132px);
+    grid-template-columns: repeat(var(--cols), var(--tile)); grid-auto-rows: var(--tile); }
+}
+.vpstage .tile { position: relative; min-width: 0; padding: 0; border: 0; border-radius: min(8px, 14%); overflow: hidden; background: var(--card-2); cursor: pointer;
+  box-shadow: inset 0 0 0 1px var(--line); transition: transform .08s ease-out, box-shadow .08s ease-out; user-select: none; }
+.vpstage .tile.empty { background: var(--card); box-shadow: inset 0 0 0 1px #2a2e3a; }
+.vpstage .tile:hover { box-shadow: inset 0 0 0 1px #8a93b2; }
+.vpstage .tile .face { position: absolute; inset: 0; display: block; container-type: inline-size; }
+.vpstage .tile img { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
+.vpstage .tile.down { transform: scale(.93); box-shadow: inset 0 0 0 2px var(--beak); }
+.vpstage .tile.sel::before { content: ""; position: absolute; inset: 0; z-index: 1; border-radius: inherit; box-shadow: inset 0 0 0 3px #fff; pointer-events: none; }
+.vpstage .tile:focus-visible { outline: 2px solid var(--beak-hi); outline-offset: 1px; }
+.vpstage .tile.hit::after { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+  background: rgba(253, 157, 2, .22); box-shadow: inset 0 0 0 3px var(--beak-hi); animation: vptilehit .38s ease-out forwards; }
+@keyframes vptilehit { from { opacity: 1; } to { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .vpstage .tile { transition: none; } .vpstage .tile.hit::after { animation-duration: .01s; } }
+.vpempty { text-align: center; color: var(--fg-dim); max-width: 420px; }
+.vpempty .btn { display: inline-flex; align-items: center; gap: 8px; }
+.vphint { color: var(--fg-faint); font-size: 12px; margin-top: 8px; min-height: 16px; flex: none; }
+.vpinsp { width: 100%; flex: none; }
+.vpinsp .inspector { margin-top: 10px; }
+.vpinsp .picrow .thumb { position: relative; }
+.vpinsp .inspector .grid2 > .wide { grid-column: 1 / -1; }
+@media (max-height: 760px) { .vpstage { margin-top: 8px; } .vpinsp .inspector { margin-top: 6px; } .vpinsp .grid2 { gap: 8px 26px; }
+  .vpinsp .picrow .thumb { width: 48px; height: 48px; } .vpinsp .picrow .btn { height: 34px; }
+  .vpinsp .field { height: 36px; } .vpinsp select.field { background-position: calc(100% - 20px) 15px, calc(100% - 14px) 15px; }
+  .vpmain.vpediting .vphint { display: none; } }
+
+.vpstage .tile.assigned { background: rgba(0, 56, 226, .85); box-shadow: none; }
+.vpstage .tile .vplbl { position: absolute; inset: 0; display: grid; place-items: center; padding: 4px; color: #fff; font-size: 12px; font-size: clamp(9px, 13cqw, 15px); line-height: 1.15; text-align: center; overflow: hidden; overflow-wrap: anywhere; pointer-events: none; }
+@container (max-width: 44px) { .vpstage .tile .vplbl { display: none; } }
+
+/* Home without a DisplayPad: the card that leads to the virtual pads. */
+.dev.vpcard .pic { height: 62cqh; right: 34px; bottom: -10px; }
+
+/* Settings > Remote access (set-remote.js): the switch, the port with its error beside it, the two
+   boxes with their lines; on the right "Pair a device" (QR code, code, addresses) or the devices. */
+.rset .rbox { margin-top: 14px; }
+.rset .rbox .check { margin-top: 0; }
+.rset .rbox .help { margin: 4px 0 0 28px; }
+.rset .rport { margin-top: 18px; }
+.rset .rportrow { display: flex; gap: 14px; align-items: center; }
+.rset .rportrow .field { width: 120px; flex: none; }
+.rset .rportrow .msg { margin: 0; flex: 1; min-width: 0; padding: 6px 10px 6px 12px; font-size: 13px; line-height: 1.35; }
+.rset .rnote { margin-top: 10px; }
+.rset .msg.warn { font-size: 13px; }
+.rset .rpairbtn { margin-top: 18px; }
+.rset .rlab { margin-top: 18px; }
+.rpair { display: flex; gap: 20px; align-items: flex-start; margin-top: 18px; }
+.rqr { flex: none; display: block; image-rendering: pixelated; border-radius: 2px; }
+.rpairside { min-width: 0; }
+.rcode { font-family: ui-monospace, Consolas, monospace; font-size: 30px; font-weight: 700; letter-spacing: .12em; line-height: 1.15; white-space: nowrap; user-select: all; }
+.rleft { color: var(--fg-dim); font-size: 13px; font-variant-numeric: tabular-nums; margin-top: 4px; }
+.rpairside .help { margin-top: 10px; }
+.rurls { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; user-select: text; color: var(--fg); max-height: 128px; overflow-y: auto; }
+.rdevs { list-style: none; margin: 10px 0 0; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; max-height: calc(100vh - 360px); overflow: hidden auto; }
+.rdev { display: flex; align-items: center; gap: 6px; padding: 6px 6px 6px 12px; background: var(--card-2); border-left: 4px solid var(--logo-blue); }
+.rdev .txt { flex: 1; min-width: 0; }
+.rdev .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rdev .sub { color: var(--fg-faint); font-size: 12px; }
+@media (max-height: 760px) {
+  .rset .rbox { margin-top: 10px; } .rset .rport { margin-top: 12px; } .rpair { margin-top: 12px; } .rset .rlab { margin-top: 12px; }
+  .rset .rpairbtn { margin-top: 12px; }
+}

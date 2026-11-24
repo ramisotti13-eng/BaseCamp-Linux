@@ -18,10 +18,12 @@ _WEB_MODULES = collect_submodules('ui_web')
 # binding the same way; both are named so the analysis takes them. Only Qt
 # is carried: WebKit2GTK finds its helper processes and libraries under
 # paths fixed when it was compiled, which a bundle cannot provide, while Qt
-# WebEngine is relocatable and PyInstaller has hooks for it.
-_WEB_HIDDEN = ['webview', 'webview.platforms.qt', 'qtpy',
+# WebEngine is relocatable and PyInstaller has hooks for it. QtDBus: the
+# tray icon (ui_web/qt_tray.py) is a StatusNotifierItem over DBus, and the
+# tray asks the session bus whether a StatusNotifierWatcher is there yet.
+_WEB_HIDDEN = ['webview', 'webview.platforms.qt', 'qtpy', 'qtpy.QtDBus',
                'PySide6.QtCore', 'PySide6.QtGui', 'PySide6.QtWidgets',
-               'PySide6.QtNetwork', 'PySide6.QtWebChannel',
+               'PySide6.QtNetwork', 'PySide6.QtWebChannel', 'PySide6.QtDBus',
                'PySide6.QtWebEngineCore', 'PySide6.QtWebEngineWidgets']
 # Backends and bindings this bundle does not carry. Excluded so a build
 # machine that happens to have them installed does not drag them in (two Qt

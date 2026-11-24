@@ -8,6 +8,11 @@ import { h } from "./ui.js";
 export const TEXT_FONTS_FALLBACK = ["DejaVu Sans", "DejaVu Serif", "DejaVu Sans Mono", "Liberation Sans", "Liberation Serif", "Liberation Mono"];
 export const TEXT_DEFAULT = { text: "", pos: "bottom", font: "DejaVu Sans", size_pt: 12, bold: false, italic: false, underline: false, color: "white" };
 
+/** A font family name fit for a quoted CSS string: no quote, backslash or semicolon. */
+export function cssFontName(name) {
+  return String(name).replace(/["\\;]/g, "");
+}
+
 /** The text over a key, as a layer for a box that is 102 units wide in the core (the box sets container-type). */
 export function textLayer(cfg) {
   if (!cfg || !cfg.text) return null;
@@ -15,7 +20,7 @@ export function textLayer(cfg) {
   const fg = cfg.color === "black" ? "#000" : "#fff", bg = cfg.color === "black" ? "#fff" : "#000";
   const cls = "keytext " + (cfg.pos === "top" ? "top" : cfg.pos === "center" ? "center" : "bottom");
   return h("span", { class: cls, "aria-hidden": "true",
-    style: `font-family:"${String(cfg.font).replace(/"/g, "")}",sans-serif;font-size:${px * 0.6}px;font-size:${(px / 1.02).toFixed(2)}cqw;` +
+    style: `font-family:"${cssFontName(cfg.font)}",sans-serif;font-size:${px * 0.6}px;font-size:${(px / 1.02).toFixed(2)}cqw;` +
       `color:${fg};text-shadow:1px 1px 0 ${bg};font-weight:${cfg.bold ? 700 : 400};font-style:${cfg.italic ? "italic" : "normal"};` +
       `text-decoration:${cfg.underline ? "underline" : "none"}` }, cfg.text);
 }

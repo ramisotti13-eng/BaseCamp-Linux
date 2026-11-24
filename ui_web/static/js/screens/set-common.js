@@ -1,5 +1,5 @@
-// Shared by the screens under the gear (Settings, Macros, OBS, Plugins): the frame with its
-// icon rail, a titled panel, and the wording of errors. The four tabs have no device, so they
+// Shared by the screens under the gear (Settings, Macros, OBS, Plugins, Remote access): the frame
+// with its icon rail, a titled panel, and the wording of errors. These tabs have no device, so they
 // sit together under the gear, the way the device pages keep their own rail.
 import { t } from "../i18n.js";
 import { h, icon, clear } from "../ui.js";
@@ -10,6 +10,7 @@ const TABS = [
   { id: "macros", href: "#/settings/macros", icon: "macro", label: () => t("macro_title") },
   { id: "obs", href: "#/settings/obs", icon: "obs", label: () => "OBS" },
   { id: "plugins", href: "#/settings/plugins", icon: "plug", label: () => t("dp_plugins_group") },
+  { id: "remote", href: "#/settings/remote", icon: "globe", label: () => t("rset_rail") },
 ];
 
 /** Builds .devpage with the rail; returns {root, col, main}. `withList` adds the middle column. */

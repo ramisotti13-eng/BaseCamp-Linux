@@ -476,8 +476,12 @@ class DisplayPadService(Service):
                  "hint": hints.get(str(i), "")} for i in range(NUM_KEYS)]}
         return self._on_scheduler(run)
 
-    def _cmd_press_key(self, key):
-        self._on_scheduler(self._key_pressed, self._key_arg(key))
+    def _cmd_press_key(self, key, remote=False):
+        """`remote`: a press from a phone. It runs at once (a dark pad is lit
+        up, the lock screen does not eat it) and needs a pad that is there."""
+        if remote and not self.device_present:
+            raise CommandError("the DisplayPad is not connected")
+        self._on_scheduler(self._key_pressed, self._key_arg(key), bool(remote))
 
     def _cmd_set_action(self, key, type="none", action="", page=None, extra=None,
                         target=None, icon=None, double=None, hint=None):
@@ -1139,11 +1143,13 @@ class DisplayPadService(Service):
     def stop_animation(self):
         self.anim_stop.set()
 
-    def _key_pressed(self, idx):
+    def _key_pressed(self, idx, remote=False):
         """A key went down on the pad (on the scheduler). A press that wakes
         the pad from its auto-off, or one while the lock screen holds it,
-        does nothing else (power.py)."""
-        if self.power.key_pressed(idx):
+        does nothing else (power.py). A remote press wakes it and runs."""
+        if remote:
+            self.power.wake()
+        elif self.power.key_pressed(idx):
             return
         self.runner.key_pressed(idx)
 

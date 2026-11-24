@@ -140,6 +140,26 @@ takes them too. A few:
 | `macros.toggle` | `macro_id` | start a macro, or stop a toggle run |
 | `obs.execute` | `type` (`scene`, `record`, `stream`), `scene` | an OBS action |
 
+Virtual pads and remote access (4.0):
+
+| cmd | fields | reply |
+|-----|--------|-------|
+| `vpads.list` | none | `pads: [{id, name, rows, cols, pages, ...}]` (without the keys) |
+| `vpads.create` | `name`, `rows` (1-6, default 3), `cols` (1-8, default 4) | `pad` |
+| `vpads.rename` / `delete` | `pad`, `name` | a pad's name; or remove it |
+| `vpads.set_grid` | `pad`, `rows`, `cols` | the grid size |
+| `vpads.keys` | `pad`, `page` (optional, default the current one) | the pad with that page's keys |
+| `vpads.set_key` | `pad`, `key`, `page`, `image`, `text`, `text_style`, `action` | sets what is given of one key (`action` is an object with a `type`, as `displaypad.set_action`; `text_style` keeps only `font` (a known family), `pos`, `color` (white, black or #rrggbb), `size_pt` (6 to 18), `bold`, `italic`, `underline`) |
+| `vpads.clear_key` | `pad`, `key`, `page` | empties a key |
+| `vpads.press` | `pad`, `key` | runs the key's action (chains and double press as on the DisplayPad) |
+| `vpads.switch_page` | `pad`, `page` | makes a page the current one |
+| `vpads.create_page` / `rename_page` / `delete_page` | `pad`, `page`, `name` | the page actions |
+| `remote.settings` | none | `enabled`, `port`, `allow_shell`, `allow_locked`, `lock_watching`, `server_error` |
+| `remote.set_settings` | `enabled`, `port`, `allow_shell`, `allow_locked` (each optional) | changes what is given; the server follows |
+| `remote.pair` | none | a one-time code (valid 2 minutes) and the addresses a phone opens with it |
+| `remote.devices` | none | `devices`: the paired phones |
+| `remote.rename_device` / `remove_device` | `id`, `name` | rename a phone; or unpair it (it goes back to the pairing page) |
+
 They reply `{"ok": true, ...}` with what the command returns, or
 `{"ok": false, "error": "..."}` when the command refuses (an unknown key, a page
 that does not exist) or is given a field it does not take. They are not part of

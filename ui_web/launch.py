@@ -202,13 +202,35 @@ def qt_sandbox_off_reason(environ=None, euid=None, read=_read, probe=userns_work
     return None
 
 
+# ── Qt and windows of their own ──────────────────────────────────────────────
+
+def keep_running_without_windows(importer=None, say=_say):
+    """Qt ends its main loop when the last visible window closes
+    (QGuiApplication.quitOnLastWindowClosed, on by default, and pywebview
+    leaves it on). With the main window in the tray or started --minimized,
+    closing the last virtual pad window (ui_web/pad_windows.py) then ended
+    the whole application. Switched off here, before the QApplication
+    exists (the setter is static); pywebview still ends the loop itself once
+    its last window is gone, so quitting works as before. Through qtpy, the
+    binding pywebview's Qt backend uses. True when it was set."""
+    imp = importer or importlib.import_module
+    try:
+        imp("qtpy.QtGui").QGuiApplication.setQuitOnLastWindowClosed(False)
+    except Exception as e:
+        say("[webui] Qt may quit with the last visible window (%s)" % _short(e))
+        return False
+    return True
+
+
 # ── The decision ─────────────────────────────────────────────────────────────
 
 def ready(environ=None, frozen=None, importer=None, sandbox=None, say=_say):
     """(backend, None) when the web window can open, else (None, why).
 
     Prepares the environment, finds the backend and, for Qt, switches the
-    sandbox off where it cannot work (with one line saying why). The answer
+    sandbox off where it cannot work (with one line saying why) and keeps
+    the main loop running while only hidden windows are left
+    (keep_running_without_windows). The answer
     is kept: gui.run() and ui_web.app.main() both ask. `sandbox` is
     qt_sandbox_off_reason, for tests."""
     global _result
@@ -222,6 +244,7 @@ def ready(environ=None, frozen=None, importer=None, sandbox=None, say=_say):
         if off:
             env["QTWEBENGINE_DISABLE_SANDBOX"] = "1"
             say("[webui] Qt WebEngine runs without its sandbox here (%s)" % off)
+        keep_running_without_windows(importer, say=say)
     result = (backend, why)
     if environ is None and importer is None:
         _result = result

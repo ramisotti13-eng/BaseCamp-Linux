@@ -8,67 +8,12 @@ import { PAD_DRAWING, drawingRects, photoRects } from "../hotspots.js";
 import { pickFromLibrary } from "../library-picker.js";
 import { openImageEditor } from "../image-editor.js";
 import { TEXT_FONTS_FALLBACK, textLayer, textButton } from "../key-text.js";
+import { FALLBACK_TYPES, parseTypes, typeLabel, actionForm } from "../key-action-form.js";
 
 const NUM_KEYS = 12;
 const MAIN_PAGE = 0;
 
-// Used when displaypad.action_types is not there (older core): the built-in types.
-const FALLBACK_TYPES = [
-  { id: "none", kind: "none" }, { id: "shell" }, { id: "url" }, { id: "folder", kind: "folder" }, { id: "app", kind: "file" },
-  { id: "page", kind: "page" }, { id: "macro" }, { id: "keypress", placeholder_key: "dp_keypress_hint_short" },
-  { id: "text", placeholder_key: "action_type_text_hint" }, { id: "set_key" },
-];
-
 let scope = null;
-
-/** Tolerant parse of displaypad.action_types: an array or {types|action_types|entries: [...]}. */
-function parseTypes(r) {
-  let list = r && r.ok ? (r.types || r.action_types || r.entries || r.result) : null;
-  if (!Array.isArray(list) || !list.length) return FALLBACK_TYPES;
-  const out = [];
-  let plugin = false;
-  for (const e of list) {
-    if (Array.isArray(e)) { out.push({ id: e[0], label: e[1], plugin }); continue; }   // [id, label] pairs
-    if (!e || typeof e !== "object") continue;
-    if (e.id === "_separator" || e.separator) { plugin = true; continue; }
-    out.push({ ...e, plugin: plugin || !!e.plugin });
-  }
-  return out.length ? out : FALLBACK_TYPES;
-}
-
-function typeLabel(types, id) {
-  const e = types.find((x) => x.id === id);
-  if (e && e.label) return e.label;
-  const key = (e && (e.label_key || e.labelKey)) || "action_type_" + id;
-  const s = t(key);
-  return s === key ? (id === "obs" ? "OBS" : id) : s;
-}
-
-/** A clock key's options: face, 24h/12h, seconds. The value is "digital,24h" or e.g.
- *  "analog,12h,seconds" (core/devices/displaypad/live.py parse_clock). Returns {el, get()}. */
-function clockEditor(value, onInput, labelId) {
-  const toks = new Set(String(value || "").toLowerCase().split(/[,;\s]+/).filter(Boolean));
-  const face = h("select", { class: "field", id: labelId, "aria-label": t("dp_clock_face") },
-    h("option", { value: "digital" }, t("dp_clock_digital")), h("option", { value: "analog" }, t("dp_clock_analog")));
-  const hours = h("select", { class: "field", "aria-label": t("dp_clock_hours") },
-    h("option", { value: "24h" }, t("dp_clock_24h")), h("option", { value: "12h" }, t("dp_clock_12h")));
-  const secs = h("input", { type: "checkbox" });
-  face.value = toks.has("analog") ? "analog" : "digital";
-  hours.value = toks.has("12h") || toks.has("12") ? "12h" : "24h";
-  secs.checked = toks.has("seconds") || toks.has("sec");
-  const sync = () => { hours.disabled = face.value === "analog"; };   // a face has no AM/PM
-  for (const c of [face, hours, secs]) c.addEventListener("change", () => { sync(); onInput(); });
-  sync();
-  return {
-    el: h("div", { class: "inline-row", style: "align-items:center;flex-wrap:wrap" }, face, hours,
-      h("label", { class: "check", style: "margin:0" }, secs, h("span", null, t("dp_clock_seconds")))),
-    get: () => ({ value: [face.value, hours.value].concat(secs.checked ? ["seconds"] : []).join(",") }),
-  };
-}
-
-function optionList(e) {
-  return (e.options || []).map((o) => (typeof o === "object" ? { value: String(o.value ?? o.id), label: String(o.label ?? o.value ?? o.id) } : { value: String(o), label: String(o) }));
-}
 
 export async function mount(el) {
   scope = makeScope();
@@ -89,7 +34,6 @@ export async function mount(el) {
   fr.main.append(sb.el, padHost, inspHost);
 
   const pageName = (id) => (S.pages.find((p) => p.id === id) || {}).name || String(id);
-  const pageByName = (n) => S.pages.find((p) => p.name === n);
 
   // ── data ────────────────────────────────────────────────────────────────
   async function loadKeys(page) {
@@ -359,73 +303,12 @@ export async function mount(el) {
 
   // ── inspector ────────────────────────────────────────────────────────────
   function makeDraft(k) {
-    const a = k.action || {}, d = a.double && typeof a.double === "object" ? a.double : {};
     return {
-      type: a.type || "none", value: a.action || "", target: a.target,
-      dtype: d.type || "none", dvalue: d.action || "",
+      action: k.action || {},      // the action, its double press and chain (key-action-form.js)
       hint: typeof k.hint === "string" ? k.hint : "",
       text: k.text && typeof k.text === "object" ? k.text : null,   // the text over the picture (saved by its own OK)
       image: undefined,            // undefined = unchanged, string = new file, null = cleared
     };
-  }
-
-  /** The value input for one action type. Returns {el, get()} where get() -> {value, target?}. */
-  function valueEditor(typeId, value, target, onInput, labelId) {
-    const e = S.types.find((x) => x.id === typeId) || { id: typeId };
-    let kind = e.kind || e.value_kind || "text";
-    if (typeId === "none" || kind === "none") {
-      const i = h("input", { class: "field plain", id: labelId, disabled: true, placeholder: "–", "aria-label": t("dp_insp_value") });
-      return { el: i, get: () => ({ value: "" }) };
-    }
-    if (kind === "page") {
-      const sel = h("select", { class: "field", id: labelId });
-      for (const p of S.pages) sel.append(h("option", { value: String(p.id) }, p.name));
-      sel.append(h("option", { value: "new" }, t("dp_new_page")));
-      const cur = pageByName(target || value);
-      sel.value = cur ? String(cur.id) : "new";
-      sel.addEventListener("change", onInput);
-      return {
-        el: sel,
-        get: () => {
-          if (sel.value === "new") return { value: t("dp_page_name_title"), target: "new" };
-          const p = S.pages.find((x) => String(x.id) === sel.value);
-          return { value: p ? p.name : "", target: p ? p.id : "new" };
-        },
-      };
-    }
-    if (kind === "clock") return clockEditor(value, onInput, labelId);
-    if (kind === "select" || (e.options && e.options.length)) {
-      const opts = optionList(e);
-      const sel = h("select", { class: "field", id: labelId }, opts.map((o) => h("option", { value: o.value }, o.label)));
-      if (value && !opts.some((o) => o.value === value)) sel.prepend(h("option", { value }, value));
-      sel.value = value || (opts[0] ? opts[0].value : "");
-      sel.addEventListener("change", onInput);
-      return { el: sel, get: () => ({ value: sel.value }) };
-    }
-    const ph = e.placeholder || (e.placeholder_key ? t(e.placeholder_key) : "");
-    const inp = h("input", { class: "field", id: labelId, type: "text", value: value || "", placeholder: ph, autocomplete: "off", spellcheck: "false" });
-    inp.addEventListener("input", onInput);
-    if (["file", "folder", "path"].includes(kind)) {
-      const b = h("button", { class: "btn", type: "button", onclick: async () => {
-        const p = await bc.pickFile({ title: t("dp_insp_browse"), kind: "any" });
-        if (p) { inp.value = p; onInput(); }
-      } }, t("dp_insp_browse"));
-      return { el: h("div", { class: "inline-row" }, inp, b), get: () => ({ value: inp.value }) };
-    }
-    return { el: inp, get: () => ({ value: inp.value }) };
-  }
-
-  function typeSelect(id, current, onInput, labelText) {
-    const sel = h("select", { class: "field", id });
-    const base = S.types.filter((x) => !x.plugin), plug = S.types.filter((x) => x.plugin);
-    const opt = (x) => h("option", { value: x.id }, typeLabel(S.types, x.id));
-    base.forEach((x) => sel.append(opt(x)));
-    if (plug.length) sel.append(h("optgroup", { label: t("dp_plugins_group") }, plug.map(opt)));
-    if (!S.types.some((x) => x.id === current)) sel.append(h("option", { value: current }, current));
-    sel.value = current;
-    sel.addEventListener("change", onInput);
-    sel.setAttribute("aria-label", labelText);
-    return sel;
   }
 
   function renderInspector() {
@@ -437,21 +320,8 @@ export async function mount(el) {
     }
     const i = S.sel, d = S.draft, k = keyOf(i);
     const touch = () => { S.dirty = true; };
-    let valEd, dblEd;
-    const valHost = h("div"), dblHost = h("div");
-    const typeSel = typeSelect("ins-type", d.type, () => { d.type = typeSel.value; d.value = ""; d.target = undefined; touch(); buildVal(); }, t("dp_insp_action"));
-    const dtypeSel = typeSelect("ins-dtype", d.dtype, () => { d.dtype = dtypeSel.value; d.dvalue = ""; touch(); buildDbl(); }, t("dp_on_double_click"));
-    function buildVal() {
-      clear(valHost);
-      valEd = valueEditor(d.type, d.value, d.target, () => { touch(); const g = valEd.get(); d.value = g.value; d.target = g.target; }, "ins-val");
-      valHost.append(valEd.el);
-    }
-    function buildDbl() {
-      clear(dblHost);
-      dblEd = valueEditor(d.dtype, d.dvalue, d.dvalue, () => { touch(); d.dvalue = dblEd.get().value; }, "ins-dval");
-      dblHost.append(dblEd.el);
-    }
-    buildVal(); buildDbl();
+    // type, value, double press; the "also on press" chain stays as the core has it (no `extra`)
+    const form = actionForm({ types: S.types, value: d.action, pages: S.pages, onChange: () => { d.action = form.value(); touch(); } });
 
     // picture
     const thumb = h("div", { class: "thumb" });
@@ -494,12 +364,10 @@ export async function mount(el) {
 
     const apply = h("button", { class: "cta inline", type: "button", onclick: async () => {
       apply.disabled = true;
-      const g = valEd.get(), dg = dblEd.get();
-      const params = { key: i, page: S.view, type: d.type, action: g.value, hint: d.hint };
-      if (d.type === "page" && g.target !== undefined) params.target = g.target;
-      const dbl = { type: d.dtype, action: dg.value };
-      if (d.dtype === "page") { const p = pageByName(dg.value); if (p) dbl.target = p.name; }
-      params.double = d.dtype === "none" ? { type: "none", action: "" } : dbl;
+      const av = form.value();
+      const params = { key: i, page: S.view, type: av.type, action: av.action, hint: d.hint };
+      if (av.target !== undefined) params.target = av.target;
+      params.double = av.double;
       let r = await bc.call("displaypad.set_action", params);
       if (r.ok && d.image !== undefined) r = await bc.call("displaypad.set_image", { idx: i, path: d.image, page: S.view });
       apply.disabled = false;
@@ -517,10 +385,7 @@ export async function mount(el) {
         // Apply beside "clear key" in the head: a row of its own under the fields needed scrolling.
         h("div", { class: "headacts" }, h("button", { class: "btn", type: "button", onclick: () => clearKey(i) }, t("dp_clear_key")), apply)),
       h("div", { class: "grid2" },
-        h("div", null, h("label", { class: "lab", for: "ins-type" }, t("dp_insp_action")), typeSel),
-        h("div", null, h("label", { class: "lab", for: "ins-val" }, t("dp_insp_value")), valHost),
-        h("div", null, h("label", { class: "lab", for: "ins-dtype" }, t("dp_on_double_click").replace(/:$/, "")), dtypeSel),
-        h("div", null, h("label", { class: "lab", for: "ins-dval" }, t("dp_insp_value")), dblHost),
+        form.el,
         h("div", { class: "wide" }, h("label", { class: "lab", for: "ins-hint" }, t("dp_insp_hint")), hintIn),
         h("div", { class: "wide" }, h("span", { class: "lab" }, t("dp_insp_image")), h("div", { class: "picrow" }, h("div", { class: "thumbcol" }, thumb, tHost), pickBtn, libBtn, clrBtn)))));
     showThumb();

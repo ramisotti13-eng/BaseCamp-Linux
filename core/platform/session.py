@@ -21,6 +21,9 @@ a `gdbus monitor` process (from GLib, on every desktop that has D-Bus). Its
 output is read without blocking from a timer on the caller's scheduler, so no
 thread is started for it, and stop() ends the processes. A monitor that ends
 on its own (a bus restart) is started again, less often each time.
+The events only say what changes: query_locked_hint() (and the watcher's
+query_locked()) asks logind once, with `gdbus call`, whether the session is
+locked now. It blocks up to two seconds, so it is called off the scheduler.
 
 Windows has no implementation yet (NullSessionEvents): the port adds one from
 WTSRegisterSessionNotification and the power broadcast messages.
@@ -153,9 +156,10 @@ class GdbusSessionEvents(SessionEvents):
     RESTART_MAX_MS = 300_000
 
     def __init__(self, scheduler, popen=subprocess.Popen, which=shutil.which,
-                 environ=None, poll_ms=None, session_path=None):
+                 environ=None, poll_ms=None, session_path=None, run=subprocess.run):
         self.scheduler = scheduler
         self._popen = popen
+        self._run = run
         self._which = which
         self._environ = os.environ if environ is None else environ
         self.poll_ms = poll_ms or self.POLL_MS
@@ -168,6 +172,13 @@ class GdbusSessionEvents(SessionEvents):
         self._delay = {}            # name -> wait before its next restart (ms)
         self._poll_handle = None
         self.watching = False
+
+    def query_locked(self):
+        """Whether logind says this session is locked now (LockedHint), or
+        None when that cannot be asked. Blocks up to QUERY_TIMEOUT_S: call
+        it off the scheduler."""
+        return query_locked_hint(self.session_path, gdbus=self._gdbus, which=self._which,
+                                 environ=self._environ, run=self._run)
 
     def _monitors(self):
         """{name: argv} of the monitors to run."""
@@ -298,6 +309,44 @@ class GdbusSessionEvents(SessionEvents):
         self._restart.clear()
         for name in list(self._procs):
             self._end(name)
+
+
+#: How long the one question for the lock state may take.
+QUERY_TIMEOUT_S = 2.0
+_HINT_REPLY = re.compile(r"^\(<(true|false)>,\)$")
+
+
+def query_locked_hint(session_path, gdbus=None, which=shutil.which, environ=None,
+                      run=subprocess.run, timeout=QUERY_TIMEOUT_S):
+    """True or False: logind's LockedHint of the session at
+    `session_path` (`gdbus call` on the system bus), or None when it cannot
+    be asked (no path, no gdbus, no logind, a timeout, an odd answer).
+    Blocks up to `timeout` seconds."""
+    if not session_path:
+        return None
+    try:
+        gdbus = gdbus or which("gdbus")
+    except Exception:
+        gdbus = None
+    if not gdbus:
+        return None
+    argv = [gdbus, "call", "--system", "--dest", LOGIN1, "--object-path", session_path,
+            "--timeout", str(max(1, int(timeout))),
+            "--method", "org.freedesktop.DBus.Properties.Get",
+            "org.freedesktop.login1.Session", "LockedHint"]
+    try:
+        from core.platform.launcher import clean_child_env
+        env = clean_child_env(os.environ if environ is None else environ)
+        env["LC_ALL"] = "C"
+        r = run(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL, env=env, timeout=timeout)
+    except Exception:
+        return None
+    if getattr(r, "returncode", 1) != 0:
+        return None
+    out = r.stdout.decode("utf-8", "replace") if isinstance(r.stdout, bytes) else str(r.stdout or "")
+    m = _HINT_REPLY.match(out.strip())
+    return None if m is None else m.group(1) == "true"
 
 
 def session_events(scheduler):

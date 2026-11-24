@@ -20,7 +20,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(HERE, "static")
 REPO = os.path.dirname(HERE)
 
-_FALLBACK_VERSION = "4.0.0-beta.2"
+_FALLBACK_VERSION = "4.0.0-beta.3"
 
 
 def app_version():

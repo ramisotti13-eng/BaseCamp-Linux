@@ -14,6 +14,7 @@ const ROUTES = [
   { re: /^displaypad\/profile$/, tab: "displaypad", load: () => import("./screens/dp-profiles.js") },
   { re: /^displaypad\/keys$/, tab: "displaypad", load: () => import("./screens/dp-keys.js") },
   { re: /^displaypad\/settings$/, tab: "displaypad", load: () => import("./screens/dp-settings.js") },
+  { re: /^displaypad\/pads$/, tab: "displaypad", load: () => import("./screens/vp-pads.js") },
   { re: /^makalu\/profile$/, tab: "makalu67", load: () => import("./screens/mk-profiles.js") },
   { re: /^makalu\/buttons$/, tab: "makalu67", load: () => import("./screens/mk-buttons.js") },
   { re: /^makalu\/lighting$/, tab: "makalu67", load: () => import("./screens/mk-lighting.js") },
@@ -32,11 +33,12 @@ const ROUTES = [
   { re: /^macropad\/keys$/, tab: "macropad", load: () => import("./screens/mp-keys.js") },
   { re: /^macropad\/rgb$/, tab: "macropad", load: () => import("./screens/mp-rgb.js") },
   { re: /^device\/([a-z0-9_]+)$/, tab: (m) => m[1], load: () => import("./screens/placeholder.js") },
-  // UI-5: the gear opens Settings; Macros, OBS and Plugins have no device and are its tabs.
+  // UI-5: the gear opens Settings; Macros, OBS, Plugins and Remote access have no device and are its tabs.
   { re: /^settings$/, tab: null, gear: true, load: () => import("./screens/set-settings.js") },
   { re: /^settings\/macros$/, tab: null, gear: true, load: () => import("./screens/set-macros.js") },
   { re: /^settings\/obs$/, tab: null, gear: true, load: () => import("./screens/set-obs.js") },
   { re: /^settings\/plugins$/, tab: null, gear: true, load: () => import("./screens/set-plugins.js") },
+  { re: /^settings\/remote$/, tab: null, gear: true, load: () => import("./screens/set-remote.js") },
 ];
 
 const view = document.getElementById("view");
@@ -117,8 +119,8 @@ function renderNav() {
   nav.setAttribute("aria-label", t("shell_devices"));
   clear(nav);
   for (const d of devices.DEVICES) {
-    if (!devices.isPresent(d.id) && d.id !== tab) continue;   // present devices only, like Base Camp
-    nav.append(h("a", { href: d.route, class: d.id === tab ? "on" : "", "aria-current": d.id === tab ? "page" : null }, d.name));
+    if (!devices.inTopBar(d.id) && d.id !== tab) continue;   // present devices only, like Base Camp
+    nav.append(h("a", { href: devices.tabRoute(d), class: d.id === tab ? "on" : "", "aria-current": d.id === tab ? "page" : null }, d.name));
   }
   const brand = document.getElementById("brand");
   brand.classList.toggle("on", !!(route && route.home));

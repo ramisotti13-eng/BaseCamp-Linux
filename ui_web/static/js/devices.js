@@ -26,7 +26,19 @@ export async function init() {
   apply(await bc.call("devices.state"));
   bc.on("devices.changed", (_t, p) => { apply(p); refreshMakalu(); });
   bc.on("makalu.presence", () => refreshMakalu());
-  await refreshMakalu();
+  // A pad made or deleted changes whether the DisplayPad's tab is in the top bar.
+  bc.on("vpads.changed", (_t, p) => { if (!p || !p.what || p.what === "list") refreshVirtualPads(); });
+  await Promise.all([refreshMakalu(), refreshVirtualPads()]);
+}
+
+// The virtual pads live under the DisplayPad: its tab shows while one exists, plugged in or not.
+let virtualPads = 0;
+async function refreshVirtualPads() {
+  const r = await bc.call("vpads.list");
+  const n = r && r.ok && Array.isArray(r.pads) ? r.pads.length : 0;
+  if (n === virtualPads) return;
+  virtualPads = n;
+  subs.forEach((fn) => fn(state));
 }
 
 // The mouse slot is "makalu67" for both models; the model decides its name, its photos and its buttons.
@@ -84,6 +96,10 @@ export async function photoUrl(id, kind, size = 700) {
 }
 
 export const isPresent = (id) => !!state.present[id];
+/** Whether the top bar has a tab for the device: it is plugged in, or (the DisplayPad) a virtual pad exists. */
+export const inTopBar = (id) => isPresent(id) || (id === "displaypad" && virtualPads > 0);
+/** Where the device's tab leads: the DisplayPad without the pad goes to its virtual pads. */
+export const tabRoute = (d) => (d.id === "displaypad" && !isPresent(d.id) && virtualPads > 0 ? "#/displaypad/pads" : d.route);
 export const getState = () => state;
 export function onChange(fn) { subs.add(fn); return () => subs.delete(fn); }
 export const byId = (id) => DEVICES.find((d) => d.id === id);

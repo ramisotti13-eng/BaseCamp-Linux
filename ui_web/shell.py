@@ -4,9 +4,12 @@ app.py builds the pywebview window and the core; this module is everything
 around them that the CustomTkinter application does in App.__init__, run()
 and destroy():
 
-    tray            starts tray_helper.py (the frozen basecamp-tray) the way
-                    gui._setup_tray does; its Open entry sends SIGUSR1, its
-                    Quit entry SIGUSR2
+    tray            with the Qt window (the AppImage): a QSystemTrayIcon in
+                    this process (ui_web/qt_tray.py), put up once pywebview
+                    has built its QApplication (gui_started); otherwise
+                    tray_helper.py (the frozen basecamp-tray) the way
+                    gui._setup_tray starts it: its Open entry sends SIGUSR1,
+                    its Quit entry SIGUSR2
     close           the window's close button and the window manager's close
                     hide the window while the tray runs and quit without it
     ui.*            ui.show brings the window up, ui.quit leaves, ui.page asks
@@ -16,6 +19,9 @@ and destroy():
     start-up tasks  Monitor Mode through the Everest Max service 0.5 s after
                     the start, the update check 2 s after it
     update restart  the tray helper goes before the process is replaced
+    pad windows     shell.open_pad_window(pad) opens a virtual pad in a window
+                    of its own, shell.pad_windows lists the open ones
+                    (ui_web/pad_windows.py; app.py sets `pad_windows`)
     shutdown        gui.destroy()'s order
 
 The page learns whether it is on screen from the bus event
@@ -209,16 +215,22 @@ class Shell:
     window       the pywebview window (or a stand-in)
     bridge       the ui_web Bridge (stopped first on the way out)
     min_size     (w, h) the window never gets smaller than
-    tray         False: no tray helper (demo, tests, --no-tray)
+    tray         False: no tray icon (demo, tests, --no-tray)
+    toolkit      "qt": pywebview's Qt window, the icon through Qt
+                 (ui_web/qt_tray.py) once gui_started() is called; anything
+                 else: the tray helper
     monitor      start Monitor Mode when an Everest Max is there
     update_check ask for a newer release after UPDATE_DELAY_MS
     popen        subprocess.Popen, replaceable
+    qt_tray      (**options) -> a QtTray, replaceable
+    title        the window's title, the Qt tray icon's tooltip
     """
 
     def __init__(self, app, window, bridge=None, *, min_size=(1100, 700), tray=True,
                  monitor=True, update_check=True, popen=subprocess.Popen,
                  signals=True, debounce=GEOMETRY_DEBOUNCE_S, settle=SETTLE_S,
-                 size=(1440, 900), tray_cmd=None):
+                 size=(1440, 900), tray_cmd=None, toolkit=None, qt_tray=None,
+                 title="BaseCamp Linux"):
         self.app = app
         self.window = window
         self.bridge = bridge
@@ -231,6 +243,13 @@ class Shell:
         self._settle = settle
         self._tray_cmd = tray_cmd or tray_command
         self.tray_proc = None
+        self._toolkit = toolkit
+        self._qt_tray_factory = qt_tray
+        self.qt_tray = None
+        self._tray_off = None
+        self._title = title
+        self._started_hidden = False
+        self._tray_failed = False
         self.visible = True
         self.quitting = False
         self.maximized = False
@@ -241,6 +260,8 @@ class Shell:
         self._handles = []
         self._shut = False
         self._signals = None
+        #: ui_web.pad_windows.PadWindows, set by app.py (None: no pad windows).
+        self.pad_windows = None
         if signals and hasattr(signal, "SIGUSR1"):
             self._signals = SignalListener({signal.SIGUSR1: self.show,
                                             signal.SIGUSR2: self.quit})
@@ -326,14 +347,19 @@ class Shell:
 
     # ── Tray ───────────────────────────────────────────────────────────────
     def tray_running(self):
+        if self.qt_tray is not None:
+            return self.qt_tray.running()
         p = self.tray_proc
         return p is not None and p.poll() is None
 
     def start_tray(self):
-        """Start the helper. Not having one is not an error: the application
-        runs without a tray icon (gui #77)."""
+        """The tray icon: through Qt with the Qt window, else the helper.
+        Not having one is not an error: the application runs without a tray
+        icon (gui #77)."""
         if not self._want_tray:
             return False
+        if self._toolkit == "qt" and self._start_qt_tray():
+            return True
         i18n = self.app.service("i18n")
         code = getattr(i18n, "code", "en") or "en"
         from shared.config import shipped_path
@@ -350,7 +376,114 @@ class Shell:
             return False
         return True
 
+    def gui_started(self):
+        """webview.start's func: the toolkit is set up and its loop about to
+        run (this is another thread). The Qt tray icon goes up from here;
+        without any tray a window that started hidden comes up."""
+        if self._shut:
+            return
+        if self._toolkit == "qt":
+            ok = self.start_tray()
+        else:
+            ok = not self._tray_failed
+        if not ok and self._want_tray:
+            # From here, not from start(): pywebview's show() waits for the
+            # window, which does not exist before webview.start().
+            self._no_tray()
+
+    def _no_tray(self):
+        """There is no tray icon to bring the window back with (Qt found no
+        notification area, or no tray could start at all). A window that
+        started hidden (--minimized, the autostart) comes up, or the
+        application would run on with no way to reach it."""
+        if self.visible or self.quitting or self._shut:
+            return False
+        print("[Tray] no tray icon; showing the window that started hidden", flush=True)
+        self.show()
+        return True
+
+    def _tray_labels(self):
+        i18n = self.app.service("i18n")
+        T = getattr(i18n, "T", None)
+        labels = {}
+        for key, name in (("tray_open", "open"), ("tray_quit", "quit"),
+                          ("tray_pages", "pages")):
+            text = T(key) if T is not None else key
+            if text and text != key:
+                labels[name] = text
+        return labels
+
+    def _dp_pages(self):
+        """([(id, name), ...], current) of the DisplayPad, as the core lists
+        them; nothing without a DisplayPad service."""
+        if self.app.service("displaypad") is None:
+            return [], None
+        try:
+            r = self.app.call("displaypad.list_pages") or {}
+        except Exception:
+            return [], None
+        return [(p["id"], p["name"]) for p in r.get("pages") or ()], r.get("current")
+
+    def _dp_switch(self, page):
+        """The tray's page entry; the page's box comes up, as with the
+        helper's dp_page (#93)."""
+        return self.app.call("displaypad.switch_page", page=page)
+
+    def _start_qt_tray(self):
+        """True once a Qt application is there to take the icon. The icon
+        itself comes up a moment later on the GUI thread; tray_running()
+        says when."""
+        factory = self._qt_tray_factory
+        if factory is None:
+            from ui_web.qt_tray import QtTray as factory
+        from core import runtime
+        icons = []
+        for base in (runtime.RES, runtime.HERE):
+            for size in (32, 64, 256):
+                path = os.path.join(base, "resources", "app_icon_%d.png" % size)
+                if os.path.isfile(path):
+                    icons.append(path)
+            if icons:
+                break
+        from ui_web.qt_tray import WATCHER_WAIT_S
+        try:
+            tray = factory(labels=self._tray_labels(), on_open=self.show, on_quit=self.quit,
+                           list_pages=self._dp_pages, switch_page=self._dp_switch,
+                           icon_paths=icons, tooltip=self._title,
+                           on_no_tray=self._no_tray,
+                           # Only the start at login (--minimized) can come
+                           # before the panel; any other start would only
+                           # make an XEmbed-only desktop wait for its icon.
+                           watcher_wait_s=WATCHER_WAIT_S if self._started_hidden else 0)
+            if not tray.start():
+                return False
+        except Exception as e:
+            print("[Tray] Qt tray not started (%s: %s)" % (type(e).__name__, e), flush=True)
+            return False
+        self.qt_tray = tray
+        if self._tray_off is None:
+            self._tray_off = self.app.bus.subscribe(
+                "i18n.changed", lambda _t, _p: self._relabel_tray())
+        return True
+
+    def _relabel_tray(self):
+        tray = self.qt_tray
+        if tray is not None:
+            tray.set_labels(self._tray_labels())
+
     def stop_tray(self):
+        tray, self.qt_tray = self.qt_tray, None
+        if tray is not None:
+            try:
+                tray.stop()
+            except Exception:
+                log.exception("removing the tray icon failed")
+        off, self._tray_off = self._tray_off, None
+        if off is not None:
+            try:
+                off()
+            except Exception:
+                pass
         p, self.tray_proc = self.tray_proc, None
         if p is None:
             return
@@ -392,6 +525,7 @@ class Shell:
     def start_hidden(self):
         """--minimized: the window was created hidden."""
         self.visible = False
+        self._started_hidden = True
         self.app.bus.publish("ui.visible", visible=False)
 
     def close(self):
@@ -435,6 +569,8 @@ class Shell:
         if self.app.service("update") is not None and cmds.has("update.restart"):
             cmds.register("update.restart", self._restart_after_update, replace=True)
         cmds.register("shell.restart", self.restart, replace=True)
+        cmds.register("shell.open_pad_window", self.open_pad_window, replace=True)
+        cmds.register("shell.pad_windows", self.list_pad_windows, replace=True)
         control = self.app.service("control")
         if control is not None:
             control.attach_ui(screens=self.screens)
@@ -443,11 +579,24 @@ class Shell:
             self.app.bus.subscribe("ui.quit", lambda _t, _p: self.quit()),
         ]
 
+    def open_pad_window(self, pad):
+        """A virtual pad in a window of its own (or that window to the front):
+        {"opened": true} or {"focused": true}."""
+        if self.pad_windows is None:
+            from core.commands import CommandError
+            raise CommandError("pad windows are not available here")
+        return self.pad_windows.open(pad)
+
+    def list_pad_windows(self):
+        """The pads whose window is open: {"open": [pad id, ...]}."""
+        return {"open": self.pad_windows.open_ids() if self.pad_windows is not None else []}
+
     def _restart_after_update(self):
         """gui.restart_after_update: the tray helper goes first (execve keeps
         the pid, the helper would sit on the new process); if the process
         was not replaced, the window closes."""
         self.stop_tray()
+        self._flush_pad_windows()
         updates = self.app.service("update")
         try:
             updates.restart()
@@ -462,6 +611,7 @@ class Shell:
         from core.platform import install
         from shared.macros import clean_child_env
         self.stop_tray()
+        self._flush_pad_windows()
         kwargs = {}
         if execve:
             kwargs["execve"] = execve
@@ -473,10 +623,23 @@ class Shell:
             self.quit()
         return {"restarting": True}
 
+    def _flush_pad_windows(self):
+        """Before execve replaces the process: the pad windows' last moves
+        on disk (run()'s pad_windows.stop() is never reached then)."""
+        pw = self.pad_windows
+        if pw is not None:
+            try:
+                pw.flush()
+            except Exception:
+                log.exception("saving the pad windows failed")
+
     # ── Start-up ───────────────────────────────────────────────────────────
     def start(self):
-        """Tray, signals and the delayed start-up tasks. After the core runs."""
-        self.start_tray()
+        """Tray, signals and the delayed start-up tasks. After the core runs.
+        The Qt tray waits for gui_started(): there is no Qt application yet."""
+        if self._toolkit != "qt":
+            # A helper that cannot start is answered in gui_started().
+            self._tray_failed = not self.start_tray()
         if self._signals is not None:
             self._signals.start()
         sched = self.app.scheduler

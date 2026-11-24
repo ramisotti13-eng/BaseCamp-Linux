@@ -16,6 +16,7 @@ What build_core() does, in gui.py's order:
   i18n, devices (the registry: presence, access, the OBS "device"), settings,
   obs, update, the device services (install_all: macros with the one key
   action dispatcher, everest_max, everest60, makalu, macropad, displaypad),
+  vpads, remote (remote access for phones; not in gui.py),
   profiles (the device profiles, core/profiles.py; not in gui.py),
   device_images, icon_packs, images (the image editor), plugins, control.
 
@@ -57,6 +58,7 @@ which otherwise go to mountain.gg, and only when a command asks. The web
 interface's demo mode uses all of them.
 """
 import logging
+import os
 import socket
 
 from core.app import CoreApp
@@ -203,6 +205,12 @@ def build_core(scheduler=None, *, presence=None, transports=None, version="",
     app.add_service(UpdateService(app, version, home=home, http=http))
 
     install_all(app)
+    # Virtual pads: their keys run the one key action dispatcher.
+    from core.vpads.service import VpadsService
+    app.add_service(VpadsService(app, root=os.path.join(CONFIG_DIR, "virtual_pads")))
+    # Remote access: settings, paired phones, what they may call.
+    from core.remote.service import RemoteService
+    app.add_service(RemoteService(app, CONFIG_DIR))
     # After the device services: the profiles find their adapters there,
     # and stop before them (quit saves each active profile's files).
     from core.profiles import ProfileService
