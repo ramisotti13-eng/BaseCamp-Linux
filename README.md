@@ -94,6 +94,7 @@ The Everest Max, the Makalu and the DisplayPad each have a Profile page with up 
 
 - **Back up your settings:** `cp -a ~/.config/mountain-time-sync ~/mts-backup`. 4.0 uses the same files as 3.x.
 - Quit 3.x first (tray, Quit), then start the AppImage. To bind Everest keys to application actions, install the `99-mountain.rules` from the release.
+- Prefer to build the AppImage yourself? [Building the AppImage](https://github.com/ramisotti13-eng/BaseCamp-Linux/blob/v4-beta/docs/BUILDING.md) shows how, on Arch and on Debian or Ubuntu, with Docker or Podman.
 - Tested on KDE Plasma (Wayland) with an Everest Max, a Makalu 67 and a DisplayPad. Not yet on GNOME, Ubuntu or other graphics cards; the Everest 60 and the MacroPad were tested with simulated devices only. The AppImage carries its own web view (about 380 MB) and does not need Vulkan.
 
 ---
