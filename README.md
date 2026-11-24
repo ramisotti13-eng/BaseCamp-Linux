@@ -15,7 +15,7 @@ Mountain Base Camp is only available on Windows. This project brings full device
 </p>
 
 > [!NOTE]
-> **BaseCamp Linux 4.0 is in beta.** A new interface in the layout of Mountain's Base Camp, every key of the Everest Max bindable, profiles for keyboard, mouse and DisplayPad, and much more. [See what is new](#basecamp-linux-40-beta) or [download the beta](https://github.com/ramisotti13-eng/BaseCamp-Linux/releases/tag/v4.0.0-beta.1).
+> **BaseCamp Linux 4.0 is in beta.** A new interface in the layout of Mountain's Base Camp, every key of the Everest Max bindable, profiles for keyboard, mouse and DisplayPad, and much more. [See what is new](#basecamp-linux-40-beta) or [download the beta](https://github.com/ramisotti13-eng/BaseCamp-Linux/releases/tag/v4.0.0-beta.2).
 
 ---
 
@@ -45,7 +45,7 @@ Mountain Base Camp is only available on Windows. This project brings full device
 
 ## BaseCamp Linux 4.0 (beta)
 
-4.0 is the biggest update BaseCamp Linux has had. It is a pre-release for testers: **[download 4.0.0-beta.1](https://github.com/ramisotti13-eng/BaseCamp-Linux/releases/tag/v4.0.0-beta.1)** (an AppImage, no installation). The in-app update of 3.x does not offer it; 3.x stays the current release until 4.0 is done. Please report what breaks, with your distribution and desktop, in the [issues](https://github.com/ramisotti13-eng/BaseCamp-Linux/issues).
+4.0 is the biggest update BaseCamp Linux has had. It is a pre-release for testers: **[download 4.0.0-beta.2](https://github.com/ramisotti13-eng/BaseCamp-Linux/releases/tag/v4.0.0-beta.2)** (an AppImage, no installation). The in-app update of 3.x does not offer it; 3.x stays the current release until 4.0 is done. Please report what breaks, with your distribution and desktop, in the [issues](https://github.com/ramisotti13-eng/BaseCamp-Linux/issues).
 
 ### A new interface
 
