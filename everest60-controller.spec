@@ -1,11 +1,17 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller spec for the everest60-controller standalone binary."""
 
+import sys as _sys
+_sys.path.insert(0, SPECPATH)
+# BUNDLED_VERSION: _overlay_bootstrap.py leaves out an overlay older than this bundle.
+from bundle_version import bundle_version_data
+_BUNDLE_VERSION = [bundle_version_data(workpath)]
+
 a = Analysis(
     ['everest60_entry.py'],
     pathex=['.'],
     binaries=[],
-    datas=[],
+    datas=_BUNDLE_VERSION,
     hiddenimports=['hid', 'devices.everest60.controller'],
     hookspath=[],
     hooksconfig={},

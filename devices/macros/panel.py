@@ -1,18 +1,22 @@
-"""Macro editor panel for BaseCamp Linux hub."""
+"""Macro editor panel for BaseCamp Linux hub.
+
+The macros themselves are the core's MacroService (core/macros) since 4.0:
+it stores them, applies the editor's rules, imports and exports them, says
+which keys run them and keeps the mouse recordings. This screen shows them
+and turns what is typed into its fields into calls on the service.
+"""
 import os
 import time
 import tkinter as tk
 from tkinter import filedialog
 import customtkinter as ctk
 import shared.ui as UI
-import json
 
-from shared.config import load_macros, save_macros
+from core.macros import model as macro_model
 from shared.macros import (
-    generate_macro_id, ACTION_TYPES, ACTION_LABELS, REPEAT_MODES,
-    KEYSYM_TO_FRIENDLY, check_macro_tools, get_mouse_location,
-    save_mouse_recording, list_mouse_recordings,
+    ACTION_TYPES, ACTION_LABELS, REPEAT_MODES, KEYSYM_TO_FRIENDLY,
 )
+from shared.ui.core_bridge import subscribe_tk
 from shared.ui_helpers import (BG, BG2, BG3, FG, FG2, BLUE, GRN, RED, YLW, BORDER,
                                cap_scroll_speed)
 
@@ -32,17 +36,41 @@ def _placeholder_for_type(atype):
 _MACRO_LIST_W = 220
 
 
+def _macro_service(app):
+    """The core's MacroService, added if it failed to install."""
+    svc = app.core.service("macros")
+    if svc is None:
+        from core.macros import install
+        install(app.core)
+        svc = app.core.service("macros")
+    return svc
+
+
+def _recording_label(rec):
+    """How the recording picker names a recording, as it always has."""
+    if rec["points"] is None:
+        return rec["name"]
+    return f"{rec['name']} ({rec['points']} pts)"
+
+
 class MacroPanel(ctk.CTkFrame):
     """Macro editor panel — create, edit, and manage macros."""
 
     def __init__(self, parent, app):
         super().__init__(parent, fg_color=BG, corner_radius=0)
         self._app = app
-        self._macros = load_macros().get("macros", {})
+        self._svc = _macro_service(app)
         self._selected_id = None
         self._action_rows = []  # list of action row widget sets
+        self._list_sig = None   # what the macro list shows, see _list_signature
         self._build_ui()
         self._refresh_macro_list()
+        subscribe_tk(app.core, "macros.changed", self, self._on_macros_changed)
+
+    @property
+    def _macros(self):
+        """{id: macro} as saved now (a copy; changes go through the service)."""
+        return self._svc.macros()
 
     def T(self, key, **kwargs):
         return self._app.T(key, **kwargs)
@@ -54,7 +82,7 @@ class MacroPanel(ctk.CTkFrame):
 
     def get_macro_names(self):
         """Return {uuid: name} dict for macro picker combos in other panels."""
-        return {uid: m.get("name", uid) for uid, m in self._macros.items()}
+        return self._svc.names()
 
     def apply_lang(self):
         """Refresh i18n labels."""
@@ -65,26 +93,44 @@ class MacroPanel(ctk.CTkFrame):
 
     # ── Save / Load ──────────────────────────────────────────────────────────
 
-    def _save(self):
-        save_macros({"macros": self._macros})
-
     def _auto_save_current(self):
-        """Save the current editor state to the selected macro and persist."""
+        """Save the current editor state to the selected macro and persist.
+
+        The service applies the editor's rules: a blank name is "Macro", a
+        count that is not a number is 1, at least 1.
+        """
         if getattr(self, "_populating", False):
             return
-        if not self._selected_id or self._selected_id not in self._macros:
+        if not self._selected_id:
             return
-        m = self._macros[self._selected_id]
-        m["name"] = self._name_var.get().strip() or "Macro"
-        m["repeat_mode"] = self._repeat_label_to_internal(self._repeat_var.get())
-        try:
-            m["repeat_count"] = max(1, int(self._count_var.get()))
-        except ValueError:
-            m["repeat_count"] = 1
-        m["actions"] = self._collect_actions()
-        self._save()
+        saved = self._svc.update(
+            self._selected_id,
+            name=self._name_var.get(),
+            repeat_mode=self._repeat_label_to_internal(self._repeat_var.get()),
+            repeat_count=self._count_var.get(),
+            actions=self._collect_actions())
+        if saved is None:
+            return
         # Update macro list button text
         self._refresh_macro_list(keep_selection=True)
+
+    def _list_signature(self, macros):
+        return (tuple((uid, (m or {}).get("name", uid)) for uid, m in macros.items()),
+                self._selected_id)
+
+    def _on_macros_changed(self, _topic, payload):
+        """Follow changes someone else made (another interface, an import).
+        This screen's own changes have redrawn the list already, so it is only
+        rebuilt when what it shows is different."""
+        if payload.get("change") == "recordings":
+            return
+        macros = self._svc.macros()
+        if self._selected_id and self._selected_id not in macros:
+            self._selected_id = None
+            self._clear_action_rows()
+            self._editor_frame.pack_forget()
+        if self._list_signature(macros) != self._list_sig:
+            self._refresh_macro_list(keep_selection=True)
 
     def _collect_actions(self):
         """Read action data from the editor rows."""
@@ -276,7 +322,7 @@ class MacroPanel(ctk.CTkFrame):
         self._import_btn.pack(side="left")
 
         # Initially hide editor if no macros
-        if not self._macros:
+        if not self._svc.macros():
             self._editor_frame.pack_forget()
 
     # ── Repeat mode helpers ──────────────────────────────────────────────────
@@ -318,7 +364,9 @@ class MacroPanel(ctk.CTkFrame):
         for w in self._list_inner.winfo_children():
             w.destroy()
 
-        if not self._macros:
+        macros = self._svc.macros()
+        self._list_sig = self._list_signature(macros)
+        if not macros:
             self._empty_lbl = ctk.CTkLabel(
                 self._list_inner, text=self.T("macro_no_macros"),
                 font=(UI.FONT_FAMILY, 11), text_color=FG2)
@@ -326,7 +374,7 @@ class MacroPanel(ctk.CTkFrame):
             self._editor_frame.pack_forget()
             return
 
-        for uid, m in self._macros.items():
+        for uid, m in macros.items():
             name = m.get("name", uid)
             is_sel = uid == self._selected_id
             row = ctk.CTkFrame(self._list_inner, fg_color="transparent")
@@ -365,31 +413,9 @@ class MacroPanel(ctk.CTkFrame):
         self._editor_frame.pack(fill="x", padx=12, pady=(10, 6))
 
     def _find_assignments(self, macro_id):
-        """Every key this macro sits on, as readable places.
-
-        Reads the same configs the dispatchers read, so the answer cannot
-        drift from what actually happens on a key press.
-        """
-        from shared.config import (load_buttons, _load_displaypad_page_names,
-                                   _load_displaypad_actions)
-        places = []
-        try:
-            for i, act in enumerate(load_buttons() or []):
-                if act.get("type") == "macro" and act.get("action") == macro_id:
-                    places.append(f"Everest Max D{i + 1}")
-        except Exception:
-            pass
-        try:
-            names = _load_displaypad_page_names()
-            for pid in sorted(names):
-                for k, act in enumerate(_load_displaypad_actions(pid) or []):
-                    if not isinstance(act, dict):
-                        continue
-                    if act.get("type") == "macro" and act.get("action") == macro_id:
-                        places.append(f"DisplayPad K{k + 1} ({names[pid]})")
-        except Exception:
-            pass
-        return places
+        """Every key this macro sits on, as readable places ("Everest Max D1",
+        "DisplayPad K3 (Main)", "MacroPad M5"); see MacroService."""
+        return [p["label"] for p in self._svc.find_assignments(macro_id)]
 
     def _refresh_assignments(self):
         if not getattr(self, "_assign_lbl", None):
@@ -405,9 +431,9 @@ class MacroPanel(ctk.CTkFrame):
 
     def _refresh_editor(self):
         """Populate the editor with the selected macro's data."""
-        if not self._selected_id or self._selected_id not in self._macros:
+        m = self._svc.get(self._selected_id) if self._selected_id else None
+        if m is None:
             return
-        m = self._macros[self._selected_id]
 
         self._name_var.set(m.get("name", ""))
         mode = m.get("repeat_mode", "once")
@@ -718,61 +744,35 @@ class MacroPanel(ctk.CTkFrame):
         self._auto_save_current()
 
     def _move_action(self, idx, direction):
-        if not self._selected_id or self._selected_id not in self._macros:
+        if not self._selected_id:
             return
-        # Collect current state from UI, then swap
-        self._macros[self._selected_id]["actions"] = self._collect_actions()
-        actions = self._macros[self._selected_id]["actions"]
-        new_idx = idx + direction
-        if new_idx < 0 or new_idx >= len(actions):
-            return
-        actions[idx], actions[new_idx] = actions[new_idx], actions[idx]
-        self._save()
-        self._refresh_editor()
+        # What the rows show now is what moves, typed or not.
+        if self._svc.move_step(self._selected_id, idx, direction,
+                               actions=self._collect_actions()):
+            self._refresh_editor()
 
     def _remove_action(self, idx):
-        if not self._selected_id or self._selected_id not in self._macros:
+        if not self._selected_id:
             return
-        # Collect current state from UI, then remove
-        self._macros[self._selected_id]["actions"] = self._collect_actions()
-        actions = self._macros[self._selected_id]["actions"]
-        if idx < 0 or idx >= len(actions):
-            return
-        actions.pop(idx)
-        self._save()
-        self._refresh_editor()
+        if self._svc.remove_step(self._selected_id, idx,
+                                 actions=self._collect_actions()):
+            self._refresh_editor()
 
     # ── Macro CRUD ───────────────────────────────────────────────────────────
 
     def _next_macro_name(self):
-        existing = {m.get("name", "") for m in self._macros.values()}
-        base = "Macro"
-        if base not in existing:
-            return base
-        n = 1
-        while f"{base} {n}" in existing:
-            n += 1
-        return f"{base} {n}"
+        return macro_model.next_macro_name(self._svc.macros())
 
     def _new_macro(self):
-        uid = generate_macro_id()
-        self._macros[uid] = {
-            "name": self._next_macro_name(),
-            "actions": [{"type": "key_tap", "value": "a", "delay": 10}],
-            "repeat_mode": "once",
-            "repeat_count": 1,
-        }
-        self._save()
-        self._select_macro(uid)
+        self._select_macro(self._svc.create())
 
     def _quick_delete(self, uid):
         """Delete a macro directly from the list via its ✕ button."""
-        self._macros.pop(uid, None)
+        self._svc.delete(uid)
         if self._selected_id == uid:
             self._selected_id = None
             self._clear_action_rows()
             self._editor_frame.pack_forget()
-        self._save()
         self._refresh_macro_list()
 
     def _delete_macro(self):
@@ -781,20 +781,16 @@ class MacroPanel(ctk.CTkFrame):
         self._quick_delete(self._selected_id)
 
     def _duplicate_macro(self):
-        if not self._selected_id or self._selected_id not in self._macros:
+        if not self._selected_id:
             return
-        import copy
-        uid = generate_macro_id()
-        m = copy.deepcopy(self._macros[self._selected_id])
-        m["name"] = m["name"] + " (Copy)"
-        self._macros[uid] = m
-        self._save()
-        self._select_macro(uid)
+        uid = self._svc.duplicate(self._selected_id)
+        if uid:
+            self._select_macro(uid)
 
     def _export_macro(self):
-        if not self._selected_id or self._selected_id not in self._macros:
+        m = self._svc.get(self._selected_id) if self._selected_id else None
+        if m is None:
             return
-        m = self._macros[self._selected_id]
         from shared.config import _load_last_dir, _save_last_dir
         path = filedialog.asksaveasfilename(
             defaultextension=".json",
@@ -804,8 +800,7 @@ class MacroPanel(ctk.CTkFrame):
         if not path:
             return
         _save_last_dir("macro", path)
-        with open(path, "w") as f:
-            json.dump(m, f, indent=2)
+        self._svc.export_file(self._selected_id, path)
 
     def _import_macro(self):
         from shared.config import _load_last_dir, _save_last_dir
@@ -816,14 +811,11 @@ class MacroPanel(ctk.CTkFrame):
             return
         _save_last_dir("macro", path)
         try:
-            with open(path) as f:
-                m = json.load(f)
-            if "name" not in m or "actions" not in m:
-                return
-            uid = generate_macro_id()
-            self._macros[uid] = m
-            self._save()
-            self._select_macro(uid)
+            # None for a file that is not an exported macro: nothing happens,
+            # as before.
+            uid = self._svc.import_file(path)
+            if uid:
+                self._select_macro(uid)
         except Exception:
             pass
 
@@ -971,28 +963,18 @@ class MacroPanel(ctk.CTkFrame):
             self._show_info_dialog(self.T("macro_rec_empty"))
             return
 
-        # Generate unique recording name
-        existing = [f for f, _ in list_mouse_recordings()]
-        base = "recording"
-        n = 1
-        while f"{base}_{n}.json" in existing:
-            n += 1
-        rec_name = f"{base}_{n}"
-
-        # Save positions to file
+        # Saved as recording_N, the first N not taken.
         positions = [[x, y, t] for x, y, t in self._mouse_positions]
-        filename = save_mouse_recording(rec_name, positions, click_at_end=add_click)
+        filename = self._svc.save_recording(positions, click_at_end=add_click)
 
         # Add a single mouse_path action to the macro
-        m = self._macros[self._selected_id]
-        m.setdefault("actions", []).append(
-            {"type": "mouse_path", "value": filename, "delay": 0})
-        self._save()
+        self._svc.add_step(self._selected_id,
+                           {"type": "mouse_path", "value": filename, "delay": 0})
         self._refresh_editor()
 
     def _pick_mouse_path(self, idx):
         """Show a picker dialog to select a saved mouse recording."""
-        recordings = list_mouse_recordings()
+        recordings = self._svc.recordings()
         if not recordings:
             self._show_info_dialog(self.T("macro_rec_no_recordings"))
             return
@@ -1014,7 +996,8 @@ class MacroPanel(ctk.CTkFrame):
         def _rebuild_list():
             for w in scroll.winfo_children():
                 w.destroy()
-            for filename, display in list_mouse_recordings():
+            for rec in self._svc.recordings():
+                filename, display = rec["file"], _recording_label(rec)
                 row = ctk.CTkFrame(scroll, fg_color="transparent")
                 row.pack(fill="x", pady=1)
                 ctk.CTkButton(
@@ -1032,11 +1015,7 @@ class MacroPanel(ctk.CTkFrame):
                 ).pack(side="right", padx=(2, 0))
 
         def _delete_rec(filename):
-            from shared.config import MOUSE_RECORDINGS_DIR
-            try:
-                os.remove(os.path.join(MOUSE_RECORDINGS_DIR, filename))
-            except Exception:
-                pass
+            self._svc.delete_recording(filename)
             _rebuild_list()
 
         _rebuild_list()

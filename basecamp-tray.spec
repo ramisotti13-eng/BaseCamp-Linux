@@ -1,11 +1,17 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 
+import sys as _sys
+_sys.path.insert(0, SPECPATH)
+# BUNDLED_VERSION: _overlay_bootstrap.py leaves out an overlay older than this bundle.
+from bundle_version import bundle_version_data
+_BUNDLE_VERSION = [bundle_version_data(workpath)]
+
 a = Analysis(
     ['tray_entry.py'],
     pathex=['.'],
     binaries=[],
-    datas=[('lang', 'lang'), ('resources', 'resources')],
+    datas=_BUNDLE_VERSION + [('lang', 'lang'), ('resources', 'resources')],
     hiddenimports=['pystray', 'PIL', 'PIL._tkinter_finder', 'tray_helper'],
     hookspath=[],
     hooksconfig={},

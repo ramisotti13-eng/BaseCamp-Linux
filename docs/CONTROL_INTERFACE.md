@@ -63,16 +63,92 @@ send_command({"cmd": "rgb", "device": "everest60",
 |-----------|-----------------------------------------------------|--------|
 | `ping`    | none                                                | health / version |
 | `show`    | none                                                | bring the window to the front, also out of the tray |
+| `quit`    | none                                                | quit the application, as its Quit entry does (new in 4.0) |
 | `list`    | none                                                | GUI tabs, active tab, device presence, DisplayPad pages + current page |
-| `page`    | `page`                                              | switch GUI tab (`everest_max`, `everest60`, `makalu67`, `displaypad`, `obs`, `macros`, `plugins`, plugin ids) |
-| `dp_page` | `page`                                              | switch the DisplayPad's active key page, by name, by id, or `"prev"` |
+| `page`    | `page`                                              | switch GUI tab (`everest_max`, `everest60`, `makalu67`, `displaypad`, `obs`, `macros`, `plugins`, `settings`, plugin ids) |
+| `dp_page` | `page`, `hints` (default `true`)                    | switch the DisplayPad's active key page, by name, by id, or `"prev"`; `"hints": false` keeps the page's box down |
 | `rgb`     | `device`, `args[]`                                  | run the device's `rgb …` verb |
 | `run`     | `device`, `args[]`                                  | run any device-controller verb (e.g. `["upload","2","/p.png"]`) |
 | `image`   | `device`, `button`, `path`                          | upload an image to a key |
 | `set_key` | `button` (0-3), `type`, `action`                    | redefine an Everest Max macro key |
+| `<service>.<command>` | the command's own fields                | any command of the application's core, see below (new in 4.0) |
 
 `page` and `dp_page` are different things: `page` decides which panel the GUI
 shows, `dp_page` decides which twelve keys the physical pad shows.
+
+`device` defaults to the keyboard the application shows (the Everest 60 when
+one is plugged in, else the Everest Max). An id other than `everest60` and
+`makalu67` means the Everest Max, as it always has.
+
+Fields a 3.x command does not use are ignored, and the command name is not case
+sensitive. An unknown command replies `{"ok": false, "error": "unknown cmd 'x'"}`,
+a line that is not JSON `{"ok": false, "error": "bad request: …"}`.
+
+### The Everest Max and Monitor Mode
+
+Monitor Mode holds the Everest Max's USB interface for as long as it runs, and
+the keyboard takes one claim at a time. Since 4.0, `rgb`, `run` and `image` for
+the Everest Max go through the application's Everest Max service: Monitor Mode
+is paused, the command runs with the keyboard to itself, and Monitor Mode comes
+back afterwards if it was on. Commands queue behind whatever the keyboard is
+doing (an upload from the screen, a plugin's D-key picture) instead of failing
+with "Failed to claim interface", which is what they did while Monitor Mode ran.
+
+- The reply comes when the command has run, so it can take longer than it did:
+  the wait for Monitor Mode to let go, plus the command.
+- An upload (`image`, or `run` with `upload` / `upload-main`) rewrites flash and
+  takes 45 to 60 seconds. It is given 180 seconds; the old limit of 30 killed it
+  half way. Before it claims the keyboard it waits the same moment the upload
+  from the screen waits (2.5 s right after Monitor Mode let go, else 0.5 s).
+- `basecamp --ctl` waits up to 200 seconds for `image` and `run`, 40 for the
+  others. A script of your own should allow for that as well
+  (`send_command(obj, timeout=200)`).
+- The Everest 60 and the Makalu have no Monitor Mode; their commands run as
+  before.
+
+### Service commands (4.0)
+
+Everything the application's core can do is a command named
+`<service>.<command>`, the same ones the interface itself uses, and the socket
+takes them too. A few:
+
+| cmd | fields | reply |
+|-----|--------|-------|
+| `devices.state` | none | `present`, `denied` (nodes the udev rule does not open), `keyboard_id` |
+| `displaypad.status` | none | `present`, `ready`, `busy`, `page`, `prev_page`, `settings` |
+| `displaypad.list_pages` | none | `pages: [{id, name}]`, `current` |
+| `displaypad.switch_page` | `page`, `hints` | like `dp_page`, but waits until the switch has been made |
+| `displaypad.press_key` | `key` (0-11) | runs what the key on the page on the pad does |
+| `displaypad.keys` | `page` (optional) | `page`, `keys: [{idx, image, action, hint}]` |
+| `displaypad.set_action` | `key`, `type`, `action`, `page`, `target`, `double`, `extra`, `hint` | one key's action (and its hint for the page box) |
+| `displaypad.set_image` | `key` (or `idx`), `path` (none: take the picture away), `page` | `page`, `key`, `image`: a key's picture from a file, any page |
+| `displaypad.action_types` | none | `types: [{id, label_key, label, kind, options, ...}]`, `secondary`, `double`: what a key can do, for an editor |
+| `i18n.strings` | `code` (optional) | `code`, `strings`: the language's texts, plugins' included |
+| `control.ping` | none | like `ping` |
+| `everest_max.status` | none | Monitor Mode, clock, main display mode, D-keys, lighting |
+| `everest_max.start_monitor` / `stop_monitor` | none | Monitor Mode on or off |
+| `everest_max.keybindings` | none | `keys: {<key number>: {function, value, mods?, fkey?, in_keyboard?}}`, `dkeys`, `listener: {state, needed}`, `free_fkeys` |
+| `everest_max.set_keybinding` | `key` (the key's SDK number, e.g. 126 Pause), `function`, `value`, `mods` | binds a key like the key binding screen (`function` "default" sets it back); written to the keyboard at once (job `keymap`); refuses a 13th key for the app with `code: no_free_fkey` |
+| `everest_max.key_functions` | none | the functions and their choices |
+| `everest_max.set_dkey_text` | `button` (0-3), `text` ({text, pos, font, size_pt, bold, italic, underline, color} or null) | text over D1-D4's picture, written with it |
+| `profiles.list` | `device` (`everest_max`, `makalu`, `displaypad`) | `profiles: [{id, name, picture_url, program}]`, `active`, `limit` |
+| `profiles.activate` | `device`, `id` or `name` | switches like the Profile page (`profiles.activated` event); the device follows, the Everest Max's pictures in the background |
+| `profiles.create` / `duplicate` / `rename` / `delete` / `reset` | `device`, `id`, `name` | the Profile page's actions |
+| `profiles.set_program` / `set_picture` | `device`, `id`, `path` (none: remove) | program trigger and picture |
+| `profiles.export` / `import` | `device`, `id`, `path` | a `.bcprofile` file; `import` also takes a 3.x profile folder |
+| `macros.names` | none | `names: {id: name}` |
+| `macros.toggle` | `macro_id` | start a macro, or stop a toggle run |
+| `obs.execute` | `type` (`scene`, `record`, `stream`), `scene` | an OBS action |
+
+They reply `{"ok": true, ...}` with what the command returns, or
+`{"ok": false, "error": "..."}` when the command refuses (an unknown key, a page
+that does not exist) or is given a field it does not take. They are not part of
+the 3.x interface and may still change during 4.x; the 3.x commands above stay
+as they are.
+
+`show`, `page` and `quit` ask the interface: the core publishes `ui.show`,
+`ui.page` and `ui.quit`, and the window does it. A core running without an
+interface has no screens, so `list` names none and `page` knows none.
 
 `show` is what the application sends to itself: starting it while it is already
 running hands over to the instance that is there and exits, rather than running
@@ -94,6 +170,9 @@ basecamp --ctl '{"cmd":"dp_page","page":"Editor"}'
 - A raw page id (`{"cmd":"dp_page","page":2}`) also works. A page name always
   wins, over the `"prev"` keyword as well as over an id, so a page you named
   "prev" or "3" stays reachable.
+- A switch from a script is somebody switching pages, so the page's box with
+  its note and key hints comes up, as it does for a page key on the pad.
+  `"hints": false` switches without it.
 - `changed: false` means the pad was already on that page and nothing was done.
   Re-sending the same page is not an error, so a script that fires on every
   window focus does not have to track state.
@@ -150,8 +229,13 @@ layouts).
 
 ## Actions on plugin / monitor keys, and page hops (#16)
 
-- Plugin-registered action types dispatch on both DisplayPad and Everest Max, so
-  a key showing a plugin or monitor widget can also carry a press action.
+- Plugin-registered action types run on the DisplayPad and the MacroPad, so a
+  key showing a plugin or monitor widget can also carry a press action. The
+  Everest Max's keys are read by Monitor Mode, a process of its own in which no
+  plugin runs: a D-key bound to a plugin's type does nothing.
+- A key bound to a type nobody provides any more (its plugin was removed) does
+  nothing, on every device. Before 4.0 the DisplayPad and the Everest Max ran
+  its stored value as a shell command, a value written for the plugin.
 - The **`page`** action type lets any key jump to another tab/page (e.g. a
   System-Monitor key that opens a details page).
 - **F1-F12 on the Everest 60:** not implemented. The 60 has no app-assignable

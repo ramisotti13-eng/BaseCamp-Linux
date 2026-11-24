@@ -20,3 +20,7 @@ SUBSYSTEM=="hidraw", ATTRS{idVendor}=="3282", ATTRS{idProduct}=="0005", MODE="06
 SUBSYSTEM=="hidraw", ATTRS{idVendor}=="3282", ATTRS{idProduct}=="0006", MODE="0666", TAG+="uaccess"
 SUBSYSTEM=="hidraw", ATTRS{idVendor}=="3282", ATTRS{idProduct}=="0008", MODE="0666", TAG+="uaccess"
 SUBSYSTEM=="hidraw", ATTRS{idVendor}=="3282", ATTRS{idProduct}=="0009", MODE="0666", TAG+="uaccess"
+# Everest Max key binding: the app hears the F13-F24 a bound key sends on the keyboard's own input
+# devices. Only the logged-in user gets read access (no MODE: a keyboard's input must not be
+# world-readable); RUN applies it at once, since this file runs after systemd's 73-seat-late.rules.
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{idVendor}=="3282", ATTRS{idProduct}=="0001", TAG+="uaccess", RUN{builtin}+="uaccess"

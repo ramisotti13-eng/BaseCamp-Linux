@@ -3,8 +3,9 @@ import os
 import re
 import sys
 import json
-import pwd as _pwd
 from PIL import Image
+
+from core.platform import paths as _paths, user as _user
 
 
 def shipped_path(name):
@@ -73,17 +74,10 @@ def _resolve_real_user():
 
     When running under sudo we honour SUDO_USER, but only if it resolves to a
     real non-root account — protects against a poisoned env var that could
-    redirect root's file writes into an arbitrary user's tree.
+    redirect root's file writes into an arbitrary user's tree. The rules live
+    in core.platform.user, so the core and this module cannot disagree.
     """
-    sudo_user = os.environ.get("SUDO_USER")
-    if sudo_user:
-        try:
-            pw = _pwd.getpwnam(sudo_user)
-        except KeyError:
-            pw = None
-        if pw and pw.pw_uid != 0:
-            return pw.pw_dir, pw.pw_uid, pw.pw_gid
-    return os.path.expanduser("~"), None, None
+    return _user.resolve_real_user()
 
 
 _real_home, _real_uid, _real_gid = _resolve_real_user()
@@ -102,7 +96,7 @@ def _ensure_owned_dir(path):
             pass
 
 
-CONFIG_DIR       = os.path.join(_real_home, ".config", "mountain-time-sync")
+CONFIG_DIR       = _paths.config_dir(_real_home)
 _ensure_owned_dir(CONFIG_DIR)
 
 
@@ -117,9 +111,9 @@ def _frame_dir():
     root for another user) they stay in the configuration directory, as they
     did before.
     """
-    run = os.environ.get("XDG_RUNTIME_DIR", "")
+    run = _paths.runtime_dir()
     try:
-        if (run and os.path.isabs(run) and os.path.isdir(run)
+        if (run and os.path.isdir(run)
                 and os.stat(run).st_uid == os.geteuid()
                 and os.access(run, os.W_OK | os.X_OK)
                 and not (os.geteuid() == 0 and _real_uid not in (None, 0))):
@@ -166,6 +160,9 @@ DISPLAYPAD_TIMEOUTS_FILE   = os.path.join(CONFIG_DIR, "displaypad_page_timeouts.
 DISPLAYPAD_HINT_BOX_FILE   = os.path.join(CONFIG_DIR, "displaypad_hint_box.json")
 # Which installed CustomTkinter the user was told about, so it is said once (#116).
 TOOLKIT_NOTICE_FILE        = os.path.join(CONFIG_DIR, "toolkit_notice.json")
+# For which version the classic interface said why it started in place of the
+# web one (ui_web/launch.py), so it is said once per version.
+WEB_NOTICE_FILE            = os.path.join(CONFIG_DIR, "web_notice.json")
 DISPLAYPAD_ROTATION_FILE    = os.path.join(CONFIG_DIR, "displaypad_rotation")
 DISPLAYPAD_BRIGHTNESS_FILE  = os.path.join(CONFIG_DIR, "displaypad_brightness")
 DISPLAYPAD_DEBOUNCE_FILE    = os.path.join(CONFIG_DIR, "displaypad_debounce")
@@ -179,6 +176,7 @@ MACROPAD_RGB_FILE           = os.path.join(CONFIG_DIR, "macropad_rgb.json")
 MACROS_FILE                 = os.path.join(CONFIG_DIR, "macros.json")
 MOUSE_RECORDINGS_DIR        = os.path.join(CONFIG_DIR, "mouse_recordings")
 LAST_DIRS_FILE              = os.path.join(CONFIG_DIR, "last_dirs.json")
+SAVED_COLORS_FILE           = os.path.join(CONFIG_DIR, "saved_colors.json")
 PLUGINS_DIR                 = os.path.join(CONFIG_DIR, "plugins")
 PLUGINS_DISABLED_FILE       = os.path.join(CONFIG_DIR, "plugins_disabled.json")
 _ensure_owned_dir(PLUGINS_DIR)
@@ -304,7 +302,13 @@ def _copy_bundled_plugins():
         if not os.path.isdir(src):
             continue
         if not os.path.exists(dst):
-            shutil.copytree(src, dst)
+            try:
+                shutil.copytree(src, dst)
+            except FileExistsError:
+                # Another process importing this module at the same moment
+                # (e.g. `gui.py --ctl` right after the first start) got there
+                # first; its copy is the same plugin.
+                continue
             print(f"[Plugin] Installed bundled plugin: {name}")
             continue
         src_ver = _bundled_plugin_version(src)
@@ -453,6 +457,9 @@ _BACKUP_EXCLUDE_DIRS = {
     "icon_library", "main_library",
     "displaypad_library", "displaypad_fs_library",
     "mouse_recordings", "plugins",
+    # Mountain's device photos (imported again in a moment, and Mountain's
+    # files, not the user's) and what a download left behind.
+    "device-images", "cache",
 }
 
 
@@ -597,22 +604,35 @@ def save_obs_config(cfg):
 
 # ── Autostart ──────────────────────────────────────────────────────────────────
 
-def _autostart_exec():
+#: Which interface the autostart entry starts: "web" (the default since 4.0)
+#: or "classic" (the CustomTkinter one). Both entries start gui.py (frozen:
+#: the AppImage) with --minimized; the classic one adds --classic. The web
+#: one is the plain start, so it falls back to the classic interface where
+#: the web window cannot open (ui_web/launch.py), and the entry 3.x wrote
+#: needs no change. gui.run() sets "classic" for a start with --classic;
+#: BASECAMP_AUTOSTART_UI overrides it for one run, and
+#: save_autostart_enabled(val, ui=...) per call.
+AUTOSTART_UI = "web"
+
+
+def _autostart_exec(ui=None):
+    ui = (ui or os.environ.get("BASECAMP_AUTOSTART_UI") or AUTOSTART_UI).lower()
+    flags = "--classic --minimized" if ui == "classic" else "--minimized"
     _FROZEN = getattr(sys, "frozen", False)
     if _FROZEN:
         p = os.environ.get("APPIMAGE", sys.executable)
-        return f'"{p}" --minimized'
-    # __file__ would refer to this module; we need the gui entry point.
-    # Callers that know the gui path can override; fall back to gui.py sibling.
-    gui_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "gui.py")
-    return f'"{sys.executable}" "{gui_path}" --minimized'
+        return f'"{p}" {flags}'
+    # __file__ would refer to this module; we need the entry point.
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    entry = os.path.join(root, "gui.py")
+    return f'"{sys.executable}" "{entry}" {flags}'
 
 
 def load_autostart_enabled():
     return os.path.exists(AUTOSTART_FILE)
 
 
-def save_autostart_enabled(val):
+def save_autostart_enabled(val, ui=None):
     if val:
         os.makedirs(os.path.dirname(AUTOSTART_FILE), exist_ok=True)
         with open(AUTOSTART_FILE, "w") as f:
@@ -621,7 +641,7 @@ def save_autostart_enabled(val):
                 "Type=Application\n"
                 "Name=BaseCamp Linux\n"
                 "Comment=Mountain Everest Max display control\n"
-                f"Exec={_autostart_exec()}\n"
+                f"Exec={_autostart_exec(ui)}\n"
                 "Icon=basecamp-linux\n"
                 "Hidden=false\n"
                 "NoDisplay=false\n"
@@ -747,13 +767,37 @@ def _load_per_key():
         return [(20, 20, 20)] * 126, list(default_side), 100
 
 
-def _save_per_key(leds, side, bri):
+def _save_per_key(leds, side, bri, effects=None, effect_params=None):
+    """per_key_colors.json. `effects` (an effect name per key, 126) and
+    `effect_params` ({effect name: its settings}) are written only when
+    given; a file without them (3.x, or colours only) means every key is
+    static, so older readers and writers keep working."""
+    d = {
+        "leds": [list(c) for c in leds],
+        "side": [list(c) for c in side],
+        "brightness": bri,
+    }
+    if effects is not None:
+        d["effects"] = list(effects)
+        d["effect_params"] = dict(effect_params or {})
     with open(PER_KEY_FILE, "w") as f:
-        f.write(json.dumps({
-            "leds": [list(c) for c in leds],
-            "side": [list(c) for c in side],
-            "brightness": bri,
-        }, indent=2))
+        f.write(json.dumps(d, indent=2))
+
+
+def _load_per_key_effects():
+    """(effects, effect_params) of per_key_colors.json: an effect name per
+    key (126, "static" where nothing is stored) and {name: settings}."""
+    try:
+        d = _read_json(PER_KEY_FILE)
+    except Exception:
+        d = {}
+    d = d if isinstance(d, dict) else {}
+    raw = d.get("effects")
+    effects = [e if isinstance(e, str) and e else "static"
+               for e in (raw if isinstance(raw, list) else [])][:126]
+    effects += ["static"] * (126 - len(effects))
+    params = d.get("effect_params")
+    return effects, (params if isinstance(params, dict) else {})
 
 
 # ── Presets ────────────────────────────────────────────────────────────────────
@@ -996,6 +1040,25 @@ def _save_makalu_remap(assignments):
         f.write(json.dumps(assignments))
 
 
+# Lighting and sensor settings as last applied, so a screen can show them
+# (3.x never stored them anywhere). {"lighting": {...}, "sensor": {...}} with
+# ids, not labels; core/devices/makalu/protocol.py normalises what it reads.
+MAKALU_SETTINGS_FILE = os.path.join(CONFIG_DIR, "makalu_settings.json")
+
+
+def _load_makalu_settings():
+    try:
+        d = _read_json(MAKALU_SETTINGS_FILE)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_makalu_settings(data):
+    with open(MAKALU_SETTINGS_FILE, "w") as f:
+        f.write(json.dumps(data, indent=2))
+
+
 # ── DisplayPad config ────────────────────────────────────────────────────────
 
 # ── DisplayPad config ────────────────────────────────────────────────────────
@@ -1145,21 +1208,81 @@ def _delete_displaypad_page_record(page_id):
 
 
 def _migrate_legacy_displaypad_pages():
-    """One-time upgrade (#53): fold the old separate files (displaypad_
-    actions.json, displaypad_buttons.json, displaypad_fullscreen.json,
-    displaypad_pages.json, displaypad_page_timeouts.json, displaypad_
-    page_names.json) into one file per page. Skipped once the per-page
-    directory has anything in it -- the old files are left on disk
-    untouched (unused, but nothing is deleted)."""
+    """One-time upgrade (#53): fold the old separate files of the live
+    configuration into one file per page in DISPLAYPAD_PAGES_DIR. Skipped
+    once that directory has anything in it -- the old files are left on
+    disk untouched (unused, but nothing is deleted). See
+    migrate_legacy_displaypad_pages().
+
+    It runs once per configuration, recorded in a marker file beside the page directory
+    (displaypad_legacy_migrated):
+    a DisplayPad profile (core/profiles.py) can make the directory empty
+    again on purpose (a new profile has no pages), and the old 3.x files
+    must not come back then."""
+    marker = os.path.join(os.path.dirname(_page_dir()), "displaypad_legacy_migrated")
+    if os.path.exists(marker):
+        return
     try:
-        if os.listdir(_page_dir()):
-            return
+        had_pages = bool(os.listdir(_page_dir()))
+    except OSError:
+        had_pages = False
+    if not had_pages and migrate_legacy_displaypad_pages(CONFIG_DIR, _page_dir()):
+        _invalidate_pages_cache()
+    try:
+        with open(marker, "w") as f:
+            f.write("1")
     except OSError:
         pass
 
+
+def _write_page_record_to(page_dir, page_id, record):
+    """Write one page record as a new file in `page_dir` (the legacy
+    conversion's writer: the directory starts empty, so there is no older
+    file of the page to rename)."""
+    page_id = int(page_id)
+    record = dict(record)
+    record["id"] = page_id
+    record.setdefault("name", "Main" if page_id == 0 else f"Page {page_id}")
+    path = os.path.join(page_dir, _page_filename(page_id, record["name"]))
+    with open(path, "w") as f:
+        json.dump(record, f, indent=2)
+
+
+def migrate_legacy_displaypad_pages(src_dir=None, page_dir=None, fallback_dir=None):
+    """Fold the pre-#53 DisplayPad files (displaypad_actions.json,
+    displaypad_buttons.json, displaypad_fullscreen.json, displaypad_pages.json,
+    displaypad_page_timeouts.json, displaypad_page_names.json) found in
+    `src_dir` into one file per page in `page_dir`.
+
+    The defaults are the live configuration (CONFIG_DIR into
+    DISPLAYPAD_PAGES_DIR). The 4.0 profile migration points it at a 3.x
+    profile folder and at a profile's own page directory. `fallback_dir` is
+    where the page names and timeouts are looked for when `src_dir` has none
+    of its own (3.x kept those two files global, never in a profile).
+
+    Nothing is written when `page_dir` already has anything in it, and
+    `src_dir` is only read. Returns True if pages were written. The live
+    page cache is left alone; _migrate_legacy_displaypad_pages() drops it.
+    """
+    src_dir = CONFIG_DIR if src_dir is None else src_dir
+    page_dir = DISPLAYPAD_PAGES_DIR if page_dir is None else page_dir
+    os.makedirs(page_dir, exist_ok=True)
+    try:
+        if os.listdir(page_dir):
+            return False
+    except OSError:
+        pass
+
+    def legacy(path, global_too=False):
+        name = os.path.basename(path)
+        own = os.path.join(src_dir, name)
+        if global_too and fallback_dir and not os.path.exists(own):
+            return os.path.join(fallback_dir, name)
+        return own
+
     names = {}
     try:
-        raw = _read_json(DISPLAYPAD_PAGE_NAMES_FILE)
+        raw = _read_json(legacy(DISPLAYPAD_PAGE_NAMES_FILE, True))
         if isinstance(raw, dict):
             for k, v in raw.items():
                 try:
@@ -1171,7 +1294,7 @@ def _migrate_legacy_displaypad_pages():
 
     timeouts = {}
     try:
-        raw = _read_json(DISPLAYPAD_TIMEOUTS_FILE)
+        raw = _read_json(legacy(DISPLAYPAD_TIMEOUTS_FILE, True))
         if isinstance(raw, dict):
             for k, v in raw.items():
                 try:
@@ -1184,15 +1307,15 @@ def _migrate_legacy_displaypad_pages():
     records = {}
 
     try:
-        main_actions = _read_json(DISPLAYPAD_ACTIONS_FILE)
+        main_actions = _read_json(legacy(DISPLAYPAD_ACTIONS_FILE))
     except Exception:
         main_actions = list(_EMPTY_ACTIONS)
     try:
-        main_buttons = _read_json(DISPLAYPAD_BTN_FILE)
+        main_buttons = _read_json(legacy(DISPLAYPAD_BTN_FILE))
     except Exception:
         main_buttons = {}
     try:
-        main_fullscreen = _read_json(DISPLAYPAD_FULLSCREEN_FILE).get("gif_path")
+        main_fullscreen = _read_json(legacy(DISPLAYPAD_FULLSCREEN_FILE)).get("gif_path")
     except Exception:
         main_fullscreen = None
     records[0] = {
@@ -1202,7 +1325,7 @@ def _migrate_legacy_displaypad_pages():
     }
 
     try:
-        raw_pages = _read_json(DISPLAYPAD_PAGES_FILE)
+        raw_pages = _read_json(legacy(DISPLAYPAD_PAGES_FILE))
     except Exception:
         raw_pages = {}
     if isinstance(raw_pages, dict):
@@ -1233,7 +1356,8 @@ def _migrate_legacy_displaypad_pages():
             }
 
     for pid, record in records.items():
-        _save_displaypad_page_record(pid, record)
+        _write_page_record_to(page_dir, pid, record)
+    return True
 
 
 def _load_displaypad_buttons():
@@ -1465,6 +1589,24 @@ def _toolkit_notice_seen(key):
 def _mark_toolkit_notice_seen(key):
     try:
         with open(TOOLKIT_NOTICE_FILE, "w") as f:
+            json.dump({"seen": key}, f)
+    except OSError:
+        pass
+
+
+def _web_notice_seen(key):
+    """Whether the classic interface has said for `key` (this application's
+    version) why it started in place of the web one."""
+    try:
+        data = _read_json(WEB_NOTICE_FILE)
+    except Exception:
+        return False
+    return isinstance(data, dict) and data.get("seen") == key
+
+
+def _mark_web_notice_seen(key):
+    try:
+        with open(WEB_NOTICE_FILE, "w") as f:
             json.dump({"seen": key}, f)
     except OSError:
         pass
@@ -1732,6 +1874,54 @@ def _save_icon_last(slot, filename):
         json.dump(data, f, indent=2)
 
 
+# The source of the picture on the Everest Max's main display. The main
+# library only holds a 96x82 thumbnail, too small to upload again, so a
+# successful upload keeps the original here (named by content) and records it
+# in everest_max_main.json, a live file that belongs to the device profile.
+MAIN_SOURCES_DIR = os.path.join(CONFIG_DIR, "main_sources")
+MAIN_SOURCE_FILE = os.path.join(CONFIG_DIR, "everest_max_main.json")
+
+
+def save_main_source(path, frame=0):
+    """Copy `path` into main_sources/<md5 of content>.<ext> and make it the
+    current main picture source. Returns the file name, or None."""
+    import hashlib
+    import shutil
+    try:
+        with open(path, "rb") as f:
+            h = hashlib.md5(f.read()).hexdigest()
+        ext = os.path.splitext(path)[1].lower() or ".png"
+        name = f"{h}{ext}"
+        os.makedirs(MAIN_SOURCES_DIR, exist_ok=True)
+        out = os.path.join(MAIN_SOURCES_DIR, name)
+        if not os.path.exists(out):
+            shutil.copy2(path, out)
+        tmp = MAIN_SOURCE_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump({"file": name, "frame": int(frame or 0)}, f)
+        os.replace(tmp, MAIN_SOURCE_FILE)
+        return name
+    except Exception:
+        return None
+
+
+def load_main_source(folder=None):
+    """(absolute path, frame) of the current main picture source, or None
+    when there is none or its file is gone. `folder` reads another config
+    folder's everest_max_main.json (a profile) instead; the pictures are in
+    the live main_sources either way."""
+    try:
+        meta = _read_json(MAIN_SOURCE_FILE if folder is None else
+                          os.path.join(folder, "everest_max_main.json"))
+        name = os.path.basename(str(meta.get("file") or ""))
+        path = os.path.join(MAIN_SOURCES_DIR, name)
+        if name and os.path.isfile(path):
+            return path, int(meta.get("frame") or 0)
+    except Exception:
+        pass
+    return None
+
+
 def _save_to_library(path, gif_frame=0):
     """Resize image to 72×72, save as PNG by content-hash. Returns filename or None."""
     import hashlib
@@ -1844,6 +2034,35 @@ def macro_names():
     the empty dropdown instead of the macro it is set to."""
     macros = (load_macros() or {}).get("macros") or {}
     return {uid: (m or {}).get("name", uid) for uid, m in macros.items()}
+
+
+# ── Saved colours (the colour popup's palette, shared by every colour field) ──
+
+DEFAULT_SAVED_COLORS = ["#5ccf5c", "#8fdc4a", "#a6e03c", "#a03c8c", "#e04632",
+                        "#e032a0", "#00c8b4", "#0a78c8", "#5a14c8", "#d2145a"]
+
+
+def load_saved_colors():
+    """The saved colours as "#rrggbb" strings. The ten defaults when nothing was
+    saved yet; an empty list the user saved stays empty."""
+    try:
+        data = _read_json(SAVED_COLORS_FILE)
+    except (OSError, ValueError):
+        return list(DEFAULT_SAVED_COLORS)
+    if not isinstance(data, list):
+        return list(DEFAULT_SAVED_COLORS)
+    return [c.lower() for c in data if isinstance(c, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", c)][:64]
+
+
+def save_saved_colors(colors):
+    clean = []
+    for c in colors or []:
+        if isinstance(c, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", c) and c.lower() not in clean:
+            clean.append(c.lower())
+    clean = clean[:64]
+    with open(SAVED_COLORS_FILE, "w") as f:
+        json.dump(clean, f)
+    return clean
 
 
 # ── Window geometry ────────────────────────────────────────────────────────────

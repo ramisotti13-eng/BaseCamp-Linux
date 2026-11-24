@@ -1,8 +1,43 @@
-"""PluginContext — stable API surface for BaseCamp Linux plugins."""
+"""PluginContext — stable API surface for BaseCamp Linux plugins.
+
+Since 4.0 the context reaches the devices through the core's services
+(core/devices/*), not through the screens: a picture for a DisplayPad key
+goes to the DisplayPad service, one for an Everest Max D-key to the Everest
+Max service (whether or not its screen was ever opened), the page the pad is
+on is the service's, and schedule() runs on the core's scheduler, which under
+the CustomTkinter interface is its main loop. get_displaypad() and
+get_keyboard_panel() still hand out the screens when the interface has them,
+since plugins write into the DisplayPad screen's _images and _page_images.
+"""
 import os
 import json
 
 from shared.config import CONFIG_DIR
+
+
+class DisplayPadView:
+    """The DisplayPad as get_displaypad() hands it out when no interface has
+    a DisplayPad screen: the members plugins use on the screen (the image
+    maps they write into, the page on the pad, push_plugin_image), over the
+    DisplayPad service."""
+
+    def __init__(self, service):
+        self._svc = service
+
+    @property
+    def _images(self):
+        return self._svc.model.images
+
+    @property
+    def _page_images(self):
+        return self._svc.model.page_images
+
+    @property
+    def _current_page(self):
+        return self._svc.model.current_page
+
+    def push_plugin_image(self, key_index, pil_image):
+        self._svc.push_plugin_image(key_index, pil_image)
 
 
 class PluginContext:
@@ -11,6 +46,23 @@ class PluginContext:
     def __init__(self, app, plugin_manager):
         self._app = app
         self._pm = plugin_manager
+
+    # ── The core ──────────────────────────────────────────────────────────────
+
+    def _core(self):
+        return getattr(self._app, "core", None)
+
+    def _service(self, name):
+        core = self._core()
+        return core.service(name) if core is not None else None
+
+    def _present(self, device_id):
+        """Is the device plugged in: the core's device registry, else what
+        the application kept itself."""
+        registry = self._service("devices")
+        if registry is not None:
+            return bool(registry.present.get(device_id))
+        return bool(getattr(self._app, "_dev_present", {}).get(device_id))
 
     # ── i18n ──────────────────────────────────────────────────────────────────
 
@@ -22,6 +74,12 @@ class PluginContext:
         """Merge plugin translations into the app's language dict.
         lang_dict: {"en": {"my_key": "Label"}, "de": {"my_key": "Bezeichnung"}}
         """
+        svc = getattr(getattr(self._app, "core", None), "service",
+                      lambda n: None)("i18n")
+        if svc is not None:
+            # remembered and merged again after every language switch
+            svc.register_plugin_translations(lang_dict)
+            return
         code = self._app._lang_code
         if code in lang_dict:
             self._app._lang.update(lang_dict[code])
@@ -61,34 +119,70 @@ class PluginContext:
         self._app._panels[plugin_id] = panel_instance
 
     def schedule(self, ms, callback):
-        """Schedule a callback on the GUI main thread (wraps app.after())."""
-        return self._app.after(ms, callback)
+        """Run `callback` once, `ms` milliseconds from now, on the interface's
+        thread (the core's scheduler; under the CustomTkinter interface its
+        main loop). Safe to call from any thread, also before the main loop
+        runs. Returns a handle."""
+        core = self._core()
+        if core is None:
+            return self._app.after(ms, callback)
+        return core.scheduler.call_later(ms, callback)
 
     def schedule_repeat(self, ms, callback):
-        """Repeating timer on the GUI thread. Returns cancel function."""
-        cancel_id = [None]
+        """Repeating timer on the interface's thread. Returns cancel function
+        (which also stops it from inside the callback)."""
+        core = self._core()
+        if core is None:
+            cancel_id = [None]
+
+            def _tk_loop():
+                callback()
+                cancel_id[0] = self._app.after(ms, _tk_loop)
+
+            cancel_id[0] = self._app.after(ms, _tk_loop)
+            return lambda: self._app.after_cancel(cancel_id[0])
+        sched = core.scheduler
+        state = {"handle": None, "cancelled": False}
 
         def _loop():
+            if state["cancelled"]:
+                return
             callback()
-            cancel_id[0] = self._app.after(ms, _loop)
+            if not state["cancelled"]:
+                state["handle"] = sched.call_later(ms, _loop)
 
-        cancel_id[0] = self._app.after(ms, _loop)
-        return lambda: self._app.after_cancel(cancel_id[0])
+        def cancel():
+            state["cancelled"] = True
+            sched.cancel(state["handle"])
+
+        state["handle"] = sched.call_later(ms, _loop)
+        return cancel
 
     # ── Device access ─────────────────────────────────────────────────────────
 
     def get_displaypad(self):
-        """Return the DisplayPadPanel instance, or None."""
-        return getattr(self._app, "_displaypad_panel", None)
+        """The DisplayPad screen (DisplayPadPanel) when the interface has one,
+        else a DisplayPadView over the DisplayPad service, else None."""
+        panel = getattr(self._app, "_displaypad_panel", None)
+        if panel is not None:
+            return panel
+        svc = self._service("displaypad")
+        return DisplayPadView(svc) if svc is not None else None
 
     def get_keyboard_panel(self):
-        """Return the active keyboard panel instance."""
-        return self._app._panels.get(self._app._kb_panel_id)
+        """Return the active keyboard panel instance (None without an
+        interface, or before the keyboard's screen was opened)."""
+        panels = getattr(self._app, "_panels", None) or {}
+        return panels.get(getattr(self._app, "_kb_panel_id", None))
 
     def push_displaypad_image(self, key_index, pil_image):
         """Upload a PIL Image to a DisplayPad button (0-11). Thread-safe.
         The image will be resized to 102x102 and converted to BGR automatically.
         """
+        svc = self._service("displaypad")
+        if svc is not None:
+            svc.push_plugin_image(key_index, pil_image)
+            return
         dp = self.get_displaypad()
         if dp and hasattr(dp, "push_plugin_image"):
             dp.push_plugin_image(key_index, pil_image)
@@ -104,7 +198,14 @@ class PluginContext:
         already shows is not written again, and only the latest picture per
         key is written, so push when the content changes (a new track), not
         on a timer.
+
+        Works whether or not the Everest Max's screen was ever opened.
         """
+        svc = self._service("everest_max")
+        if svc is not None:
+            if not self._present("everest_max"):
+                return False
+            return svc.push_dbutton_image(button, pil_image)
         panel = getattr(self._app, "_everest_panel", None)
         present = getattr(self._app, "_dev_present", {}).get("everest_max")
         if panel is None or not present or not hasattr(panel, "push_dbutton_image"):
@@ -116,6 +217,9 @@ class PluginContext:
         page), or 0 if the DisplayPad isn't connected. Use this instead of
         assuming page 0 so widgets/actions assigned on a sub-page are found.
         """
+        svc = self._service("displaypad")
+        if svc is not None:
+            return svc.model.current_page
         dp = self.get_displaypad()
         return getattr(dp, "_current_page", 0) if dp else 0
 

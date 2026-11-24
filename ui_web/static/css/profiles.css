@@ -1,0 +1,44 @@
+/* The Profile page (js/profiles-page.js) */
+.prof-rail-tile { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; background: var(--card-3); overflow: hidden;
+  font-family: var(--font-head); font-style: italic; font-size: 18px; color: var(--fg); }
+.prof-rail-tile img { width: 100%; height: 100%; object-fit: cover; }
+.rail a:not(.on) .prof-rail-tile { opacity: .75; }
+
+.prof-count { color: var(--fg-faint); font-size: 14px; margin-left: 4px; }
+.prof-rows { padding-top: 2px; }
+.prof-rows .row { margin: 4px 0; }
+.prof-rows .row .pick { padding: 6px 6px 6px 8px; gap: 12px; }
+.prof-tile { width: 100%; height: 100%; background: var(--card-3); display: flex; align-items: center; justify-content: center; overflow: hidden;
+  font-family: var(--font-head); font-style: italic; color: var(--fg); }
+.prof-tile img { width: 100%; height: 100%; object-fit: cover; }
+.prof-rows .prof-tile { width: 46px; height: 46px; flex: none; font-size: 26px; }
+.prof-rows .pos { color: var(--fg-faint); font-size: 11px; }
+.prof-rows .nm { font-size: 15px; text-transform: uppercase; letter-spacing: .02em; }
+.prof-rows .row.on { background: var(--card-3); }
+
+.main:has(.prof-panel) { align-items: stretch; padding: 0 0 8px 8px; }
+.prof-panel { width: 100%; max-width: 720px; display: flex; flex-direction: column; gap: 12px; }
+.prof-top { display: flex; gap: 22px; align-items: center; }
+.prof-picwrap { position: relative; width: 140px; height: 140px; flex: none; }
+.prof-pic { position: relative; width: 140px; height: 140px; padding: 0; border: 0; background: none; border-radius: 12px; overflow: hidden; display: block; }
+.prof-pic .prof-tile { font-size: 84px; border-radius: 12px; background: var(--card); }
+.prof-pic .pen { position: absolute; right: 8px; bottom: 8px; width: 28px; height: 28px; border-radius: 50%; background: rgba(0, 0, 0, .65);
+  display: flex; align-items: center; justify-content: center; }
+.prof-pic .pen svg { width: 14px; height: 14px; }
+.prof-pic:hover .pen { background: var(--logo-blue); }
+.prof-picx { position: absolute; right: -6px; top: -6px; width: 24px; height: 24px; border-radius: 50%; background: var(--card-3); font-size: 16px; line-height: 1; }
+.prof-who { min-width: 0; flex: 1; }
+.prof-namerow { display: flex; align-items: center; gap: 8px; min-height: 48px; }
+.prof-name { margin: 0; font-weight: 400; font-style: italic; font-size: 34px; text-transform: uppercase; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.prof-nameinp { font-size: 22px; max-width: 420px; }
+.prof-progress { display: flex; flex-direction: column; gap: 6px; background: var(--card); border-left: 4px solid var(--logo-blue); padding: 6px 12px; font-size: 13px; color: var(--fg-dim); }
+.prof-progress[hidden] { display: none; }
+.prof-hr { border: 0; border-top: 1px solid var(--line); width: 100%; margin: 4px 0 2px; }
+.prof-prog { display: flex; gap: 10px; align-items: stretch; }
+.prof-proginp { position: relative; flex: 1; min-width: 0; }
+.prof-proginp .field { padding-right: 38px; text-overflow: ellipsis; }
+.prof-clear { position: absolute; right: 4px; top: 6px; }
+.prof-prog .btn { height: 44px; flex: none; }
+.prof-btns { display: flex; flex-direction: column; gap: 10px; margin-top: 6px; }
+.prof-wide { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; height: 46px; text-transform: uppercase; background: var(--card-2); }
+.prof-wide:hover { background: var(--card-3); }

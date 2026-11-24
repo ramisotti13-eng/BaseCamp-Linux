@@ -50,91 +50,27 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from shared import hid_compat
+from core.devices.makalu import device as _device
+from core.devices.makalu import protocol as _P
+# The protocol lives in the core (core/devices/makalu/protocol.py); these
+# names stay here for whoever imports them from the controller.
+from core.devices.makalu.protocol import (                     # noqa: F401
+    VID, PID_67, PID_MAX, REPORT_ID, RESP_ID,
+    CMD_LIGHTING, CMD_POLLING_RATE, CMD_DPI, CMD_WRITE_MEM, CMD_ENABLE, CMD_REMAP,
+    BTN_LEFT, BTN_RIGHT, BTN_MIDDLE, BTN_BACK, BTN_FORWARD, BTN_DPI,
+    BTN_MAX_FORWARD, BTN_MAX_BACK, REMAP_FUNCTIONS,
+    REMAP_DEFAULTS_67, REMAP_DEFAULTS_MAX, POLLING_RATE_MAP, DEBOUNCE_VALUES,
+    DPI_MAX, DPI_STEP,
+    EFFECT_OFF, EFFECT_STATIC, EFFECT_RAINBOW, EFFECT_BREATHING,
+    EFFECT_RGB_BREATHING, EFFECT_RESPONSIVE, EFFECT_YETI, EFFECT_CUSTOM,
+)
 HID_AVAILABLE = hid_compat.HID_AVAILABLE
 
-VID = 0x3282
-PID_67  = 0x0003   # Makalu 67
-PID_MAX = 0x0002   # Makalu Max
-PID = PID_67       # default, updated at runtime by detect_model()
-
-REPORT_ID        = 0xA1
-RESP_ID          = 0xA0
-CMD_LIGHTING     = 0x0C
-CMD_POLLING_RATE = 0x0D
-CMD_DPI          = 0x0B  # used for GET (sub=0x04 returns actual DPI values)
-CMD_WRITE_MEM    = 0xDE  # byte-by-byte RAM write (WriteMemData in Makalu.dll)
-CMD_ENABLE       = 0xC4  # EnableSetting / commit written RAM to flash
-CMD_REMAP        = 0x0A  # Button remapping (confirmed by USB capture)
-
-# Physical button indices (1-based, confirmed by USB capture)
-BTN_LEFT    = 1
-BTN_RIGHT   = 2
-BTN_MIDDLE  = 3
-BTN_BACK    = 4
-BTN_FORWARD = 5
-BTN_DPI     = 6
-# Makalu Max extra buttons
-BTN_MAX_FORWARD = 7
-BTN_MAX_BACK    = 8
-
-# Function codes (confirmed by USB capture): (category, code)
-REMAP_FUNCTIONS = {
-    "left":       (0x00, 0x01),
-    "right":      (0x00, 0x02),
-    "middle":     (0x00, 0x04),
-    "back":       (0x00, 0x08),
-    "forward":    (0x00, 0x10),
-    "dpi+":       (0x09, 0xF1),
-    "dpi-":       (0x09, 0xF3),
-    "scroll_up":  (0x01, 0x01),
-    "scroll_down":(0x01, 0xFF),
-    "disabled":   (0xFF, 0x01),
-}
-
-# Default assignments per physical button — Makalu 67
-REMAP_DEFAULTS_67 = {
-    BTN_LEFT:    "left",
-    BTN_RIGHT:   "right",
-    BTN_MIDDLE:  "middle",
-    BTN_BACK:    "back",
-    BTN_FORWARD: "forward",
-    BTN_DPI:     "dpi+",
-}
-
-# Default assignments — Makalu Max (different button layout)
-REMAP_DEFAULTS_MAX = {
-    BTN_LEFT:        "left",
-    BTN_RIGHT:       "right",
-    BTN_MIDDLE:      "middle",
-    BTN_DPI:         "dpi+",      # btn 4 = DPI on Max
-    5:               "disabled",   # btn 5 = behind DPI
-    6:               "disabled",   # btn 6 = side below 7/8
-    BTN_MAX_FORWARD: "forward",   # btn 7 = forward
-    BTN_MAX_BACK:    "back",      # btn 8 = back
-}
-
-REMAP_DEFAULTS = REMAP_DEFAULTS_67  # updated at runtime
-
-# Confirmed by USB capture: 1000→500→250→125 Hz
-POLLING_RATE_MAP = {1000: 0x01, 500: 0x02, 250: 0x04, 125: 0x08}
-
-# Debounce time in ms (confirmed by USB capture, same CMD 0x0D, buf[2]=0x02)
-DEBOUNCE_VALUES = [2, 4, 6, 8, 10, 12]
-
-# DPI range (confirmed from USB capture GET response: min=50, max=19000, step=50)
-DPI_MIN  = 50
-DPI_MAX  = 19000
-DPI_STEP = 50
-
-# Confirmed effect codes (physical testing + USB capture, PID 0x0003)
-EFFECT_OFF          = 0
-EFFECT_STATIC       = 1
-EFFECT_RAINBOW      = 2
-EFFECT_BREATHING    = 5
-EFFECT_RGB_BREATHING= 6
-EFFECT_RESPONSIVE   = 7
-EFFECT_YETI         = 8
-EFFECT_CUSTOM       = 0x0F  # Per-LED custom colors (confirmed by USB capture)
+# Model-dependent, set by detect_model(). main() never calls it, so the CLI
+# always works with the Makalu 67 values (see #115 for the Max).
+PID = PID_67
+REMAP_DEFAULTS = REMAP_DEFAULTS_67
+DPI_MIN = _P.DPI_MIN
 
 
 # ── Device access ─────────────────────────────────────────────────────────────
@@ -144,66 +80,45 @@ def detect_model():
     global PID, DPI_MIN, REMAP_DEFAULTS
     if not HID_AVAILABLE:
         return None, None
-    for pid, name in [(PID_67, "Makalu 67"), (PID_MAX, "Makalu Max")]:
-        for d in hid_compat.enumerate(VID, pid):
-            if d.get('interface_number') == 1:
-                PID = pid
-                if pid == PID_MAX:
-                    DPI_MIN = 100
-                    REMAP_DEFAULTS = REMAP_DEFAULTS_MAX
-                else:
-                    DPI_MIN = 50
-                    REMAP_DEFAULTS = REMAP_DEFAULTS_67
-                return pid, name
-    return None, None
+    pid, name = _device.detect()
+    if pid is None:
+        return None, None
+    PID = pid
+    if pid == PID_MAX:
+        DPI_MIN = _P.DPI_MIN_MAX
+        REMAP_DEFAULTS = REMAP_DEFAULTS_MAX
+    else:
+        DPI_MIN = _P.DPI_MIN
+        REMAP_DEFAULTS = REMAP_DEFAULTS_67
+    return pid, name
 
 
 def find_path():
     """Return path of Interface 1 hidraw node, or None."""
     if not HID_AVAILABLE:
         return None
-    for pid in (PID_67, PID_MAX):
-        for d in hid_compat.enumerate(VID, pid):
-            if d.get('interface_number') == 1:
-                return d['path']
-    return None
+    return _device.find_path()
 
 
 def open_device():
     path = find_path()
     if path is None:
-        raise RuntimeError("Makalu mouse not found (VID=0x3282 PID=0x0003/0x0002 IF1)")
-    dev = hid_compat.open_path(path)
-    return dev
+        raise RuntimeError(_P.NOT_FOUND)
+    return hid_compat.open_path(path)
+
+
+def _max_button():
+    return 8 if PID == PID_MAX else 6
 
 
 # ── Lighting ──────────────────────────────────────────────────────────────────
 
-def _lighting_report(effect, r=0, g=0, b=0, brightness=100, param1=0, param2=0):
-    buf = [0] * 64
-    buf[0]  = REPORT_ID
-    buf[1]  = CMD_LIGHTING
-    buf[5]  = 0x01
-    buf[16] = effect
-    buf[17] = r & 0xFF
-    buf[18] = g & 0xFF
-    buf[19] = b & 0xFF
-    buf[41] = max(0, min(100, brightness))  # brightness 0-100 (also acts as save flag)
-    buf[42] = param1
-    buf[43] = param2
-    return buf
+_lighting_report = _P.lighting_report
 
 
 def _run_cmd(buf):
     """Open device, send feature report, get response, close. Returns True if OK."""
-    dev = open_device()
-    try:
-        dev.send_feature_report(bytes(buf))
-        time.sleep(0.05)
-        resp = dev.get_feature_report(REPORT_ID, 64)
-        return len(resp) >= 1 and resp[0] == RESP_ID
-    finally:
-        dev.close()
+    return _device.run(buf, opener=open_device)
 
 
 def set_lighting_off(brightness=100):
@@ -245,245 +160,88 @@ def set_lighting_custom(leds, brightness=100):
       leds[2]            leds[5]
       leds[3]=bot-left   leds[4]=bot-right
     """
-    buf = [0] * 64
-    buf[0]  = REPORT_ID
-    buf[1]  = CMD_LIGHTING
-    buf[5]  = 0x01
-    buf[16] = EFFECT_CUSTOM
-    for i, (r, g, b) in enumerate(leds[:8]):
-        buf[17 + i * 3] = r & 0xFF
-        buf[18 + i * 3] = g & 0xFF
-        buf[19 + i * 3] = b & 0xFF
-    buf[41] = max(0, min(100, brightness))
-    return _run_cmd(buf)
+    return _run_cmd(_P.custom_report(leds, brightness))
 
 
 # ── Polling rate ──────────────────────────────────────────────────────────────
 
 def set_polling_rate(hz):
     """Set polling rate. hz must be one of 125, 250, 500, 1000."""
-    code = POLLING_RATE_MAP.get(int(hz))
-    if code is None:
-        raise ValueError(f"Invalid polling rate {hz}. Must be one of: 125, 250, 500, 1000")
-    buf = [0] * 64
-    buf[0] = REPORT_ID; buf[1] = CMD_POLLING_RATE; buf[2] = 0x01
-    buf[5] = 0x01; buf[6] = code
-    return _run_cmd(buf)
+    return _run_cmd(_P.polling_rate_report(hz))
 
 
 def set_debounce(ms):
     """Set button debounce time. ms must be one of 2, 4, 6, 8, 10, 12."""
-    ms = int(ms)
-    if ms not in DEBOUNCE_VALUES:
-        raise ValueError(f"Invalid debounce {ms}ms. Must be one of: {DEBOUNCE_VALUES}")
-    buf = [0] * 64
-    buf[0] = REPORT_ID; buf[1] = CMD_POLLING_RATE; buf[2] = 0x02
-    buf[5] = 0x01; buf[6] = ms
-    return _run_cmd(buf)
+    return _run_cmd(_P.debounce_report(ms))
 
 
 def set_lift_off(high):
     """Set lift-off distance. high=True → High, high=False → Low."""
-    buf = [0] * 64
-    buf[0] = REPORT_ID; buf[1] = CMD_POLLING_RATE; buf[2] = 0x04
-    buf[5] = 0x01; buf[6] = 0x01 if high else 0x00
-    return _run_cmd(buf)
+    return _run_cmd(_P.lift_off_report(high))
 
 
 def set_angle_snapping(enabled):
     """Enable or disable angle snapping. enabled: True/False."""
-    buf = [0] * 64
-    buf[0] = REPORT_ID; buf[1] = CMD_POLLING_RATE; buf[2] = 0x03
-    buf[5] = 0x01; buf[6] = 0x01 if enabled else 0x00
-    return _run_cmd(buf)
+    return _run_cmd(_P.angle_snapping_report(enabled))
 
 
 # ── DPI ───────────────────────────────────────────────────────────────────────
 
 def get_dpi():
-    """Read all 5 DPI level values from the mouse. Returns list of 5 ints.
+    """Read all 5 DPI level values from the mouse: (levels, active level 0-based).
 
-    Protocol: CMD 0x0B sub=0x07 (Read_profile_data).
-    Response layout (confirmed by USB probe):
-      [21] = total number of DPI levels
-      [22] = current active level (0-based)
-      [23..42] = 5 × (X lo, X hi, Y lo, Y hi) raw LE16 DPI values
+    Protocol: CMD 0x0B sub=0x07 (Read_profile_data); see protocol.parse_dpi.
     """
-    buf = [0] * 64
-    buf[0] = REPORT_ID
-    buf[1] = CMD_DPI
-    buf[2] = 0x07
-    buf[5] = 0x01
     dev = open_device()
     try:
-        dev.send_feature_report(bytes(buf))
-        time.sleep(0.05)
-        resp = dev.get_feature_report(REPORT_ID, 64)
-        current = max(0, min(4, resp[22] - 1))  # resp[22] is 1-based active level
-        levels = []
-        for i in range(5):
-            lo = resp[23 + i * 4]
-            hi = resp[24 + i * 4]
-            dpi = lo | (hi << 8)
-            levels.append(max(DPI_MIN, min(DPI_MAX, dpi)))
-        return levels, current
+        resp = _device.query(dev, _P.dpi_query_report())
+        return _P.parse_dpi(resp, DPI_MIN)
     finally:
         dev.close()
 
 
 def _dpi_to_raw(dpi):
-    """Convert user DPI value to PAW3335 sensor-encoded raw value.
-
-    Reverse-engineered from Makalu.dll UpdateUIDatatoSensor (SensorID=78):
-      data = dpi // 50
-      if data <= 200: raw = data - 1
-      else: raw = 199 + (data - 199) // 2
-
-    The GET command (0x0B sub=0x04) returns decoded DPI (actual Hz),
-    but flash storage and the WriteMemData protocol use sensor-encoded values.
-    """
-    dpi = max(DPI_MIN, min(DPI_MAX, int(dpi)))
-    dpi = round(dpi / DPI_STEP) * DPI_STEP
-    data = dpi // DPI_STEP
-    if data <= 200:
-        return data - 1
-    else:
-        return 199 + (data - 199) // 2
+    """User DPI to the PAW3335 sensor encoding (unused; see protocol.dpi_to_raw)."""
+    return _P.dpi_to_raw(dpi, DPI_MIN)
 
 
 def _write_mem_byte(dev, address, value):
-    """Write a single byte to mouse RAM at the given address.
+    """Write a single byte to mouse RAM at the given address (CMD 0xDE, unused).
 
-    Protocol: CMD 0xDE, buf = [0xA1, 0xDE, addr_lo, addr_hi, value, 0, 0, ...]
-    Address space: addr_lo = address % 256, addr_hi = address // 256.
-
-    Profile memory layout (from Makalu.dll):
-      profile i data starts at address 256 + i*256
-      DPI1 lo byte = offset 5  → address 256 + i*256 + 5
-      DPI1 hi byte = offset 6  → address 256 + i*256 + 6
+    Profile memory layout (from Makalu.dll): profile i starts at 256 + i*256;
+    DPI1 lo/hi at offsets 5/6.
     """
-    buf = [0] * 64
-    buf[0] = REPORT_ID
-    buf[1] = CMD_WRITE_MEM
-    buf[2] = address % 256
-    buf[3] = address // 256
-    buf[4] = value & 0xFF
-    dev.send_feature_report(bytes(buf))
+    dev.send_feature_report(bytes(_P.write_mem_report(address, value)))
     time.sleep(0.05)
 
 
 def set_all_dpi(dpi_list, active_level=1):
-    """Set all 5 DPI levels.
+    """Set all 5 DPI levels (CMD 0x0D sub 0x0A, Set_dpi_settings).
 
-    dpi_list: list of 5 ints in range 50–19000 (raw DPI values, step 50).
-    These are DPI levels within the current profile (not separate profiles).
-    Use the DPI button on the mouse to cycle through them.
-
-    Protocol: CMD 0x0D sub=0x0A (Set_dpi_settings, reverse-engineered from
-    BaseCamp.Service.exe DllImport + DPI_T struct + makalu_67_dll.dll disassembly).
-
-    DPI_T struct (StructLayout Pack=1, passed by value on stack):
-      byte  dpi_level_num     → buf[6]  number of DPI levels (1–5)
-      byte  dpi_level_current → buf[7]  current level index (0-based)
-      ushort dpi1_x           → buf[16-17]  LE16 raw DPI
-      ushort dpi1_y           → buf[18-19]  same value as X
-      ushort dpi2_x           → buf[20-21]
-      ushort dpi2_y           → buf[22-23]
-      ... (5 levels total)
-      ushort dpi5_x           → buf[32-33]
-      ushort dpi5_y           → buf[34-35]
-
-    PROFILE_ID_T: Profile1=1 … Profile5=5, ALL_PROFILE=6
-    buf[5] = profile_id (we use ALL_PROFILE=6 to apply to all profiles).
-    DPI values are raw ushort (same units as GET response, no sensor encoding).
+    dpi_list: 5 ints, 50–19000 in steps of 50, the levels the DPI button
+    cycles through. active_level is 1-based. Applied to all profiles
+    (ALL_PROFILE=6). See protocol.dpi_report for the layout (the DPI_T struct
+    of BaseCamp.Service.exe).
     """
-    if len(dpi_list) != 5:
-        raise ValueError("dpi_list must have exactly 5 values")
-    buf = [0] * 64
-    buf[0] = REPORT_ID
-    buf[1] = CMD_POLLING_RATE   # 0x0D
-    buf[2] = 0x0A               # sub = Set_dpi_settings
-    buf[5] = 6                  # ALL_PROFILE (applies to all 5 profiles)
-    buf[6] = 5                  # dpi_level_num = 5 levels
-    buf[7] = max(1, min(5, int(active_level)))  # dpi_level_current (1-based)
-    for i, dpi in enumerate(dpi_list):
-        dpi = max(DPI_MIN, min(DPI_MAX, int(dpi)))
-        dpi = round(dpi / DPI_STEP) * DPI_STEP
-        lo = dpi & 0xFF
-        hi = (dpi >> 8) & 0xFF
-        buf[16 + i * 4]     = lo  # dpiN_x lo
-        buf[16 + i * 4 + 1] = hi  # dpiN_x hi
-        buf[16 + i * 4 + 2] = lo  # dpiN_y lo (same as X)
-        buf[16 + i * 4 + 3] = hi  # dpiN_y hi
-    return _run_cmd(buf)
+    return _run_cmd(_P.dpi_report(dpi_list, active_level, DPI_MIN))
 
 
 # ── Button remapping ──────────────────────────────────────────────────────────
 
 def set_button_sniper(button_index, sniper_dpi):
-    """Assign DPI Sniper to a button.
-
-    While the button is held, the firmware switches to sniper_dpi.
-    On release the active profile DPI is restored automatically.
-
-    Protocol confirmed by USB capture (capture_makalu_sniper.pcapng):
-      buf[1]     = 0x0A (CMD_REMAP)
-      buf[5]     = 0x01
-      buf[6]     = button_index (1-based)
-      buf[16]    = 0x0C  (sniper category)
-      buf[17]    = 0x01  (sniper function)
-      buf[18:20] = sniper_dpi (LE16, X-axis)
-      buf[20:22] = sniper_dpi (LE16, Y-axis — same value)
-      buf[22]    = 0x0F
-    """
-    max_btn = 8 if PID == PID_MAX else 6
-    if not 1 <= button_index <= max_btn:
-        raise ValueError(f"Button index must be 1–{max_btn}, got {button_index}")
-    sniper_dpi = max(DPI_MIN, min(DPI_MAX, (sniper_dpi // DPI_STEP) * DPI_STEP))
-    buf = [0] * 64
-    buf[0]  = REPORT_ID
-    buf[1]  = CMD_REMAP
-    buf[5]  = 0x01
-    buf[6]  = button_index
-    buf[16] = 0x0C
-    buf[17] = 0x01
-    buf[18] = sniper_dpi & 0xFF
-    buf[19] = (sniper_dpi >> 8) & 0xFF
-    buf[20] = sniper_dpi & 0xFF
-    buf[21] = (sniper_dpi >> 8) & 0xFF
-    buf[22] = 0x0F
-    return _run_cmd(buf)
+    """Assign DPI Sniper to a button: while held, the firmware switches to
+    sniper_dpi; on release the level's DPI comes back (category 0x0C,
+    capture_makalu_sniper.pcapng)."""
+    return _run_cmd(_P.sniper_report(button_index, sniper_dpi, _max_button(), DPI_MIN))
 
 
 def set_button_remap(button_index, function_name):
-    """Remap a physical button to a function.
+    """Remap a physical button to a function from REMAP_FUNCTIONS.
 
     button_index: 1–6 (1=Left, 2=Right, 3=Middle, 4=Back, 5=Forward, 6=DPI+)
-    function_name: key from REMAP_FUNCTIONS dict
-
-    Protocol confirmed by USB capture (capture_makalu_remap2.pcap):
-      buf[1]  = 0x0A (CMD_REMAP)
-      buf[5]  = 0x01
-      buf[6]  = button_index (1-based)
-      buf[16] = category byte of function
-      buf[17] = code byte of function
-      buf[22] = 0x0F (always)
+    (capture_makalu_remap2.pcap).
     """
-    fn = REMAP_FUNCTIONS.get(function_name.lower())
-    if fn is None:
-        raise ValueError(f"Unknown function '{function_name}'. Valid: {list(REMAP_FUNCTIONS)}")
-    max_btn = 8 if PID == PID_MAX else 6
-    if not 1 <= button_index <= max_btn:
-        raise ValueError(f"Button index must be 1–{max_btn}, got {button_index}")
-    buf = [0] * 64
-    buf[0]  = REPORT_ID
-    buf[1]  = CMD_REMAP
-    buf[5]  = 0x01
-    buf[6]  = button_index
-    buf[16] = fn[0]
-    buf[17] = fn[1]
-    buf[22] = 0x0F
-    return _run_cmd(buf)
+    return _run_cmd(_P.remap_report(button_index, function_name, _max_button()))
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
@@ -580,12 +338,8 @@ def main():
                 bri = int(sub_args[8]) if len(sub_args) > 8 else 100
                 spd  = int(sub_args[9])  if len(sub_args) > 9  else 0
                 dir_ = int(sub_args[10]) if len(sub_args) > 10 else 0
-                buf = _lighting_report(code, r, g, b, brightness=bri, param1=dir_, param2=spd)
-                buf[20] = r2 & 0xFF
-                buf[21] = g2 & 0xFF
-                buf[22] = b2 & 0xFF
-                buf[23] = 0x00
-                ok = _run_cmd(buf)
+                ok = _run_cmd(_P.lighting_report2(code, r, g, b, r2, g2, b2, brightness=bri,
+                                                  param1=dir_, param2=spd))
             else:
                 _die(f"rgb: unknown subcommand '{sub}'")
             print("ok" if ok else "failed")
@@ -639,16 +393,9 @@ def main():
             _die("dpi requires 'get' or 5 DPI values (P1 P2 P3 P4 P5)")
         if args[1] == "dump":
             # Full 64-byte dump of sub=0x07 (Read_profile_data)
-            buf = [0] * 64
-            buf[0] = REPORT_ID
-            buf[1] = CMD_DPI
-            buf[2] = 0x07
-            buf[5] = 0x01
             dev = open_device()
             try:
-                dev.send_feature_report(bytes(buf))
-                time.sleep(0.08)
-                resp = dev.get_feature_report(REPORT_ID, 64)
+                resp = _device.query(dev, _P.dpi_query_report(), wait=0.08)
                 print(" ".join(f"{b:02x}" for b in resp))
                 for i in range(16, len(resp)):
                     print(f"  [{i:2d}] = 0x{resp[i]:02x} ({resp[i]})")

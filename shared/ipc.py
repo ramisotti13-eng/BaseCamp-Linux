@@ -64,8 +64,9 @@ def send_command(obj, timeout=2.0, path=None):
 
 
 def is_running(path=None):
-    """True if a control server is currently accepting connections."""
-    return send_command({"cmd": "ping"}).get("ok", False)
+    """True if a control server is currently accepting connections at `path`
+    (default: socket_path())."""
+    return send_command({"cmd": "ping"}, path=path).get("ok", False)
 
 
 class ControlServer:
@@ -99,19 +100,21 @@ class ControlServer:
             print(f"[Control] disabled: {e}")
             self._sock = None
             return False
-        self._thread = threading.Thread(target=self._serve, daemon=True)
+        self._thread = threading.Thread(target=self._serve, daemon=True,
+                                        name="control-server")
         self._thread.start()
         print(f"[Control] listening on {self._path}")
         return True
 
     def _serve(self):
-        while not self._stop.is_set():
+        sock = self._sock
+        while sock is not None and not self._stop.is_set():
             try:
-                conn, _ = self._sock.accept()
+                conn, _ = sock.accept()
             except OSError:
                 break
             threading.Thread(target=self._handle_conn, args=(conn,),
-                             daemon=True).start()
+                             daemon=True, name="control-conn").start()
 
     def _handle_conn(self, conn):
         with conn:
@@ -142,12 +145,24 @@ class ControlServer:
             pass
 
     def stop(self):
+        """Stop accepting and remove the socket file. A command that is
+        still running finishes on its own thread and replies if it can."""
         self._stop.set()
-        if self._sock:
+        sock, self._sock = self._sock, None
+        if sock:
+            # close() alone does not wake an accept() blocked in another
+            # thread on Linux; shutdown() does, so the thread can end.
             try:
-                self._sock.close()
+                sock.shutdown(socket.SHUT_RDWR)
             except OSError:
                 pass
+            try:
+                sock.close()
+            except OSError:
+                pass
+        t = self._thread
+        if t is not None and t is not threading.current_thread():
+            t.join(1.0)
         try:
             if os.path.exists(self._path):
                 os.unlink(self._path)

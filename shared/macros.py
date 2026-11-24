@@ -1,470 +1,109 @@
-"""Macro execution engine for BaseCamp Linux.
+"""Macro execution engine for BaseCamp Linux (3.x names).
 
 Macros are sequences of actions (key press/release, delays, text, shell commands)
 executed via xdotool (X11) or ydotool (Wayland).
+
+Since 4.0 the code lives in the core: input injection in
+core/platform/input.py, launching programs and the child environment in
+core/platform/launcher.py, playing macros in core/macros/engine.py, mouse
+recordings in core/macros/recordings.py. This module keeps every name it had,
+because the DisplayPad, emax_controller, plugins (snippets, now_playing) and
+the tests import them from here, and the tests replace some of them.
+
+Each function here calls into the core when it is called, so a caller that
+looks a name up in this module at call time (as the key dispatchers do) gets
+whatever is installed under that name now.
 """
-import os
-import re
-import subprocess
-import sys
-import time
-import uuid
-
-# Env vars that PyInstaller / AppImage inject so the bundled interpreter finds
-# its own libraries. If they leak into an external program we launch (a browser,
-# zenity, a GUI app, …) that program loads our bundled libs and crashes or
-# silently fails to start — which is exactly why "App"/"Shell" actions and the
-# native file dialog don't work from the AppImage while "URL" (handed off to the
-# desktop portal over D-Bus) does. See GitHub issue #11.
-_FROZEN_ENV_VARS = (
-    "LD_LIBRARY_PATH", "LD_PRELOAD",
-    "PYTHONPATH", "PYTHONHOME",
-    "QT_PLUGIN_PATH", "QT_QPA_PLATFORM_PLUGIN_PATH",
-    "GTK_PATH", "GTK_EXE_PREFIX", "GTK_DATA_PREFIX",
-    "GDK_PIXBUF_MODULE_FILE", "GDK_PIXBUF_MODULEDIR",
-    "GST_PLUGIN_PATH", "GST_PLUGIN_SYSTEM_PATH", "GST_PLUGIN_SYSTEM_PATH_1_0",
-    "GI_TYPELIB_PATH", "GSETTINGS_SCHEMA_DIR",
-    "FONTCONFIG_FILE", "FONTCONFIG_PATH",
-    "TCL_LIBRARY", "TK_LIBRARY", "TKPATH",
-    "SSL_CERT_FILE", "SSL_CERT_DIR",
-    # Set by PyInstaller's runtime hooks from inside Python rather than by the
-    # bootloader, so they never get an _ORIG partner and were missed by the
-    # name list until 3.0.5. GIO_MODULE_DIR is the one that breaks Plasma
-    # System Monitor: its process and application pages are GIO modules.
-    "PANGO_LIBDIR", "PANGO_SYSCONFDIR", "GIO_MODULE_DIR",
+from core.macros import engine as _engine
+from core.macros import recordings as _recordings
+from core.macros.model import (            # noqa: F401
+    ACTION_TYPES, ACTION_LABELS, REPEAT_MODES, generate_macro_id,
 )
-
-# A bundle announces itself by where it lives: AppImage type 2 mounts at
-# $TMPDIR/.mount_<name><random>, a onefile PyInstaller build unpacks to
-# $TMPDIR/_MEI<random>. Matching on the location rather than on a list of
-# variable names is what makes the sweep below hold for the next PyInstaller
-# release too, and for mount points that are not ours any more (see #49).
-_BUNDLE_DIR_RE = re.compile(r"/(?:\.mount_|_MEI)[^/]*(?:/|$)")
-
-# Vars that only describe our own bundle. They do not break the dynamic linker,
-# but they announce "you are running inside an AppImage" to every program we
-# start, and libraries do key off them. Dropped so a launched app sees the same
-# environment it would get from the desktop launcher. See GitHub issue #49.
-_BUNDLE_ID_VARS = (
-    "APPDIR", "APPIMAGE", "APPIMAGE_UUID", "ARGV0", "OWD", "_MEIPASS2",
-    "BASECAMP_OVERLAY_VERSION",
+from core.platform import input as _input
+from core.platform import launcher as _launcher
+from core.platform.input import (          # noqa: F401
+    KEY_MAP, KEY_CHOICES, KEYSYM_TO_FRIENDLY, YDOTOOL_KEY_MAP,
+    MOUSE_CLICK_BUTTONS, MOUSE_SCROLL_DIRS,
 )
-
-# Vars systemd sets for the unit BaseCamp itself runs in (KDE autostart puts us
-# in app-basecamp-linux@autostart.service). They are inherited by every child,
-# so a launched app logs into our journal stream, watches our cgroup's memory
-# pressure and reports our invocation id, which is one of the ways it ends up
-# behaving differently than the same app started from the launcher or a
-# terminal. Not frozen-specific: a source or distro install started by the same
-# autostart unit leaks them too. See GitHub issue #49.
-_SYSTEMD_UNIT_VARS = (
-    "INVOCATION_ID", "JOURNAL_STREAM",
-    # WATCH names our cgroup's pressure file, WRITE carries the thresholds to
-    # write into it. Only WATCH was listed, so a child still received our
-    # thresholds; both halves of the pair have to go.
-    "MEMORY_PRESSURE_WATCH", "MEMORY_PRESSURE_WRITE",
-    "SYSTEMD_EXEC_PID", "MANAGERPID", "MANAGERPIDFDID", "NOTIFY_SOCKET",
-    "LISTEN_PID", "LISTEN_FDS", "LISTEN_FDNAMES",
-    "WATCHDOG_PID", "WATCHDOG_USEC",
-    "SYSTEMD_ACTIVATION_UNIT", "SYSTEMD_ACTIVATION_SCOPE",
-    "SERVICE_RESULT", "EXIT_CODE", "EXIT_STATUS",
+from core.platform.launcher import (       # noqa: F401
+    _FROZEN_ENV_VARS, _BUNDLE_DIR_RE, _BUNDLE_ID_VARS, _SYSTEMD_UNIT_VARS,
+    _bundle_roots, _strip_bundle_paths, clean_child_env, user_scope_prefix,
 )
 
 
-def _bundle_roots(env):
-    """Directories whose contents belong to this bundle rather than the system."""
-    roots = set()
-    appdir = env.get("APPDIR")
-    if appdir:
-        roots.add(appdir.rstrip("/"))
-    meipass = getattr(sys, "_MEIPASS", None)
-    if meipass:
-        roots.add(meipass.rstrip("/"))
-    if getattr(sys, "frozen", False):
-        roots.add(os.path.dirname(os.path.abspath(sys.executable)))
-    return roots
+# ── Environment and launching ────────────────────────────────────────────────
+
+def _build_env():
+    """Build environment for input tools, running as real user if under sudo."""
+    return _launcher.user_env()
 
 
-def _strip_bundle_paths(value, roots):
-    """Drop the path elements of `value` that point into a bundle.
-
-    Returns the value unchanged when nothing matched, so a PATH keeps its exact
-    original spelling (an empty element means "current directory" and is not
-    ours to remove).
-    """
-    parts = value.split(os.pathsep)
-    kept = [p for p in parts
-            if not (p and (_BUNDLE_DIR_RE.search(p)
-                           or any(p == r or p.startswith(r + "/") for r in roots)))]
-    return value if len(kept) == len(parts) else os.pathsep.join(kept)
+def _run_xdg_open(target):
+    """Open a URL or folder via xdg-open."""
+    _launcher.open_target(target)
 
 
-def clean_child_env(env=None):
-    """Return a copy of `env` (default os.environ) safe to hand to an external
-    program, with the PyInstaller / AppImage library-path injection undone.
-
-    Two passes. By name: the vars PyInstaller and AppRun inject are restored
-    from their ``<VAR>_ORIG`` partner where one exists, else dropped, so the
-    program falls back to the system libraries. Then by value: every remaining
-    variable loses the path elements that point into a bundle, and is dropped
-    when nothing is left. The second pass is the one that holds, because the
-    first depends on a list of names we maintain by hand and on _ORIG being
-    trustworthy, and neither survived contact with reality (#49): the runtime
-    hooks set PANGO_LIBDIR and GIO_MODULE_DIR without an _ORIG, and after an
-    in-app update restart the _ORIG of LD_LIBRARY_PATH is itself the previous
-    instance's mount point.
-
-    The bundle-identity vars are removed, and the systemd unit vars of our own
-    service are dropped in every install kind, frozen or not.
-    """
-    env = dict(os.environ if env is None else env)
-    for var in _SYSTEMD_UNIT_VARS:
-        env.pop(var, None)
-    if not (getattr(sys, "frozen", False) or env.get("APPDIR") or env.get("APPIMAGE")):
-        return env
-    roots = _bundle_roots(env)
-    for var in _FROZEN_ENV_VARS:
-        orig = env.pop(var + "_ORIG", "")
-        orig = _strip_bundle_paths(orig, roots) if orig else ""
-        if orig:
-            env[var] = orig
-        else:
-            env.pop(var, None)
-    for var in _BUNDLE_ID_VARS:
-        env.pop(var, None)
-    for var in [k for k in env if k.startswith("_PYI_")]:
-        env.pop(var, None)
-    for var, val in list(env.items()):
-        if not val:
-            continue
-        cleaned = _strip_bundle_paths(val, roots)
-        if cleaned == val:
-            continue
-        if cleaned:
-            env[var] = cleaned
-        else:
-            env.pop(var, None)
-    return env
+def _run_shell(command):
+    """Run a shell command."""
+    _launcher.run_shell(command)
 
 
-def user_scope_prefix(env=None):
-    """Return a systemd-run prefix that puts a launched program in its own scope.
-
-    KDE and GNOME start applications in an ``app-*.scope`` of their own, while a
-    program we start plainly inherits BaseCamp's cgroup. That ties its resource
-    limits and its lifetime to ours: stopping BaseCamp's autostart unit takes
-    the program down with it. Returns an empty list when no user systemd manager
-    is reachable, so the caller runs the command unchanged. See issue #49.
-    """
-    import shutil
-    env = os.environ if env is None else env
-    runtime = env.get("XDG_RUNTIME_DIR")
-    if not runtime or not os.path.exists(os.path.join(runtime, "systemd", "private")):
-        return []
-    if not shutil.which("systemd-run"):
-        return []
-    return ["systemd-run", "--user", "--scope", "--quiet", "--collect",
-            "--slice=app.slice"]
-
-# Friendly key name -> xdotool keysym
-KEY_MAP = {
-    "ctrl": "Control_L", "ctrl_r": "Control_R",
-    "shift": "Shift_L", "shift_r": "Shift_R",
-    "alt": "Alt_L", "alt_r": "Alt_R",
-    "win": "Super_L", "super": "Super_L",
-    "enter": "Return", "return": "Return",
-    "tab": "Tab", "esc": "Escape", "escape": "Escape",
-    "space": "space", "backspace": "BackSpace", "delete": "Delete",
-    "up": "Up", "down": "Down", "left": "Left", "right": "Right",
-    "home": "Home", "end": "End",
-    "pageup": "Prior", "pagedown": "Next",
-    "insert": "Insert", "print": "Print",
-    "capslock": "Caps_Lock", "numlock": "Num_Lock", "scrolllock": "Scroll_Lock",
-    "f1": "F1", "f2": "F2", "f3": "F3", "f4": "F4",
-    "f5": "F5", "f6": "F6", "f7": "F7", "f8": "F8",
-    "f9": "F9", "f10": "F10", "f11": "F11", "f12": "F12",
-    # F13-F24 have no key on the board but exist as keysyms, so they are the
-    # usual target for a macro key that must not collide with a real shortcut.
-    "f13": "F13", "f14": "F14", "f15": "F15", "f16": "F16",
-    "f17": "F17", "f18": "F18", "f19": "F19", "f20": "F20",
-    "f21": "F21", "f22": "F22", "f23": "F23", "f24": "F24",
-    "pause": "Pause", "menu": "Menu",
-}
-
-# Friendly names for dropdown display (sorted by category)
-KEY_CHOICES = [
-    # Modifiers
-    "ctrl", "shift", "alt", "win", "ctrl_r", "shift_r", "alt_r",
-    # Navigation
-    "enter", "tab", "esc", "space", "backspace", "delete",
-    "up", "down", "left", "right",
-    "home", "end", "pageup", "pagedown", "insert",
-    # F-keys
-    "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12",
-    "f13", "f14", "f15", "f16", "f17", "f18", "f19", "f20",
-    "f21", "f22", "f23", "f24",
-    # Letters
-    "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
-    "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
-    # Numbers
-    "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
-    # Punctuation
-    "minus", "equal", "bracketleft", "bracketright", "backslash",
-    "semicolon", "apostrophe", "grave", "comma", "period", "slash",
-]
-
-# Reverse map: tkinter keysym → friendly name (for record button)
-KEYSYM_TO_FRIENDLY = {}
-for _friendly, _xkey in KEY_MAP.items():
-    KEYSYM_TO_FRIENDLY[_xkey.lower()] = _friendly
-# Add identity mappings for single-char keys
-for _c in "abcdefghijklmnopqrstuvwxyz0123456789":
-    KEYSYM_TO_FRIENDLY[_c] = _c
-# Common tkinter keysyms that differ from xdotool names
-KEYSYM_TO_FRIENDLY.update({
-    "control_l": "ctrl", "control_r": "ctrl_r",
-    "shift_l": "shift", "shift_r": "shift_r",
-    "alt_l": "alt", "alt_r": "alt_r",
-    "super_l": "win", "super_r": "win",
-    "return": "enter", "escape": "esc",
-    "backspace": "backspace", "delete": "delete",
-    "tab": "tab", "space": "space",
-    "up": "up", "down": "down", "left": "left", "right": "right",
-    "home": "home", "end": "end",
-    "prior": "pageup", "next": "pagedown",
-    "insert": "insert", "print": "print",
-    "caps_lock": "capslock", "num_lock": "numlock", "scroll_lock": "scrolllock",
-    "pause": "pause", "menu": "menu",
-    "f1": "f1", "f2": "f2", "f3": "f3", "f4": "f4",
-    "f5": "f5", "f6": "f6", "f7": "f7", "f8": "f8",
-    "f9": "f9", "f10": "f10", "f11": "f11", "f12": "f12",
-    "minus": "minus", "equal": "equal",
-    "bracketleft": "bracketleft", "bracketright": "bracketright",
-    "backslash": "backslash", "semicolon": "semicolon",
-    "apostrophe": "apostrophe", "grave": "grave",
-    "comma": "comma", "period": "period", "slash": "slash",
-})
-
-ACTION_TYPES = [
-    "key_down", "key_up", "key_tap", "delay", "text",
-    "mouse_click", "mouse_move", "mouse_path", "mouse_scroll",
-    "shell", "url", "folder",
-]
-
-ACTION_LABELS = {
-    "key_down":      "Key Down",
-    "key_up":        "Key Up",
-    "key_tap":       "Key Tap",
-    "delay":         "Delay (ms)",
-    "text":          "Type Text",
-    "mouse_click":   "Mouse Click",
-    "mouse_move":    "Mouse Move",
-    "mouse_path":    "Mouse Path",
-    "mouse_scroll":  "Mouse Scroll",
-    "shell":         "Shell",
-    "url":           "URL",
-    "folder":        "Folder",
-}
-
-MOUSE_CLICK_BUTTONS = {
-    "left": "1", "middle": "2", "right": "3",
-    "back": "8", "forward": "9",
-    "button10": "10", "button11": "11", "button12": "12",
-}
-MOUSE_SCROLL_DIRS = {"up": "4", "down": "5"}
-
-REPEAT_MODES = ["once", "repeat", "toggle"]
-
-
-def generate_macro_id():
-    return str(uuid.uuid4())[:8]
-
-
-# ydotool uses Linux input event key codes (from input-event-codes.h)
-YDOTOOL_KEY_MAP = {
-    "ctrl": "29", "ctrl_r": "97",
-    "shift": "42", "shift_r": "54",
-    "alt": "56", "alt_r": "100",
-    "win": "125", "super": "125",
-    "enter": "28", "return": "28",
-    "tab": "15", "esc": "1", "escape": "1",
-    "space": "57", "backspace": "14", "delete": "111",
-    "up": "103", "down": "108", "left": "105", "right": "106",
-    "home": "102", "end": "107",
-    "pageup": "104", "pagedown": "109",
-    "insert": "110", "print": "99",
-    "capslock": "58", "numlock": "69", "scrolllock": "70",
-    "f1": "59", "f2": "60", "f3": "61", "f4": "62",
-    "f5": "63", "f6": "64", "f7": "65", "f8": "66",
-    "f9": "67", "f10": "68", "f11": "87", "f12": "88",
-    "f13": "183", "f14": "184", "f15": "185", "f16": "186",
-    "f17": "187", "f18": "188", "f19": "189", "f20": "190",
-    "f21": "191", "f22": "192", "f23": "193", "f24": "194",
-    "pause": "119", "menu": "139",
-    "a": "30", "b": "48", "c": "46", "d": "32", "e": "18",
-    "f": "33", "g": "34", "h": "35", "i": "23", "j": "36",
-    "k": "37", "l": "38", "m": "50", "n": "49", "o": "24",
-    "p": "25", "q": "16", "r": "19", "s": "31", "t": "20",
-    "u": "22", "v": "47", "w": "17", "x": "45", "y": "21", "z": "44",
-    "1": "2", "2": "3", "3": "4", "4": "5", "5": "6",
-    "6": "7", "7": "8", "8": "9", "9": "10", "0": "11",
-    "minus": "12", "equal": "13",
-    "bracketleft": "26", "bracketright": "27",
-    "backslash": "43", "semicolon": "39",
-    "apostrophe": "40", "grave": "41",
-    "comma": "51", "period": "52", "slash": "53",
-}
-
+# ── Input tools ──────────────────────────────────────────────────────────────
 
 def _resolve_key(name):
     """Map a friendly key name to an xdotool keysym."""
-    return KEY_MAP.get(name.lower(), name)
+    return _input.resolve_key(name)
 
 
 def _resolve_key_ydotool(name):
     """Map a friendly key name to a ydotool key code."""
-    return YDOTOOL_KEY_MAP.get(name.lower(), name)
+    return _input.resolve_key_ydotool(name)
 
 
 def _detect_session():
     """Detect display server: 'wayland' or 'x11'."""
-    if os.environ.get("WAYLAND_DISPLAY"):
-        return "wayland"
-    xdg = os.environ.get("XDG_SESSION_TYPE", "").lower()
-    if xdg == "wayland":
-        return "wayland"
-    if xdg == "x11":
-        return "x11"
-    # Check for sudo user's session
-    sudo_user = os.environ.get("SUDO_USER")
-    if sudo_user:
-        import pwd
-        uid = pwd.getpwnam(sudo_user).pw_uid
-        if os.path.exists(f"/run/user/{uid}/wayland-0"):
-            return "wayland"
-    return "x11"
+    return _input.detect_session()
 
 
 def _find_tool():
     """Find the best available input automation tool.
     Returns ('xdotool', path) or ('ydotool', path) or (None, None).
     """
-    import shutil
-    for tool in ("xdotool", "ydotool"):
-        path = shutil.which(tool)
-        if path:
-            return tool, path
-    return None, None
-
-
-def _build_env():
-    """Build environment for input tools, running as real user if under sudo."""
-    env = clean_child_env()
-    sudo_user = env.get("SUDO_USER")
-    if sudo_user:
-        import pwd
-        pw = pwd.getpwnam(sudo_user)
-        uid = pw.pw_uid
-        env["HOME"] = pw.pw_dir
-        env.setdefault("DISPLAY", ":0")
-        env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{uid}")
-        if os.path.exists(f"/run/user/{uid}/wayland-0"):
-            env.setdefault("WAYLAND_DISPLAY", "wayland-0")
-    return env, sudo_user
+    return _input.find_tool()
 
 
 def _run_tool(tool_name, *args):
     """Run xdotool or ydotool with correct user environment."""
-    env, sudo_user = _build_env()
-    if sudo_user:
-        cmd = ["sudo", "-u", sudo_user, "-E", tool_name] + list(args)
-    else:
-        cmd = [tool_name] + list(args)
-    try:
-        subprocess.run(cmd, env=env, timeout=5, capture_output=True)
-    except Exception:
-        pass
+    _input.run_tool(tool_name, *args)
 
 
 def _run_tool_output(tool_name, *args):
     """Run tool and return stdout."""
-    env, sudo_user = _build_env()
-    if sudo_user:
-        cmd = ["sudo", "-u", sudo_user, "-E", tool_name] + list(args)
-    else:
-        cmd = [tool_name] + list(args)
-    try:
-        r = subprocess.run(cmd, env=env, timeout=5, capture_output=True)
-        return r.stdout.decode("utf-8", errors="replace").strip()
-    except Exception:
-        return ""
-
-
-def _run_xdg_open(target):
-    """Open a URL or folder via xdg-open."""
-    env, sudo_user = _build_env()
-    if sudo_user:
-        cmd = ["sudo", "-u", sudo_user, "-E", "xdg-open", target]
-    else:
-        cmd = ["xdg-open", target]
-    try:
-        subprocess.Popen(cmd, env=env)
-    except Exception:
-        pass
-
-
-def _run_shell(command):
-    """Run a shell command."""
-    env, sudo_user = _build_env()
-    cmd = user_scope_prefix(env) + ["bash", "-c", command]
-    if sudo_user:
-        cmd = ["sudo", "-u", sudo_user, "-E"] + cmd
-    try:
-        subprocess.Popen(cmd, env=env)
-    except Exception:
-        pass
+    return _input.run_tool_output(tool_name, *args)
 
 
 def check_macro_tools():
     """Check if required tools are available. Returns (tool_name, session_type) or (None, session_type)."""
-    session = _detect_session()
-    tool, _ = _find_tool()
-    return tool, session
+    return _input.tools_status()
 
 
 def simulate_keypress(key_name):
     """Simulate a single keypress (or combo like 'ctrl+c') via xdotool or ydotool.
     Picks the available tool automatically — works on X11 and Wayland."""
-    if not key_name:
-        return
-    tool, _ = _find_tool()
-    if not tool:
-        print("[Keypress] No input tool found (install xdotool or ydotool)")
-        return
-    if tool == "xdotool":
-        keys = "+".join(_resolve_key(k) for k in key_name.split("+"))
-        _run_tool("xdotool", "key", "--clearmodifiers", keys)
-    else:
-        parts = [_resolve_key_ydotool(k) for k in key_name.split("+")]
-        for code in parts:
-            _run_tool("ydotool", "key", f"{code}:1")
-        for code in reversed(parts):
-            _run_tool("ydotool", "key", f"{code}:0")
+    _input.simulate_keypress(key_name)
 
 
 def simulate_text(text):
     """Type out text via xdotool or ydotool. Works on X11 and Wayland."""
-    if not text:
-        return
-    tool, _ = _find_tool()
-    if not tool:
-        print("[Text] No input tool found (install xdotool or ydotool)")
-        return
-    if tool == "xdotool":
-        _run_tool("xdotool", "type", "--clearmodifiers", "--delay", "12", text)
-    else:
-        _run_tool("ydotool", "type", "--key-delay", "12", text)
+    _input.simulate_text(text)
 
+
+def get_mouse_location():
+    """Get current mouse position. Returns (x, y) or None."""
+    return _input.cursor_pos()
+
+
+# ── Macros ───────────────────────────────────────────────────────────────────
 
 def execute_macro(macro_data, stop_event=None):
     """Execute a macro's action sequence.
@@ -472,226 +111,64 @@ def execute_macro(macro_data, stop_event=None):
     macro_data: dict with 'actions', 'repeat_mode', 'repeat_count'
     stop_event: threading.Event for toggle mode cancellation
     """
-    repeat_mode = macro_data.get("repeat_mode", "once")
-    repeat_count = macro_data.get("repeat_count", 1)
-
-    if repeat_mode == "once":
-        _run_actions(macro_data.get("actions", []), stop_event)
-    elif repeat_mode == "repeat":
-        for _ in range(int(repeat_count)):
-            if stop_event and stop_event.is_set():
-                break
-            _run_actions(macro_data.get("actions", []), stop_event)
-    elif repeat_mode == "toggle":
-        while not (stop_event and stop_event.is_set()):
-            _run_actions(macro_data.get("actions", []), stop_event)
+    _engine.execute_macro(macro_data, stop_event)
 
 
 def _run_actions(actions, stop_event=None):
-    tool, _ = _find_tool()
-    if not tool:
-        print("[Macro] ERROR: No input tool found (install xdotool or ydotool)")
-        return
-
-    for act in actions:
-        if stop_event and stop_event.is_set():
-            return
-        atype = act.get("type", "")
-        value = str(act.get("value", ""))
-        delay = int(act.get("delay", 0))
-
-        if atype in ("key_down", "key_up", "key_tap"):
-            _exec_key(tool, atype, value)
-        elif atype == "delay":
-            try:
-                _sleep_ms(int(float(value)), stop_event)
-            except (ValueError, TypeError):
-                pass
-        elif atype == "text":
-            _exec_text(tool, value)
-        elif atype == "mouse_click":
-            _exec_mouse_click(tool, value)
-        elif atype == "mouse_move":
-            _exec_mouse_move(tool, value)
-        elif atype == "mouse_path":
-            _exec_mouse_path(tool, value, stop_event)
-        elif atype == "mouse_scroll":
-            _exec_mouse_scroll(tool, value)
-        elif atype == "shell":
-            _run_shell(value)
-        elif atype == "url":
-            _run_xdg_open(value)
-        elif atype == "folder":
-            _run_xdg_open(value)
-
-        if delay > 0 and atype != "delay":
-            _sleep_ms(delay, stop_event)
-
-
-# ── Tool-specific execution ──────────────────────────────────────────────────
-
-def _exec_key(tool, atype, value):
-    if tool == "xdotool":
-        keysym = _resolve_key(value)
-        if atype == "key_down":
-            _run_tool("xdotool", "keydown", keysym)
-        elif atype == "key_up":
-            _run_tool("xdotool", "keyup", keysym)
-        else:
-            _run_tool("xdotool", "key", keysym)
-    elif tool == "ydotool":
-        code = _resolve_key_ydotool(value)
-        if atype == "key_down":
-            _run_tool("ydotool", "key", f"{code}:1")
-        elif atype == "key_up":
-            _run_tool("ydotool", "key", f"{code}:0")
-        else:
-            _run_tool("ydotool", "key", f"{code}:1", f"{code}:0")
-
-
-def _exec_text(tool, value):
-    if tool == "xdotool":
-        _run_tool("xdotool", "type", "--clearmodifiers", "--delay", "12", value)
-    elif tool == "ydotool":
-        _run_tool("ydotool", "type", "--key-delay", "12", value)
-
-
-def _exec_mouse_click(tool, value):
-    btn_num = MOUSE_CLICK_BUTTONS.get(value.lower().strip(), "1")
-    if tool == "xdotool":
-        _run_tool("xdotool", "click", btn_num)
-    elif tool == "ydotool":
-        # ydotool click: 0=left, 1=right, 2=middle
-        ydotool_btn = {"1": "0xC0", "2": "0xC2", "3": "0xC1",
-                       "8": "0xC7", "9": "0xC8"}.get(btn_num, "0xC0")
-        _run_tool("ydotool", "click", ydotool_btn)
-
-
-def _exec_mouse_move(tool, value):
-    parts = value.replace(",", " ").split()
-    if len(parts) != 2:
-        return
-    x, y = parts[0].strip(), parts[1].strip()
-    if tool == "xdotool":
-        _run_tool("xdotool", "mousemove", x, y)
-    elif tool == "ydotool":
-        _run_tool("ydotool", "mousemove", "-a", x, y)
-
-
-def _exec_mouse_path(tool, filename, stop_event=None):
-    """Play back a mouse recording file."""
-    from shared.config import MOUSE_RECORDINGS_DIR
-    safe_name = os.path.basename(filename)
-    path = os.path.join(MOUSE_RECORDINGS_DIR, safe_name)
-    if not os.path.exists(path):
-        return
-    try:
-        import json
-        with open(path) as f:
-            data = json.load(f)
-        positions = data.get("positions", [])
-        add_click = data.get("click_at_end", False)
-    except Exception:
-        return
-    prev_t = positions[0][2] if positions else 0
-    for x, y, t in positions:
-        if stop_event and stop_event.is_set():
-            return
-        delay_ms = int((t - prev_t) * 1000)
-        if delay_ms > 5:
-            _sleep_ms(delay_ms, stop_event)
-        _exec_mouse_move(tool, f"{x}, {y}")
-        prev_t = t
-    if add_click:
-        _exec_mouse_click(tool, "left")
-
-
-def save_mouse_recording(name, positions, click_at_end=False):
-    """Save mouse positions to a recording file. Returns filename."""
-    from shared.config import MOUSE_RECORDINGS_DIR
-    os.makedirs(MOUSE_RECORDINGS_DIR, exist_ok=True)
-    import json
-    data = {
-        "name": name,
-        "positions": positions,
-        "click_at_end": click_at_end,
-    }
-    safe_name = os.path.basename(name.replace(" ", "_").lower())
-    filename = safe_name + ".json"
-    path = os.path.join(MOUSE_RECORDINGS_DIR, filename)
-    with open(path, "w") as f:
-        json.dump(data, f, indent=2)
-    return filename
-
-
-def list_mouse_recordings():
-    """Return list of (filename, display_name) for saved recordings."""
-    from shared.config import MOUSE_RECORDINGS_DIR
-    result = []
-    try:
-        import json
-        for f in sorted(os.listdir(MOUSE_RECORDINGS_DIR)):
-            if f.endswith(".json"):
-                try:
-                    with open(os.path.join(MOUSE_RECORDINGS_DIR, f)) as fh:
-                        data = json.load(fh)
-                    name = data.get("name", f)
-                    n = len(data.get("positions", []))
-                    result.append((f, f"{name} ({n} pts)"))
-                except Exception:
-                    result.append((f, f))
-    except FileNotFoundError:
-        pass
-    return result
-
-
-def _exec_mouse_scroll(tool, value):
-    parts = value.lower().strip().split()
-    direction = parts[0] if parts else "up"
-    count = int(parts[1]) if len(parts) > 1 else 3
-    if tool == "xdotool":
-        btn_num = MOUSE_SCROLL_DIRS.get(direction, "4")
-        _run_tool("xdotool", "click", "--repeat", str(count), btn_num)
-    elif tool == "ydotool":
-        pixels = count * 30
-        if direction == "up":
-            pixels = -pixels
-        _run_tool("ydotool", "mousemove", "--wheel", "0", str(pixels))
-
-
-def get_mouse_location():
-    """Get current mouse position. Returns (x, y) or None.
-    Tries xdotool first (fastest), then python-xlib.
-    Note: on pure Wayland these only work over XWayland when the cursor
-    is over an X11 window."""
-    # Method 1: xdotool
-    out = _run_tool_output("xdotool", "getmouselocation")
-    if out:
-        parts = dict(p.split(":") for p in out.split() if ":" in p)
-        try:
-            return int(parts["x"]), int(parts["y"])
-        except (KeyError, ValueError):
-            pass
-
-    # Method 2: python-xlib
-    try:
-        from Xlib import display as _xdisplay
-        d = _xdisplay.Display()
-        data = d.screen().root.query_pointer()
-        d.close()
-        return data.root_x, data.root_y
-    except Exception:
-        pass
-
-    return None
+    _engine.run_actions(actions, stop_event)
 
 
 def _sleep_ms(ms, stop_event=None):
     """Sleep for ms milliseconds, checking stop_event every 50ms."""
-    remaining = ms / 1000.0
-    while remaining > 0:
-        if stop_event and stop_event.is_set():
-            return
-        chunk = min(remaining, 0.05)
-        time.sleep(chunk)
-        remaining -= chunk
+    _engine.sleep_ms(ms, stop_event)
+
+
+# The step helpers take the tool by name, as they did in 3.x.
+
+def _exec_key(tool, atype, value):
+    inj = _input.injector_for(tool)
+    if inj is not None:
+        inj.key(atype, value)
+
+
+def _exec_text(tool, value):
+    inj = _input.injector_for(tool)
+    if inj is not None:
+        inj.type_text(value)
+
+
+def _exec_mouse_click(tool, value):
+    inj = _input.injector_for(tool)
+    if inj is not None:
+        inj.mouse_click(value)
+
+
+def _exec_mouse_move(tool, value):
+    inj = _input.injector_for(tool)
+    if inj is not None:
+        _engine.mouse_move_step(inj, value)
+
+
+def _exec_mouse_path(tool, filename, stop_event=None):
+    """Play back a mouse recording file."""
+    inj = _input.injector_for(tool)
+    if inj is not None:
+        _engine.play_mouse_path(inj, filename, stop_event)
+
+
+def _exec_mouse_scroll(tool, value):
+    inj = _input.injector_for(tool)
+    if inj is not None:
+        _engine.mouse_scroll_step(inj, value)
+
+
+# ── Mouse recordings ─────────────────────────────────────────────────────────
+
+def save_mouse_recording(name, positions, click_at_end=False):
+    """Save mouse positions to a recording file. Returns filename."""
+    return _recordings.save_mouse_recording(name, positions, click_at_end)
+
+
+def list_mouse_recordings():
+    """Return list of (filename, display_name) for saved recordings."""
+    return _recordings.list_mouse_recordings()

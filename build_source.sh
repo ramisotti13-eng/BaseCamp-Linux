@@ -2,13 +2,13 @@
 # Build a source-overlay tarball (no PyInstaller, takes seconds).
 #
 # Output: source-<APP_VERSION>.tar.gz at the repo root, containing the
-# user-side Python tree (gui.py + shared/ + devices/ + plugins/ + lang/
-# + default_*.json) plus a VERSION file. Upload that tarball to the
+# user-side Python tree (gui.py + webui.py + core/ + shared/ + devices/ +
+# ui_web/ + plugins/ + lang/ + default_*.json) plus a VERSION file. Upload that tarball to the
 # matching GitHub release; the in-app updater will pick it up and extract
 # it to ~/.local/share/basecamp-linux/source-overlay/ on the user's box.
 #
-# Native code (libusb, hidapi, customtkinter) is NOT in here — those
-# still need a full AppImage rebuild when they change.
+# Native code (libusb, hidapi, customtkinter, pywebview and Qt WebEngine) is
+# NOT in here — those still need a full AppImage rebuild when they change.
 
 set -euo pipefail
 
@@ -36,8 +36,17 @@ cp default_presets_60.json      "$ROOT/" 2>/dev/null || true
 cp default_makalu_presets.json  "$ROOT/" 2>/dev/null || true
 cp -r lang                      "$ROOT/"
 cp -r shared                    "$ROOT/"
+cp -r core                      "$ROOT/"
 cp -r devices                   "$ROOT/"
 cp -r plugins                   "$ROOT/"
+# The web interface (4.0): its Python and its page (ui_web/static: HTML, CSS,
+# JS and fonts, about 1 MB, served as they are in git). ui_web/__init__.py
+# finds the page beside itself, so in the overlay it is the overlay's page.
+# pywebview and its backend are native and come with the AppImage only: an
+# AppImage from before 4.0 gets this tree and starts the classic interface
+# (gui.run(), ui_web/launch.py).
+cp -r ui_web                    "$ROOT/"
+cp webui.py                     "$ROOT/"
 # resources/ (icons, splash images) is intentionally NOT in the overlay —
 # it's static and would just bloat the tarball. New icons require an
 # AppImage rebuild.

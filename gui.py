@@ -1,5 +1,21 @@
 #!/usr/bin/env python3
-"""BaseCamp Linux — multi-device hub GUI."""
+"""BaseCamp Linux — multi-device hub GUI.
+
+The entry point of every start (the AppImage imports it through
+appentry.py). Since 4.0 run() opens the web interface (ui_web/) and this
+file's CustomTkinter interface is the classic one: --classic, or what starts
+when the web window cannot open here (ui_web/launch.py).
+"""
+import sys
+
+# --demo is the web interface on stand-in devices with a throw-away
+# configuration (ui_web/demo.py). The configuration directory is fixed when
+# shared.config is imported, a few lines down, and this file is the only
+# entry the AppImage has, so the switch has to happen before that import.
+if "--demo" in sys.argv[1:] and "--classic" not in sys.argv[1:]:
+    from ui_web import demo as _demo
+    _demo.prepare()
+
 import tkinter as tk
 from tkinter import filedialog
 import customtkinter as ctk
@@ -19,41 +35,17 @@ import pwd as _pwd
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("dark-blue")
 
-_HERE   = os.path.dirname(os.path.abspath(__file__))
-# Deliberately PyInstaller only. A Nuitka build sets __compiled__ instead, but
-# counting it as frozen here would send the code below into sys._MEIPASS, which
-# only PyInstaller defines, and the app would not import at all. Nuitka is
-# handled where it actually differs: the interpreter it names does not exist
-# (see _interpreter) and the helper it would start was never shipped (#77).
-_FROZEN = getattr(sys, "frozen", False)
-
-
-def _interpreter():
-    """A python that actually exists, or None.
-
-    sys.executable is normally right, but a compiled build can name an
-    interpreter that was never shipped: Nuitka reports <dist>/python3, and
-    starting a helper with it fails with FileNotFoundError. Fall back to
-    whatever python3 is on PATH before giving up (#77).
-    """
-    exe = sys.executable
-    if exe and os.path.isfile(exe) and os.access(exe, os.X_OK):
-        return exe
-    import shutil as _shutil
-    return _shutil.which("python3") or _shutil.which("python")
-
-if _FROZEN:
-    _BIN = os.path.dirname(sys.executable)
-    _RES = sys._MEIPASS
-    PYTHON = None
-    SCRIPT = os.path.join(_BIN, "basecamp-controller")
-    TRAY_HELPER = os.path.join(_BIN, "basecamp-tray")
-else:
-    _BIN = _HERE
-    _RES = _HERE
-    PYTHON = sys.executable
-    SCRIPT = os.path.join(_HERE, "emax_controller.py")
-    TRAY_HELPER = os.path.join(_HERE, "tray_helper.py")
+from core import runtime as _runtime
+_HERE   = _runtime.HERE
+# Process layout lives in core/runtime.py; these names stay because tests and
+# the rest of this file use them (tests patch gui._FROZEN).
+_FROZEN = _runtime.FROZEN
+_interpreter = _runtime.interpreter
+_BIN = _runtime.BIN
+_RES = _runtime.RES
+PYTHON = _runtime.PYTHON
+TRAY_HELPER = (os.path.join(_BIN, "basecamp-tray") if _FROZEN
+               else os.path.join(_HERE, "tray_helper.py"))
 
 STYLES = {"Analog": "analog", "Digital": "digital"}
 
@@ -119,9 +111,21 @@ from devices.displaypad.panel import DisplayPadPanel
 from devices.macropad.panel import MacroPadPanel
 from devices.obs.panel import OBSPanel
 from devices.macros.panel import MacroPanel
-from devices.plugins.panel import PluginManagerPanel
+from devices.plugins.panel import PluginManagerPanel, PanelNet
 from shared.plugins import PluginManager
 from shared.plugin_api import PluginContext
+from core import CoreApp
+from core import i18n as _i18n
+from core.platform import usb as _usb
+from core.devices.registry import DeviceRegistry
+from core.devices import install_all as install_device_services
+from shared.ui.core_bridge import TkScheduler, subscribe_tk
+from core.updates import UpdateService
+from core.settings import SettingsService
+from core.obs import ObsService
+from core.control import ControlService
+from core.plugins import PluginHost
+from core.toolkit import toolkit_notice
 
 # ── Keep backward-compatible module-level names used by existing code ──────────
 
@@ -132,199 +136,50 @@ _AUTOSTART_FILE = AUTOSTART_FILE
 
 def _cmd(*args):
     """Build subprocess command for Everest Max controller."""
-    if _FROZEN:
-        return [SCRIPT] + list(args)
-    return [PYTHON, SCRIPT] + list(args)
+    return _runtime.controller_cmd("everest_max", *args, frozen=_FROZEN)
 
 
 def load_lang(code):
-    path = os.path.join(LANG_DIR, f"{code}.json")
-    try:
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        try:
-            with open(os.path.join(LANG_DIR, "de.json"), encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return {}
+    return _i18n.load(LANG_DIR, code)
 
 
 def default_lang(available):
-    """The language to start in when nobody has picked one yet.
-
-    This used to be German whatever the machine was set to, so every new user
-    outside Germany got a German interface and then had to find the setting to
-    get out of it, in German (#92). The system locale decides now, and English
-    is the fallback rather than German.
-
-    The variables are read in gettext's order. LANGUAGE is a colon separated
-    list of preferences and comes first, except under the C locale where it is
-    ignored, which is also what gettext does.
-    """
-    candidates = []
-    if (os.environ.get("LC_ALL") or os.environ.get("LC_MESSAGES")
-            or os.environ.get("LANG") or "") not in ("C", "POSIX"):
-        candidates.extend((os.environ.get("LANGUAGE") or "").split(":"))
-    for var in ("LC_ALL", "LC_MESSAGES", "LANG"):
-        candidates.append(os.environ.get(var) or "")
-    for value in candidates:
-        code = value.split(".")[0].split("@")[0].split("_")[0].strip().lower()
-        if code and code in available:
-            return code
-    if "en" in available:
-        return "en"
-    return next(iter(available), "en")
+    """See core.i18n.default_for_env."""
+    return _i18n.default_for_env(available)
 
 
 def available_langs():
-    result = {}
-    try:
-        for fname in os.listdir(LANG_DIR):
-            if fname.endswith(".json"):
-                code = fname[:-5]
-                try:
-                    with open(os.path.join(LANG_DIR, fname), encoding="utf-8") as f:
-                        data = json.load(f)
-                    result[code] = data.get("name", code)
-                except Exception:
-                    pass
-    except FileNotFoundError:
-        pass
-    return result
+    return _i18n.available(LANG_DIR)
 
 
-# USB presence detection helpers (non-blocking, best-effort)
+# USB presence detection helpers. The logic lives in core/platform/usb.py; these
+# stay as module-level names because tests patch them, and each looks the
+# others up here at call time so a patch of one is seen by the rest.
 
 def _device_nodes(vid, pid):
-    """The /dev entries a device with this VID:PID is driven through.
-
-    Two kinds: the USB node under /dev/bus/usb, used by the libusb path
-    (Everest Max), and the hidraw nodes of its HID interfaces, used by
-    everything else. Returns the paths that exist.
-    """
-    nodes = []
-    target_vid, target_pid = f"{vid:04x}", f"{pid:04x}"
-    base = "/sys/bus/usb/devices"
-    try:
-        entries = os.listdir(base)
-    except OSError:
-        return nodes
-    for entry in entries:
-        d = f"{base}/{entry}"
-        try:
-            with open(f"{d}/idVendor") as f:
-                if f.read().strip() != target_vid:
-                    continue
-            with open(f"{d}/idProduct") as f:
-                if f.read().strip() != target_pid:
-                    continue
-            with open(f"{d}/busnum") as f:
-                bus = int(f.read().strip())
-            with open(f"{d}/devnum") as f:
-                dev = int(f.read().strip())
-        except (OSError, ValueError):
-            continue
-        usb_node = f"/dev/bus/usb/{bus:03d}/{dev:03d}"
-        if os.path.exists(usb_node):
-            nodes.append(usb_node)
-        # hidraw nodes live under the interface directories of this device
-        for sub in entries:
-            if not sub.startswith(entry + ":"):
-                continue
-            hidraw_dir = f"{base}/{sub}/hidraw"
-            try:
-                for name in os.listdir(hidraw_dir):
-                    node = f"/dev/{name}"
-                    if os.path.exists(node):
-                        nodes.append(node)
-            except OSError:
-                # Not every interface is a HID one, and some hang the hidraw
-                # directory a level deeper under the hid driver.
-                try:
-                    for hid_entry in os.listdir(f"{base}/{sub}"):
-                        hidraw_dir = f"{base}/{sub}/{hid_entry}/hidraw"
-                        if not os.path.isdir(hidraw_dir):
-                            continue
-                        for name in os.listdir(hidraw_dir):
-                            node = f"/dev/{name}"
-                            if os.path.exists(node):
-                                nodes.append(node)
-                except OSError:
-                    pass
-    return nodes
+    return _usb.device_nodes(vid, pid)
 
 
 def _device_access_denied(vid, pid):
-    """Nodes of a present device that this user may not read and write.
-
-    A device that has enumerated is visible in sysfs whatever the permissions
-    on its /dev entries are, so presence alone said "connected" while every
-    action quietly did nothing. That is what a missing or unapplied udev rule
-    looks like from the outside (issue #49). Empty list means all good.
-
-    A node that is gone by the time it is checked is not a permission problem
-    and must not be reported as one. The DisplayPad re-enumerates by itself,
-    so the node listed a moment ago can be the one it has just dropped, and
-    os.access() answers False for a path that does not exist. That put a full
-    "no permission" notice over a device whose /dev entry was plain 0666 the
-    whole time (issue #86).
-    """
-    denied = []
-    for node in _device_nodes(vid, pid):
-        try:
-            if os.access(node, os.R_OK | os.W_OK):
-                continue
-            if not os.path.exists(node):
-                continue
-        except OSError:
-            continue
-        denied.append(node)
-    return denied
+    return _usb.access_denied(vid, pid, nodes=_device_nodes)
 
 
 def _describe_node(path):
-    """Owner, group and mode of a device node, for the log line that says we
-    cannot open it. Without this a false report is indistinguishable from a
-    real one, and #86 was reported with an `ls` that contradicted us."""
-    try:
-        import grp
-        import pwd
-        st = os.stat(path)
-        try:
-            owner = pwd.getpwuid(st.st_uid).pw_name
-        except KeyError:
-            owner = str(st.st_uid)
-        try:
-            group = grp.getgrgid(st.st_gid).gr_name
-        except KeyError:
-            group = str(st.st_gid)
-        return "%s (%s:%s %o)" % (path, owner, group, st.st_mode & 0o7777)
-    except OSError as exc:
-        return "%s (%s)" % (path, exc.__class__.__name__)
+    return _usb.describe_node(path)
 
 
 def _check_usb_presence(vid, pid):
-    """Return True if a USB device with given VID:PID is present.
-    Reads /sys/bus/usb/devices/ directly — no subprocess, no forking.
-    """
-    try:
-        target_vid = f"{vid:04x}"
-        target_pid = f"{pid:04x}"
-        for entry in os.listdir("/sys/bus/usb/devices/"):
-            base = f"/sys/bus/usb/devices/{entry}"
-            try:
-                with open(f"{base}/idVendor") as f:
-                    if f.read().strip() != target_vid:
-                        continue
-                with open(f"{base}/idProduct") as f:
-                    if f.read().strip() == target_pid:
-                        return True
-            except OSError:
-                continue
-        return False
-    except OSError:
-        return False
+    return _usb.usb_present(vid, pid)
+
+
+def _make_device_registry(core):
+    """The DeviceRegistry, with presence and access checks that look up this
+    module's functions when called (tests patch them)."""
+    return core.add_service(DeviceRegistry(
+        core,
+        presence=lambda vid, pid: _check_usb_presence(vid, pid),
+        access_denied=lambda vid, pid: _device_access_denied(vid, pid),
+        describe=lambda path: _describe_node(path)))
 
 
 # ── Settings dialog ────────────────────────────────────────────────────────────
@@ -388,13 +243,12 @@ class SettingsPanel(ctk.CTkFrame):
         self._maybe_add_update_button()
 
         # ── Profiles ──
-        from shared.config import list_profiles, get_active_profile
         prof = UI.Card(grid, title=app.T("settings_profiles"))
         prof.grid(row=1, column=0, sticky="nsew", padx=(0, UI.S3), pady=(0, UI.S3))
         profile_row = ctk.CTkFrame(prof.body, fg_color="transparent")
         profile_row.pack(fill="x", pady=2)
-        profiles = list_profiles()
-        active   = get_active_profile()
+        profiles = app._settings.profiles()
+        active   = app._settings.active_profile()
         self._profile_combo = ctk.CTkComboBox(
             profile_row, values=profiles or [app.T("settings_profile_none")],
             width=200, height=30, font=(UI.FONT_FAMILY, 11),
@@ -444,8 +298,8 @@ class SettingsPanel(ctk.CTkFrame):
         # Autostart and the splash screen used to live in the keyboard panel
         # header, so they were unreachable for anyone with only a DisplayPad.
         # They are application settings and belong here.
-        self._autostart_var = ctk.BooleanVar(value=load_autostart_enabled())
-        self._splash_var    = ctk.BooleanVar(value=load_splash_enabled())
+        self._autostart_var = ctk.BooleanVar(value=app._settings.autostart())
+        self._splash_var    = ctk.BooleanVar(value=app._settings.splash())
         for key, var, cb in (("settings_autostart", self._autostart_var,
                               self._do_toggle_autostart),
                              ("settings_splash", self._splash_var,
@@ -532,17 +386,16 @@ class SettingsPanel(ctk.CTkFrame):
             pass
 
     def _do_toggle_autostart(self):
-        save_autostart_enabled(self._autostart_var.get())
+        self._app._settings.set_autostart(self._autostart_var.get())
 
     def _do_toggle_splash(self):
-        save_splash_enabled(self._splash_var.get())
+        self._app._settings.set_splash(self._splash_var.get())
 
     def _refresh_profile_combo(self):
-        from shared.config import list_profiles, get_active_profile
-        profiles = list_profiles()
+        profiles = self._app._settings.profiles()
         self._profile_combo.configure(
             values=profiles or [self._app.T("settings_profile_none")])
-        active = get_active_profile()
+        active = self._app._settings.active_profile()
         if active and active in profiles:
             self._profile_combo.set(active)
         elif profiles:
@@ -556,9 +409,8 @@ class SettingsPanel(ctk.CTkFrame):
             self._status.configure(
                 text=self._app.T("settings_profile_no_name"), text_color=RED)
             return
-        from shared.config import save_profile
         try:
-            safe, count = save_profile(name)
+            safe, count = self._app._settings.save_profile(name)
             self._new_profile_var.set("")
             self._refresh_profile_combo()
             self._status.configure(
@@ -570,8 +422,7 @@ class SettingsPanel(ctk.CTkFrame):
 
     def _do_load_profile(self):
         name = self._profile_combo.get()
-        from shared.config import load_profile, list_profiles
-        if name not in list_profiles():
+        if name not in self._app._settings.profiles():
             return
         from shared.ui import ask_yes_no
         if not ask_yes_no(self, self._app.T("settings_profiles"),
@@ -579,7 +430,7 @@ class SettingsPanel(ctk.CTkFrame):
                           self._app.T("ui_load"), self._app.T("ui_cancel")):
             return
         try:
-            count = load_profile(name)
+            count = self._app._settings.load_profile(name)
             self._app.toast(
                 self._app.T("settings_profile_loaded", name=name, n=count),
                 kind="ok")
@@ -589,8 +440,7 @@ class SettingsPanel(ctk.CTkFrame):
 
     def _do_delete_profile(self):
         name = self._profile_combo.get()
-        from shared.config import delete_profile, list_profiles
-        if name not in list_profiles():
+        if name not in self._app._settings.profiles():
             return
         from shared.ui import ask_yes_no
         if not ask_yes_no(self, self._app.T("settings_profiles"),
@@ -598,7 +448,7 @@ class SettingsPanel(ctk.CTkFrame):
                           self._app.T("ui_delete"), self._app.T("ui_cancel"),
                           danger=True):
             return
-        delete_profile(name)
+        self._app._settings.delete_profile(name)
         self._refresh_profile_combo()
         self._app.toast(self._app.T("settings_profile_deleted", name=name))
 
@@ -612,26 +462,25 @@ class SettingsPanel(ctk.CTkFrame):
         self._app._on_lang_change(val)
 
     def _do_reset_pickers(self):
-        from shared.config import reset_last_dirs
-        reset_last_dirs()
+        self._app._settings.reset_last_dirs()
         self._status.configure(
             text=self._app.T("settings_picker_reset_ok"), text_color=GRN)
 
     def _do_backup(self):
         from tkinter import filedialog
-        from shared.config import export_backup, _load_last_dir, _save_last_dir
+        st = self._app._settings
         ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
         path = filedialog.asksaveasfilename(
             parent=self, defaultextension=".zip",
-            initialdir=_load_last_dir("backup", default=os.path.expanduser("~")),
+            initialdir=st.last_dir("backup", default=os.path.expanduser("~")),
             initialfile=f"basecamp-backup-{ts}.zip",
             filetypes=[("ZIP", "*.zip")],
             title=self._app.T("settings_backup"))
         if not path:
             return
-        _save_last_dir("backup", path)
+        st.remember_dir("backup", path)
         try:
-            count = export_backup(path)
+            count = st.export_backup(path)
             self._status.configure(
                 text=self._app.T("settings_backup_ok", n=count), text_color=GRN)
         except Exception as e:
@@ -642,22 +491,22 @@ class SettingsPanel(ctk.CTkFrame):
     def _do_restore(self):
         from tkinter import filedialog
         from shared.ui import ask_yes_no
-        from shared.config import import_backup, _load_last_dir, _save_last_dir
+        st = self._app._settings
         path = filedialog.askopenfilename(
             parent=self,
-            initialdir=_load_last_dir("backup", default=os.path.expanduser("~")),
+            initialdir=st.last_dir("backup", default=os.path.expanduser("~")),
             filetypes=[("ZIP", "*.zip"), ("All", "*.*")],
             title=self._app.T("settings_restore"))
         if not path:
             return
-        _save_last_dir("backup", path)
+        st.remember_dir("backup", path)
         if not ask_yes_no(self, self._app.T("settings_restore"),
                           self._app.T("settings_restore_confirm"),
                           self._app.T("ui_continue"), self._app.T("ui_cancel"),
                           danger=True, detail=os.path.basename(path)):
             return
         try:
-            count = import_backup(path)
+            count = st.import_backup(path)
             self._app.toast(self._app.T("settings_restore_ok", n=count), kind="ok")
         except Exception as e:
             self._app.toast(
@@ -777,7 +626,11 @@ class UpdateAvailableDialog(ctk.CTkToplevel):
 
 # ── App ────────────────────────────────────────────────────────────────────────
 
-APP_VERSION = "3.2.4"
+APP_VERSION = "4.0.0-beta.1"
+
+#: Why the web interface could not start, when run() started this one in its
+#: place (None otherwise). The window says so once per version.
+_WEB_FALLBACK = None
 
 # Window size. The minimum is what the widest screen needs: sidebar plus a
 # 6x2 key grid plus the inspector column, measured rather than guessed.
@@ -834,43 +687,69 @@ class App(ctk.CTk):
         except Exception:
             pass
 
-        # i18n
-        self._lang          = {}
+        # The UI-free core (4.0): services, events and commands. Its scheduler
+        # is this window's main loop, so the logic that moves out of the
+        # panels keeps running on the thread it ran on before. Services are
+        # added as they are needed; core.start() comes after the device ones.
+        self.core = CoreApp(scheduler=TkScheduler(self))
+
+        # i18n: the strings live in the core's i18n service; _lang, _lang_code
+        # and _avail_langs below are views of it for the panels.
         self._i18n_widgets  = []
-        self._avail_langs   = available_langs()
-
-        def _read_cfg(name, default):
-            try:
-                with open(os.path.join(CONFIG_DIR, name)) as f:
-                    return f.read().strip()
-            except FileNotFoundError:
-                return default
-
-        code = _read_cfg("language", "")
-        if code not in self._avail_langs:
-            code = default_lang(self._avail_langs)
-        self._lang      = load_lang(code)
-        self._lang_code = code
+        self._i18n = self.core.add_service(_i18n.I18nService(
+            self.core, LANG_DIR, CONFIG_DIR))
         self._rebuild_obs_type_map()
+
+        # Which devices are here, which we may not open, which keyboard is
+        # shown: the registry computes it, _update_device_status renders it.
+        # _dev_present, _dev_denied and _kb_panel_id below are views of it.
+        self._devices = _make_device_registry(self.core)
+        self._devices.set_busy_probe("displaypad", self._displaypad_busy)
+        self._devices.add_virtual("obs", self._obs_connected)
+        self._devices.add_scan_listener(self._update_device_status)
+
+        # Profiles, backup, autostart, splash; OBS connection and actions.
+        self._settings = self.core.add_service(SettingsService(self.core))
+        self._obs = self.core.add_service(ObsService(self.core))
+
+        # Update check, download and install; the sidebar text and the popup
+        # are drawn here from update.available.
+        self._updates = self.core.add_service(
+            UpdateService(self.core, APP_VERSION, home=_real_home))
+        subscribe_tk(self.core, "update.available", self,
+                     self._on_update_available)
 
         self._lang_var = tk.StringVar()
 
         self._active_device = None   # "everest_max" | "everest60" | "makalu67" | "displaypad" | "macropad"
         self._panels        = {}     # populated in _build_ui
-        self._kb_panel_id   = "everest_max"   # which keyboard panel is active
-        self._dev_present   = {"everest_max": False, "everest60": False,
-                               "makalu67": False, "displaypad": False,
-                               "macropad": False, "obs": False}
-        # Devices that enumerated but whose /dev nodes we may not open (#49).
-        self._dev_denied    = {}
-        self._denied_logged = set()
-        self._denied_strikes = {}
+
+        install_device_services(self.core)
+        # The one key action dispatcher (core/actions.py) every key goes
+        # through, MacroPad and DisplayPad alike: OBS and the plugins' action
+        # types are this application's, looked up when a key runs.
+        self._actions = getattr(self.core.service("macros"), "actions", None)
+        if self._actions is not None:
+            self._actions.set_obs(self._obs_executor)
+            self._actions.set_plugin_lookup(self._plugin_action_handler)
+        # The Everest 60 and Makalu services start the controller command
+        # lines this application builds, also before (or without) their
+        # screens: the registry tells them when the device appears, and the
+        # Everest 60 then puts its saved lighting back.
+        for svc_name, dev_id in (("everest60", "everest60"), ("makalu", "makalu67")):
+            svc = self.core.service(svc_name)
+            if svc is not None and hasattr(svc, "use_command"):
+                svc.use_command(lambda *a, d=dev_id: self._cmd_for_device(d, *a))
+        self.core.start()
 
         # Plugin system
         self._plugin_manager = PluginManager()
         self._plugin_manager.discover()
         self._plugin_ctx = PluginContext(self, self._plugin_manager)
         self._plugin_manager.load_all(self._plugin_ctx)
+        self._plugins = self.core.add_service(PluginHost(
+            self.core, self._plugin_manager, net=PanelNet()))
+        self.core.bus.subscribe("plugins.updates", self._on_plugins_updates)
 
         self._build_ui()
 
@@ -894,6 +773,7 @@ class App(ctk.CTk):
         # The screen itself is opened from _build_ui's deferred callback, which
         # reads the result of this scan (issues #22, #67).
         self._check_devices()
+        self._devices.start_polling(5000)
         # Control IPC: lets external software (and the button-action daemon)
         # drive lighting, switch pages and redefine keys (issue #20).
         self._start_control_server()
@@ -912,14 +792,31 @@ class App(ctk.CTk):
         # A source install can pull a CustomTkinter newer than this version
         # knows; say so once rather than leave it to the console (#116).
         self.after(1500, self._check_toolkit)
+        # Started in place of the web interface: say why, once per version.
+        self.after(1800, self._check_web_fallback)
         # Which installed plugins have a newer published version. Asked for
         # here, a little after start and then twice a day: the Plugins screen
         # is only built when someone opens it, so leaving it to that screen
         # meant nobody heard about an update they did not go looking for
         # (#103). The screen reports what it fetches through the same door.
+        # (the plugin service does the asking; plugins.updates comes back)
         self._plugin_update_count = 0
-        self._plugin_updates_told = 0
-        self.after(15000, self._check_plugin_updates)
+
+    # ── What a key action needs from the application ──────────────────────────
+
+    def _obs_executor(self):
+        """OBS for the key action dispatcher: the OBS screen's execute_action
+        (it sends the connection settings in its form), else the service's."""
+        panel = getattr(self, "_obs_panel", None)
+        if panel is not None:
+            return panel.execute_action
+        return self._obs.execute_action
+
+    def _plugin_action_handler(self, type_id):
+        """A plugin's handler for an action type, or None (the plugin manager
+        looked up now: a test replaces its types)."""
+        pm = getattr(self, "_plugin_manager", None)
+        return pm.get_action_handler(type_id) if pm is not None else None
 
     # ── subprocess command builder ────────────────────────────────────────────
 
@@ -929,124 +826,52 @@ class App(ctk.CTk):
 
     def _cmd_for_device(self, device_id, *args):
         """Build subprocess command for a specific device controller."""
-        if device_id == "makalu67":
-            script = os.path.join(_HERE, "devices", "makalu67", "controller.py")
-            if _FROZEN:
-                return [os.path.join(_BIN, "makalu-controller")] + list(args)
-            return [PYTHON, script] + list(args)
-        if device_id == "everest60":
-            script = os.path.join(_HERE, "devices", "everest60", "controller.py")
-            if _FROZEN:
-                return [os.path.join(_BIN, "everest60-controller")] + list(args)
-            return [PYTHON, script] + list(args)
-        return _cmd(*args)
+        return _runtime.controller_cmd(device_id, *args, frozen=_FROZEN)
 
     # ── Control IPC (issue #20) ─────────────────────────────────────────────────
 
     def _start_control_server(self):
-        """Host the control socket so external programs and the button-action
-        daemon can drive the app (lighting, page switch, key redefine)."""
-        try:
-            from shared.ipc import ControlServer
-        except Exception as e:
-            print(f"[Control] unavailable: {e}")
-            return
-        self._control_server = ControlServer(self._handle_control)
-        self._control_server.start()
+        """Host the control socket so external programs, the tray helper and
+        the button-action daemon can drive the app (lighting, page switch, key
+        redefine). The commands are the core's (core/control.py); what only
+        this window can do, they ask for with ui.* events."""
+        subscribe_tk(self.core, "ui.*", self, self._on_ui_request)
+        self._control = self.core.add_service(ControlService(
+            self.core, version=APP_VERSION,
+            command=lambda dev, *a: self._cmd_for_device(dev, *a),
+            screens=self._control_screens,
+            active=lambda: self._active_device))
+        # None when the socket could not be opened (Settings says so).
+        self._control_server = self._control.server
+
+    def _control_screens(self):
+        """Every screen there is, built or not (`list`, `page`)."""
+        return set(self._panels) | set(getattr(self, "_panel_factories", {}))
+
+    def _on_ui_request(self, topic, payload):
+        """What the control socket asks of the window, on the Tk thread."""
+        what = topic.rsplit(".", 1)[-1]
+        if what == "show":
+            self._show_window()
+        elif what == "page":
+            self._switch_device(payload.get("page"))
+        elif what == "quit":
+            self._quit()
 
     def _handle_control(self, obj):
-        """Dispatch one control command. Runs on the IPC server thread, so any
-        real UI work is marshalled onto the Tk main thread via self.after()."""
-        cmd = (obj.get("cmd") or "").lower()
-        if cmd == "ping":
-            return {"ok": True, "app": "BaseCamp Linux", "version": APP_VERSION}
-        if cmd == "show":
-            # Bring the running instance forward. Used when the application is
-            # started a second time: the launcher gives no sign that it is
-            # already running minimised to the tray, so people click again.
-            self.after(0, self._show_window)
-            return {"ok": True, "shown": True}
-        if cmd == "list":
-            # Every screen that exists, built or not: a script asking what is
-            # there should not get a different answer depending on what the
-            # person happened to click.
-            return {"ok": True,
-                    "pages": sorted(set(self._panels) | set(self._panel_factories)),
-                    "active": self._active_device, "present": dict(self._dev_present),
-                    "displaypad": self._control_dp_state()}
-        if cmd == "page":
-            page = obj.get("page", "")
-            if page not in self._panels and page not in self._panel_factories:
-                return {"ok": False, "error": f"unknown page '{page}'"}
-            self.after(0, lambda: self._switch_device(page))
-            return {"ok": True}
-        if cmd == "rgb":
-            device = obj.get("device") or self._kb_panel_id
-            args = [str(a) for a in obj.get("args", [])]
-            if not args:
-                return {"ok": False, "error": "rgb: 'args' required"}
-            return self._run_control_cmd(self._cmd_for_device(device, "rgb", *args))
-        if cmd == "run":  # generic: run any device-controller verb
-            device = obj.get("device") or self._kb_panel_id
-            args = [str(a) for a in obj.get("args", [])]
-            if not args:
-                return {"ok": False, "error": "run: 'args' required"}
-            return self._run_control_cmd(self._cmd_for_device(device, *args))
-        if cmd == "image":
-            device = obj.get("device", "everest_max")
-            button = int(obj.get("button", 0))
-            path = obj.get("path", "")
-            if not os.path.isfile(path):
-                return {"ok": False, "error": f"no such file: {path}"}
-            return self._run_control_cmd(
-                self._cmd_for_device(device, "upload", str(button), path))
-        if cmd == "set_key":
-            return self._control_set_key(obj)
-        if cmd == "dp_page":
-            return self._control_dp_page(obj)
-        return {"ok": False, "error": f"unknown cmd '{cmd}'"}
+        """Dispatch one control command (see core/control.py). Kept for
+        callers from before the move."""
+        return self._control.handle(obj)
 
     def _run_control_cmd(self, cmdline):
         """Run a device-controller command for the control IPC and return output."""
-        from shared.macros import clean_child_env
-        try:
-            r = subprocess.run(cmdline, capture_output=True, timeout=30,
-                               env=clean_child_env())
-            return {"ok": r.returncode == 0, "code": r.returncode,
-                    "stdout": r.stdout.decode("utf-8", "replace").strip(),
-                    "stderr": r.stderr.decode("utf-8", "replace").strip()}
-        except Exception as e:
-            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        from core.control import run_controller
+        return run_controller(cmdline)
 
     def _control_set_key(self, obj):
-        """Redefine an Everest Max numpad button (issue #18). The action daemon
-        re-reads the saved config within ~2 s, so saving is enough to take
-        effect; we also refresh the editor if it's loaded."""
-        from shared.config import load_buttons, save_buttons
-        try:
-            button = int(obj.get("button", -1))
-        except (TypeError, ValueError):
-            button = -1
-        if not 0 <= button <= 3:
-            return {"ok": False, "error": "set_key: 'button' must be 0..3 (D1..D4)"}
-        btype  = obj.get("type", "shell")
-        action = obj.get("action", "")
-        buttons = load_buttons()
-        while len(buttons) <= button:
-            buttons.append({"icon": 7, "action": "", "type": "shell"})
-        buttons[button]["type"]   = btype
-        buttons[button]["action"] = action
-        save_buttons(buttons)
-        panel = getattr(self, "_everest_panel", None)
-        if panel is not None:
-            def refresh():
-                try:
-                    panel._btn_type[button].set(btype)
-                    panel._btn_action[button].set(action)
-                except Exception:
-                    pass
-            self.after(0, refresh)
-        return {"ok": True}
+        """Redefine an Everest Max numpad button (issue #18); see
+        ControlService.cmd_set_key."""
+        return self._control.cmd_set_key(**obj)
 
     def _on_window_configure(self, event):
         """Remember the window geometry, but only after it stops changing.
@@ -1074,99 +899,33 @@ class App(ctk.CTk):
                 return
         except Exception:
             return
-        save_window_geometry(self.geometry())
+        self._settings.set_window_geometry(self.geometry())
 
     def _control_dp_state(self):
-        """DisplayPad key pages for the `list` reply: {id: name} plus the page
-        the pad is on right now, so a script can discover the names before it
-        sends `dp_page`. Read-only and best effort, `list` has to keep working
-        without a DisplayPad and must not create or rename anything."""
-        panel = getattr(self, "_displaypad_panel", None)
-        if panel is None:
-            return {}
-        try:
-            from shared.config import _load_displaypad_page_names
-            return {"pages": {str(pid): name for pid, name
-                              in _load_displaypad_page_names().items()},
-                    "current": panel._current_page}
-        except Exception as e:
-            return {"error": f"{type(e).__name__}: {e}"}
+        """DisplayPad key pages for the `list` reply (ControlService)."""
+        return self._control._dp_state()
 
     def _control_dp_page(self, obj):
-        """Switch the DisplayPad's active key page from outside the GUI.
-
-        `cmd:"page"` only switches the GUI tab, so until now there was no way
-        to put the pad itself on a given page from a script (e.g. an editor
-        wrapper that flips to a page of code snippets on launch). Targets are
-        given the same way a 'page' button action gives them: by name, with a
-        raw page id and "prev" accepted as well."""
-        panel = getattr(self, "_displaypad_panel", None)
-        if panel is None:
-            return {"ok": False, "error": "dp_page: no DisplayPad panel"}
-        want = obj.get("page")
-        if isinstance(want, str):
-            want = want.strip()
-        if want is None or want == "":
-            return {"ok": False, "error": "dp_page: 'page' required"}
-        if isinstance(want, bool):  # JSON true/false: int(True) would mean page 1
-            return {"ok": False, "error": f"dp_page: bad page '{want}'"}
-
-        try:
-            from shared.config import _load_displaypad_page_names
-            known = _load_displaypad_page_names()
-        except Exception as e:
-            return {"ok": False, "error": f"dp_page: {type(e).__name__}: {e}"}
-
-        if isinstance(want, str):
-            # A real page name always wins, over the "prev" keyword as well as
-            # over an id, so a page the user called "prev" or "3" stays
-            # reachable by the name shown in the picker. Resolved by the panel's
-            # own lookup, the one a 'page' button action goes through, so both
-            # paths agree on what a name means.
-            target = panel._page_id_by_name(want)
-            if target is None and want.lower() == "prev":
-                target = panel._prev_page
-            elif target is None:
-                try:
-                    target = int(want)
-                except ValueError:
-                    return {"ok": False,
-                            "error": f"dp_page: no page named '{want}'",
-                            "pages": sorted(known.values())}
-        else:
-            try:
-                target = int(want)
-            except (TypeError, ValueError):
-                return {"ok": False, "error": f"dp_page: bad page '{want}'"}
-
-        if target not in known:
-            return {"ok": False, "error": f"dp_page: no page with id {target}",
-                    "pages": sorted(known.values())}
-        if target == panel._current_page:
-            # Not an error: a script that flips to a page on every window focus
-            # would otherwise report a failure for every repeat activation.
-            return {"ok": True, "page": target, "name": known[target],
-                    "changed": False}
-        # _switch_to_page() touches Tk widgets and the device worker, and we're
-        # on the IPC server thread here, so hand it to the main loop. It may
-        # defer itself further while an upload or animation is running, hence
-        # "accepted" rather than a completion promise.
-        # A script or the tray switching pages is somebody switching pages, so
-        # the page's box comes up (#93); "hints": false leaves it down.
-        hints = obj.get("hints", True) is not False
-        self.after(0, lambda p=target: panel._switch_to_page(p, show_hints=hints))
-        return {"ok": True, "page": target, "name": known[target], "changed": True}
+        """Switch the DisplayPad's active key page from outside the GUI (#63);
+        see ControlService.cmd_dp_page. tools/test_page_hints.py calls it."""
+        return self._control.cmd_dp_page(**obj)
 
     # ── i18n ──────────────────────────────────────────────────────────────────
 
+    @property
+    def _lang(self):
+        return self._i18n.strings
+
+    @property
+    def _lang_code(self):
+        return self._i18n.code
+
+    @property
+    def _avail_langs(self):
+        return self._i18n.avail
+
     def T(self, key, **kwargs):
-        val = self._lang.get(key, key)
-        if kwargs:
-            try:
-                val = val.format(**kwargs)
-            except (KeyError, IndexError):
-                pass
-        return val
+        return self._i18n.T(key, **kwargs)
 
     def _reg(self, widget, key, attr="text"):
         self._i18n_widgets.append((widget, key, attr))
@@ -1182,8 +941,7 @@ class App(ctk.CTk):
         }
 
     def _load_lang_code(self, code):
-        self._lang      = load_lang(code)
-        self._lang_code = code
+        self._i18n.load_code(code)
         self._rebuild_obs_type_map()
         self._apply_lang()
 
@@ -1223,8 +981,7 @@ class App(ctk.CTk):
                 break
         if code is None:
             return
-        with open(os.path.join(CONFIG_DIR, "language"), "w") as f:
-            f.write(code)
+        self._i18n.set_language(code)       # persists, publishes i18n.changed
         self._load_lang_code(code)
 
     def _pick_gif_frame(self, path, n_frames):
@@ -1651,10 +1408,18 @@ class App(ctk.CTk):
         self._cpu_stopped = []
 
     def _start_cpu_auto_clean(self):
-        """Delegate to Everest panel (only keyboard has CPU monitor)."""
-        if hasattr(self, "_everest_panel"):
-            if hasattr(self, "_everest_panel"):
-                self._everest_panel._start_cpu_auto_clean()
+        """Monitor Mode at start-up: through the Everest Max's screen when it
+        has been built (tests replace its member), else through the service
+        whenever an Everest Max is plugged in. It used to start only when the
+        keyboard's screen happened to exist half a second after start, which
+        an Everest 60 beside it, or a start on another screen, prevented."""
+        panel = getattr(self, "_everest_panel", None)
+        if panel is not None:
+            panel._start_cpu_auto_clean()
+            return
+        svc = self.core.service("everest_max")
+        if svc is not None and self._dev_present.get("everest_max"):
+            svc.start_monitor(clean=True)
 
     # ── USB presence check ────────────────────────────────────────────────────
 
@@ -1682,131 +1447,49 @@ class App(ctk.CTk):
         if self._active_device not in ("macros", "plugins", "obs"):
             self._switch_device("macros")
 
+    # Views of the registry's state; panels, plugins and gui.py read these.
+    @property
+    def _dev_present(self):
+        return self._devices.present
+
+    @property
+    def _dev_denied(self):
+        """Devices that enumerated but whose /dev nodes we may not open (#49)."""
+        return self._devices.denied
+
+    @property
+    def _kb_panel_id(self):
+        """Which keyboard panel is active."""
+        return self._devices.keyboard_id
+
     def _check_devices(self):
-        """Periodic USB presence check (runs in main thread — /sys reads are <1ms)."""
-        kb_max_present = _check_usb_presence(self.EVEREST_MAX_VID, self.EVEREST_MAX_PID)
-        kb_60_present  = (_check_usb_presence(self.EVEREST60_VID, self.EVEREST60_PID_ANSI)
-                          or _check_usb_presence(self.EVEREST60_VID, self.EVEREST60_PID_ISO))
-        mouse_present  = (_check_usb_presence(self.MAKALU67_VID, self.MAKALU67_PID)
-                          or _check_usb_presence(self.MAKALU67_VID, 0x0002))
-        dp_present     = _check_usb_presence(self.DISPLAYPAD_VID, self.DISPLAYPAD_PID)
-        mkd_present    = _check_usb_presence(self.MACROPAD_VID, self.MACROPAD_PID)
-        self._check_device_access(kb_max_present, kb_60_present,
-                                  mouse_present, dp_present, mkd_present)
-        self._update_device_status(kb_max_present, kb_60_present, mouse_present,
-                                   dp_present, mkd_present)
-        self.after(5000, self._check_devices)
+        """One presence and access scan now; the registry repeats it every 5 s
+        and calls _update_device_status after each."""
+        self._devices.scan()
 
-    # A device node exists for a moment before udev has applied our rule to it,
-    # so a pad that re-enumerates, which the DisplayPad does on its own, is
-    # briefly unreadable through no fault of the installation. Saying so at the
-    # first sight of it put a full "cannot be opened" notice on screen during
-    # an ordinary page switch (#80). Only a denial that survives this many
-    # consecutive scans, roughly fifteen seconds, is a real one.
-    #
-    # Counted per node, not per device (#86). An upload detaches the kernel
-    # driver from an interface and gives it back afterwards, which makes the
-    # kernel build that interface a fresh hidraw node, and a fresh node is
-    # root:root 0600 until udev gets to it. Counting per device let three
-    # different nodes, each caught inside its own short window, add up to a
-    # verdict about a device whose entries were readable throughout, which is
-    # what produced a report that the reporter's own `ls` contradicted.
-    _ACCESS_STRIKES = 3
+    def _displaypad_busy(self):
+        """True while the application itself is uploading to the DisplayPad.
 
-    def _busy_with_device(self, dev_id):
-        """True while the application itself is driving this device.
-
-        The node churn during an upload is our own doing, so a permission
-        verdict formed in the middle of one says nothing about the
-        installation (#86).
+        Only the upload sessions, which are short and bounded. The device
+        worker holds its lock for long stretches while it listens for key
+        presses, so waiting on that would switch the check off for good.
         """
-        if dev_id != "displaypad":
-            return False
         panel = getattr(self, "_displaypad_panel", None)
         if panel is None:
             return False
-        # Only the upload sessions, which are short and bounded. The device
-        # worker holds its lock for long stretches while it listens for key
-        # presses, so waiting on that would switch this check off for good.
         return bool(getattr(panel, "_uploading", False)
                     or getattr(panel, "_animating", False))
 
-    def _check_device_access(self, kb_max, kb_60, mouse, dp, mkd=False):
-        """Note devices we can see but not open, and say so once (#49).
+    def _obs_connected(self):
+        return self._obs.is_connected()
 
-        A device with root-only /dev nodes, which is what a missing or
-        unapplied udev rule leaves behind, enumerates normally: the screen said
-        "connected" while every key action quietly did nothing, and the person
-        had to find the permissions themselves.
-        """
-        checks = (
-            ("everest_max", kb_max, self.EVEREST_MAX_VID, (self.EVEREST_MAX_PID,)),
-            ("everest60", kb_60, self.EVEREST60_VID,
-             (self.EVEREST60_PID_ANSI, self.EVEREST60_PID_ISO)),
-            ("makalu67", mouse, self.MAKALU67_VID, (self.MAKALU67_PID, 0x0002)),
-            ("displaypad", dp, self.DISPLAYPAD_VID, (self.DISPLAYPAD_PID,)),
-            ("macropad", mkd, self.MACROPAD_VID, (self.MACROPAD_PID,)),
-        )
-        for dev_id, present, vid, pids in checks:
-            if present and self._busy_with_device(dev_id):
-                continue              # our own upload is churning the nodes
-            denied = []
-            if present:
-                for pid in pids:
-                    denied.extend(_device_access_denied(vid, pid))
-            # A set: a device with two product ids can list one node twice,
-            # and a node counted twice per scan reaches the strike count in
-            # two scans instead of three.
-            denied = set(denied)
-            strikes = self._denied_strikes.setdefault(dev_id, {})
-            for node in list(strikes):
-                if node not in denied:
-                    del strikes[node]   # that one came back, forget it
-            for node in denied:
-                strikes[node] = strikes.get(node, 0) + 1
-            persistent = sorted(n for n, c in strikes.items()
-                                if c >= self._ACCESS_STRIKES)
-            if persistent:
-                self._dev_denied[dev_id] = persistent
-                if dev_id not in self._denied_logged:
-                    self._denied_logged.add(dev_id)
-                    described = ", ".join(_describe_node(n) for n in persistent)
-                    print(f"[Device] {dev_id}: no access to {described}. "
-                          f"The udev rule is missing or has not been applied; "
-                          f"see 'USB permissions' in the README.", flush=True)
-                continue
-            # Nothing has reached the mark on this scan. Two things must not
-            # happen, and they pull opposite ways: a device already known to
-            # be shut must not have its warning taken down and put back up
-            # every time a node changes its number, which a pad that
-            # re-enumerates does often, and the warning must not go on naming
-            # a node that has since gone or become readable. So the warning
-            # stands while anything at all is shut, and names what is shut
-            # now. Before it has been said once, the count still rules.
-            if dev_id in self._denied_logged and denied:
-                self._dev_denied[dev_id] = sorted(denied)
-            else:
-                # Access is back: drop the notice at once, no counting down.
-                self._dev_denied.pop(dev_id, None)
-                self._denied_logged.discard(dev_id)
-
-    def _update_device_status(self, kb_max_present, kb_60_present=False,
-                               mouse_present=False, dp_present=False,
-                               mkd_present=False):
-        """Update switcher button appearance based on device presence."""
-        obs_connected = hasattr(self, "_obs_panel") and self._obs_panel.is_connected()
-        self._dev_present["everest_max"] = kb_max_present
-        self._dev_present["everest60"]   = kb_60_present
-        self._dev_present["makalu67"]    = mouse_present
-        self._dev_present["displaypad"]  = dp_present
-        self._dev_present["macropad"]    = mkd_present
-        self._dev_present["obs"]         = obs_connected
-        # Determine active keyboard panel (Everest 60 takes priority if connected)
-        old_kb_id = self._kb_panel_id
-        if kb_60_present:
-            self._kb_panel_id = "everest60"
-        elif kb_max_present:
-            self._kb_panel_id = "everest_max"
+    def _update_device_status(self, state=None):
+        """Render the registry's state: switcher buttons, screen fall-back,
+        sidebar, header, the panels' set_connected, the empty-state overlay."""
+        present = self._devices.present
+        kb_max_present = present["everest_max"]
+        kb_60_present = present["everest60"]
+        old_kb_id = self._devices.prev_keyboard_id
         # Auto-switch if viewing a keyboard panel that changed
         if (self._active_device in ("everest_max", "everest60")
                 and self._kb_panel_id != old_kb_id):
@@ -1837,13 +1520,9 @@ class App(ctk.CTk):
             self._fall_back_to_present_device()
         self._refresh_sidebar()
         self._refresh_screen_header()
-        # Notify panels
-        if hasattr(self, "_makalu_panel"):
-            self._makalu_panel.set_connected(mouse_present)
-        if hasattr(self, "_everest60_panel"):
-            self._everest60_panel.set_connected(kb_60_present)
-        if hasattr(self, "_macropad_panel"):
-            self._macropad_panel.set_connected(mkd_present)
+        # The Everest Max, Everest 60, Makalu and MacroPad services hear about their device
+        # from the registry itself (core/devices/registry.wire_presence), and
+        # their screens follow the services' presence events.
         # Reflect (dis)connection in the empty-state overlay
         self._update_empty_state()
 
@@ -2029,29 +1708,8 @@ class App(ctk.CTk):
         self.lift()
 
     def _detect_install_type(self):
-        """Return one of 'appimage' | 'arch' | 'debian' | 'source'.
-        Picked at runtime so the same code works across all packaging formats."""
-        if os.environ.get("APPIMAGE"):
-            return "appimage"
-        # AUR builds install a binary at /usr/bin/basecamp-linux — but Arch users
-        # could also be running from source. Check pacman db for our package.
-        if os.path.exists("/etc/arch-release"):
-            try:
-                r = subprocess.run(["pacman", "-Q", "basecamp-linux"],
-                                    capture_output=True, timeout=2)
-                if r.returncode == 0:
-                    return "arch"
-            except Exception:
-                pass
-        if os.path.exists("/etc/debian_version"):
-            try:
-                r = subprocess.run(["dpkg", "-s", "basecamp-linux"],
-                                    capture_output=True, timeout=2)
-                if r.returncode == 0:
-                    return "debian"
-            except Exception:
-                pass
-        return "source"
+        """'appimage' | 'arch' | 'debian' | 'source' (see core.updates)."""
+        return self._updates.install_type()
 
     def _check_toolkit(self):
         """Tell a source install once that its CustomTkinter is newer than this
@@ -2061,158 +1719,82 @@ class App(ctk.CTk):
         The AppImage carries the CustomTkinter it was tested with, and there is
         no source to compare against in it anyway."""
         from shared.ui import dropdown
-        if _FROZEN or not dropdown.DECLINED:
+        notice = toolkit_notice(APP_VERSION, getattr(ctk, "__version__", "?"),
+                                frozen=_FROZEN, declined=dropdown.DECLINED)
+        if notice is None:
             return
-        ver = getattr(ctk, "__version__", "?")
-        key = f"{APP_VERSION}|{ver}"
-        if _toolkit_notice_seen(key):
-            return
-        _mark_toolkit_notice_seen(key)
-        parts = (ver.split(".") + ["0"])[:2]
+        ver = notice["version"]
         try:
             UI.ConfirmDialog(
                 self, self.T("toolkit_notice_title"),
                 self.T("toolkit_notice_body", ver=ver),
                 self.T("toolkit_notice_ok"),
-                detail=self.T("toolkit_notice_detail", below=".".join(parts)))
+                detail=self.T("toolkit_notice_detail", below=notice["below"]))
         except Exception as e:
             print(f"[BaseCamp] CustomTkinter {ver} is newer than this version "
                   f"supports; update BaseCamp or install customtkinter<"
-                  f"{'.'.join(parts)} ({e})", file=sys.stderr)
+                  f"{notice['below']} ({e})", file=sys.stderr)
+
+    def _check_web_fallback(self):
+        """Say once per version why the classic interface came up when the
+        web one was asked for (run() noted the reason). An AppImage without
+        pywebview is one from before 4.0 that the in-app update brought here:
+        only a new AppImage brings the new interface. Anything else is a
+        source install missing pywebview or a web view for it."""
+        if not _WEB_FALLBACK:
+            return
+        from ui_web.launch import fallback_notice, has_webview
+        from shared.config import _web_notice_seen, _mark_web_notice_seen
+        notice = fallback_notice(APP_VERSION, _WEB_FALLBACK, frozen=_FROZEN,
+                                 has_webview=has_webview(),
+                                 seen=_web_notice_seen, mark=_mark_web_notice_seen)
+        if notice is None:
+            return
+        body = ("web_fallback_body_appimage" if notice["kind"] == "appimage"
+                else "web_fallback_body_install")
+        try:
+            UI.ConfirmDialog(
+                self, self.T("web_fallback_title"), self.T(body),
+                self.T("web_fallback_ok"),
+                detail=self.T("web_fallback_detail", why=notice["why"]))
+        except Exception as e:
+            print(f"[BaseCamp] the classic interface runs because the new one "
+                  f"cannot start: {notice['why']} ({e})", file=sys.stderr)
 
     def _check_for_update(self):
-        """Async fetch latest release tag from GitHub and compare with APP_VERSION.
-        Fail-quiet on any network/parse error."""
-        import threading
+        """Ask the update service for a newer release, off the interface
+        thread. The answer comes back as update.available (fail-quiet on any
+        network or parse error)."""
+        self._updates.check_async()
 
-        def _version_tuple(s):
-            parts = []
-            for p in s.lstrip("v").split("."):
-                num = "".join(c for c in p if c.isdigit())
-                parts.append(int(num) if num else 0)
-            return tuple(parts)
-
-        def _run():
-            try:
-                import urllib.request
-                # Scan the recent release feed rather than /latest: the
-                # Latest marker is a manual pin and is not necessarily the
-                # highest version. Picks the release with the highest version
-                # number, skipping drafts + prereleases.
-                req = urllib.request.Request(
-                    "https://api.github.com/repos/ramisotti13-eng/BaseCamp-Linux/releases?per_page=20",
-                    headers={"User-Agent": f"BaseCamp-Linux/{APP_VERSION}"})
-                with urllib.request.urlopen(req, timeout=5) as resp:
-                    releases = json.loads(resp.read().decode("utf-8"))
-                data = None
-                best_ver = (0,)
-                for r in releases or []:
-                    if r.get("prerelease") or r.get("draft"):
-                        continue
-                    candidate_tag = (r.get("tag_name") or "").strip()
-                    if not candidate_tag:
-                        continue
-                    v = _version_tuple(candidate_tag)
-                    if v > best_ver:
-                        best_ver = v
-                        data = r
-                if data is None:
-                    return
-                tag = (data.get("tag_name") or "").strip()
-                if tag and _version_tuple(tag) > _version_tuple(APP_VERSION):
-                    ver = tag.lstrip("v")
-                    install_type = self._detect_install_type()
-                    # Per-distro instruction — the install_type drives which
-                    # follow-up command the user needs to run.
-                    hint = self.T(f"settings_update_hint_{install_type}")
-                    msg = (self.T("settings_update_available", ver=ver)
-                            + "\n" + hint)
-                    # Prefer source-overlay tarball when the release ships one
-                    # — it's ~1500× smaller than the AppImage and works across
-                    # both Debian and Fedora builds. Only when native deps
-                    # changed (no source tarball published) do we fall back to
-                    # the full AppImage download.
-                    # A matching .sha256 sidecar is REQUIRED; without it we
-                    # silently fall back to the AppImage path, because an
-                    # unsigned tarball is the easiest tamper point on the
-                    # update flow (compromised release → arbitrary code).
-                    source_url = ""
-                    source_sha_url = ""
-                    if install_type == "appimage":
-                        for asset in data.get("assets") or []:
-                            name = (asset.get("name") or "").lower()
-                            if name.startswith("source-") and name.endswith(".tar.gz"):
-                                source_url = asset.get("browser_download_url") or ""
-                            elif name.startswith("source-") and name.endswith(".tar.gz.sha256"):
-                                source_sha_url = asset.get("browser_download_url") or ""
-                        if not source_sha_url:
-                            source_url = ""
-                    # AppImage installs: pick the asset that matches the
-                    # distro family. Filename of the running AppImage wins if
-                    # it explicitly says -debian/-fedora (user picked it on
-                    # download); otherwise read /etc/os-release to decide.
-                    # Debian-family glibc is older than Fedora's, so the wrong
-                    # variant will fail to start with cryptic ld errors.
-                    url = ""
-                    if install_type == "appimage":
-                        appimg = os.environ.get("APPIMAGE", "") or ""
-                        base = os.path.basename(appimg).lower()
-                        if "debian" in base:
-                            variant = "debian"
-                        elif "fedora" in base:
-                            variant = "fedora"
-                        else:
-                            variant = "fedora"
-                            try:
-                                with open("/etc/os-release") as f:
-                                    osr = f.read().lower()
-                                if ("id=debian" in osr or "id=ubuntu" in osr
-                                        or "id=linuxmint" in osr
-                                        or "id_like=debian" in osr
-                                        or "id_like=ubuntu" in osr):
-                                    variant = "debian"
-                            except OSError:
-                                pass
-                        for asset in data.get("assets") or []:
-                            name = (asset.get("name") or "").lower()
-                            if name.endswith(".appimage") and variant in name:
-                                url = asset.get("browser_download_url") or ""
-                                break
-                        if not url:
-                            for asset in data.get("assets") or []:
-                                name = (asset.get("name") or "").lower()
-                                if name.endswith(".appimage"):
-                                    url = asset.get("browser_download_url") or ""
-                                    break
-                    def _apply():
-                        self._update_message = msg
-                        # Pick the actionable URL: source if available, else
-                        # the full AppImage. The popup/button trigger logic
-                        # only checks _update_url, so this stays transparent.
-                        self._update_url = source_url or url
-                        self._update_sha_url = source_sha_url
-                        self._update_kind = "source" if source_url else "appimage"
-                        self._update_version = ver
-                        self._update_install_type = install_type
-                        # Say it in the sidebar so the update is visible
-                        # without opening anything. Works for every install
-                        # type, source and AUR users see "there is something"
-                        # even though the button will not install it for them.
-                        if hasattr(self, "_settings_btn"):
-                            self._settings_btn.set_text(
-                                self.T("ui_update_short", ver=ver))
-                        # Proactive popup — only for AppImage installs where
-                        # we can actually do something about it from the GUI.
-                        # Trigger on _update_url so source-only releases (no
-                        # AppImage asset) still pop up; without this check the
-                        # popup never fired for tiny patches.
-                        if install_type == "appimage" and self._update_url:
-                            self._show_update_popup()
-                    self.after(0, _apply)
-            except Exception:
-                pass  # offline / rate-limited / dns — silent
-
-        threading.Thread(target=_run, daemon=True).start()
+    def _on_update_available(self, topic, info):
+        ver = info["version"]
+        install_type = info["install_type"]
+        # Per-distro instruction: the install_type drives which follow-up
+        # command the user needs to run.
+        hint = self.T(f"settings_update_hint_{install_type}")
+        self._update_message = (self.T("settings_update_available", ver=ver)
+                                + "\n" + hint)
+        # The actionable URL: source if available, else the full AppImage.
+        # The popup/button trigger logic only checks _update_url, so this
+        # stays transparent.
+        self._update_url = info["url"]
+        self._update_sha_url = info["sha_url"]
+        self._update_kind = info["kind"]
+        self._update_version = ver
+        self._update_install_type = install_type
+        # Say it in the sidebar so the update is visible without opening
+        # anything. Works for every install type, source and AUR users see
+        # "there is something" even though the button will not install it
+        # for them.
+        if hasattr(self, "_settings_btn"):
+            self._settings_btn.set_text(self.T("ui_update_short", ver=ver))
+        # Proactive popup, only for AppImage installs where we can actually
+        # do something about it from the GUI. Trigger on _update_url so
+        # source-only releases (no AppImage asset) still pop up; without
+        # this check the popup never fired for tiny patches.
+        if install_type == "appimage" and self._update_url:
+            self._show_update_popup()
 
     def _show_update_popup(self):
         """Open the proactive update popup. Guarded against double-spawn so
@@ -2227,163 +1809,34 @@ class App(ctk.CTk):
                 pass
         self._update_popup = UpdateAvailableDialog(self)
 
+    _UPDATE_ERRORS = {"no_asset": "settings_update_no_asset",
+                      "no_checksum": "settings_update_no_checksum",
+                      "bad_checksum": "settings_update_bad_checksum"}
+
     def run_update_download(self, on_progress, on_installing, on_done, on_error):
-        """Threaded download + install of an update. Dispatches on
-        self._update_kind:
-          - "source": download source-X.Y.Z.tar.gz, verify SHA256 against the
-            .sha256 sidecar from the release (mandatory), extract to
-            ~/.local/share/basecamp-linux/source-overlay/. AppImage binary
-            stays untouched. Tiny (~200 KB), works on both Debian + Fedora.
-          - "appimage": full AppImage swap via atomic rename (~250 MB).
-        UI-agnostic — callbacks fire on the Tk thread."""
-        import threading, urllib.request, hashlib
-        url     = getattr(self, "_update_url", "")
-        sha_url = getattr(self, "_update_sha_url", "")
-        kind    = getattr(self, "_update_kind", "appimage")
-        appimg  = os.environ.get("APPIMAGE", "")
-        if not url or not appimg or not os.path.isfile(appimg):
-            on_error(self.T("settings_update_no_asset"))
-            return
-        if kind == "source" and not sha_url:
-            # Belt-and-suspenders — _check_for_update already drops source_url
-            # in this case, but guard here too.
-            on_error(self.T("settings_update_no_checksum"))
-            return
+        """Download and install the update the service found (see
+        core.updates.UpdateService.download_and_install). The callbacks fire
+        on the Tk thread; on_error gets the translated text."""
+        from core.updates import UpdateInfo
+        info = UpdateInfo(
+            version=getattr(self, "_update_version", ""),
+            install_type=getattr(self, "_update_install_type", ""),
+            url=getattr(self, "_update_url", ""),
+            sha_url=getattr(self, "_update_sha_url", ""),
+            kind=getattr(self, "_update_kind", "") or "appimage")
 
-        def _install_source(tarball_path):
-            """Extract source tarball to overlay dir. Stages into a sibling
-            directory then renames so a half-extracted tree never replaces
-            the running one (which the bootstrap hook would happily load)."""
-            import tarfile, shutil
-            overlay_root = os.path.join(_real_home, ".local", "share",
-                                        "basecamp-linux")
-            os.makedirs(overlay_root, exist_ok=True)
-            staging  = os.path.join(overlay_root, "source-overlay.new")
-            final    = os.path.join(overlay_root, "source-overlay")
-            if os.path.exists(staging):
-                shutil.rmtree(staging)
-            os.makedirs(staging)
-            with tarfile.open(tarball_path, "r:gz") as tf:
-                # Strip the top-level 'source-overlay/' dir so members land
-                # directly in our staging path.
-                def _members():
-                    for m in tf.getmembers():
-                        parts = m.name.split("/", 1)
-                        if len(parts) < 2 or parts[0] != "source-overlay":
-                            continue
-                        m.name = parts[1]
-                        if not m.name:
-                            continue
-                        yield m
-                # filter="data" (Python 3.12+) rejects path traversal, absolute
-                # paths, symlinks pointing outside dest, device nodes, and
-                # strips setuid/setgid bits. Fall back to manual checks on
-                # older Python; the source tarball is produced by us so the
-                # added value of data_filter is defense-in-depth against a
-                # compromised release pipeline.
-                try:
-                    tf.extractall(staging, members=_members(), filter="data")
-                except TypeError:
-                    for m in _members():
-                        if (m.name.startswith("/")
-                                or ".." in m.name.split("/")
-                                or m.issym() or m.islnk()
-                                or m.isdev() or m.ischr() or m.isfifo()):
-                            continue
-                        tf.extract(m, staging)
-            if not os.path.isfile(os.path.join(staging, "gui.py")):
-                raise RuntimeError("source tarball missing gui.py")
-            if os.path.exists(final):
-                shutil.rmtree(final)
-            os.replace(staging, final)
+        def failed(code, message):
+            key = self._UPDATE_ERRORS.get(code)
+            on_error(self.T(key) if key else message)
 
-        def _fetch_text(u, max_bytes=256):
-            """Fetch a tiny file (sha256 sidecar). Bounded to avoid surprises
-            if the URL serves something unexpectedly large."""
-            req = urllib.request.Request(
-                u, headers={"User-Agent": f"BaseCamp-Linux/{APP_VERSION}"})
-            with urllib.request.urlopen(req, timeout=10) as r:
-                return r.read(max_bytes).decode("utf-8", "replace")
-
-        def _run():
-            tmp_path = (appimg + ".new") if kind == "appimage" \
-                       else os.path.join(_real_home, ".cache",
-                                         "basecamp-source-update.tar.gz")
-            try:
-                expected_sha = ""
-                if kind == "source":
-                    os.makedirs(os.path.dirname(tmp_path), exist_ok=True)
-                    # Fetch checksum sidecar FIRST. If this fails we abort
-                    # before even touching the tarball.
-                    raw = _fetch_text(sha_url).strip().split()
-                    if raw:
-                        expected_sha = raw[0].lower()
-                    if len(expected_sha) != 64 or not all(
-                            c in "0123456789abcdef" for c in expected_sha):
-                        self.after(0, on_error,
-                                   self.T("settings_update_bad_checksum"))
-                        return
-                req = urllib.request.Request(
-                    url, headers={"User-Agent": f"BaseCamp-Linux/{APP_VERSION}"})
-                hasher = hashlib.sha256()
-                with urllib.request.urlopen(req, timeout=15) as resp:
-                    total = int(resp.headers.get("Content-Length") or 0)
-                    done, last = 0, -1
-                    with open(tmp_path, "wb") as out:
-                        while True:
-                            chunk = resp.read(65536)
-                            if not chunk:
-                                break
-                            out.write(chunk)
-                            hasher.update(chunk)
-                            done += len(chunk)
-                            if total > 0:
-                                pct = int(done * 100 / total)
-                                if pct != last:
-                                    last = pct
-                                    self.after(0, on_progress, pct)
-                if kind == "source":
-                    actual_sha = hasher.hexdigest().lower()
-                    if actual_sha != expected_sha:
-                        try:
-                            os.remove(tmp_path)
-                        except OSError:
-                            pass
-                        self.after(0, on_error,
-                                   self.T("settings_update_bad_checksum"))
-                        return
-                self.after(0, on_installing)
-                if kind == "source":
-                    _install_source(tmp_path)
-                    try:
-                        os.remove(tmp_path)
-                    except OSError:
-                        pass
-                else:
-                    os.chmod(tmp_path, 0o755)
-                    os.replace(tmp_path, appimg)
-                self.after(0, on_done)
-            except Exception as e:
-                try:
-                    if os.path.exists(tmp_path):
-                        os.remove(tmp_path)
-                except Exception:
-                    pass
-                self.after(0, on_error, str(e)[:80])
-
-        threading.Thread(target=_run, daemon=True).start()
+        self._updates.download_and_install(
+            info, on_progress=on_progress, on_installing=on_installing,
+            on_done=on_done, on_error=failed)
 
     def restart_after_update(self):
-        """Re-exec the (now updated) AppImage. Kills the tray helper first —
+        """Re-exec the (now updated) AppImage. Kills the tray helper first:
         execv preserves the PID, so the helper would otherwise sit on the new
-        process and a second tray would spawn on next startup.
-
-        The new instance starts from a sanitised environment, the way the
-        desktop launcher would start it. Handing it our own environment made
-        the AppImage runtime stack a second mount point onto LD_LIBRARY_PATH
-        and XDG_DATA_DIRS and record the pair as the "original" value, so from
-        then on every launched program inherited the mount of an instance that
-        no longer existed (#49)."""
+        process and a second tray would spawn on next startup."""
         tray = getattr(self, "_tray_proc", None)
         if tray is not None and tray.poll() is None:
             try:
@@ -2394,56 +1847,27 @@ class App(ctk.CTk):
                     tray.kill()
                 except Exception:
                     pass
-        appimg = os.environ.get("APPIMAGE", "")
-        from shared.macros import clean_child_env
-        env = clean_child_env()
-        try:
-            if appimg and os.path.isfile(appimg):
-                os.execve(appimg, [appimg], env)
-        except Exception:
-            pass
-        try:
-            subprocess.Popen([appimg] if appimg else [sys.executable], env=env)
-        except Exception:
-            pass
+        self._updates.restart()
         self.destroy()
 
-    _PLUGIN_CHECK_MS = 12 * 3600 * 1000
-
-    def _check_plugin_updates(self):
-        """Ask the plugin index, off the interface thread, and again later."""
-        import threading
-        from devices.plugins.panel import fetch_plugin_index
-
-        def run():
-            try:
-                plugins = fetch_plugin_index()
-            except Exception:
-                return          # no network now; the next round asks again
-            try:
-                self.after(0, lambda: self._on_plugins_fetched(plugins, announce=True))
-            except (tk.TclError, RuntimeError):
-                pass
-        threading.Thread(target=run, daemon=True).start()
-        try:
-            self.after(self._PLUGIN_CHECK_MS, self._check_plugin_updates)
-        except tk.TclError:
-            pass
-
     def _on_plugins_fetched(self, plugins, announce=False):
-        """The published plugins have been fetched: count the installed ones
-        with a newer version and show it on the Plugins entry in the sidebar.
-        With `announce`, say so once as well, for updates not mentioned yet."""
-        from devices.plugins.panel import updates_for
-        count = len(updates_for(plugins, self._plugin_manager._manifests))
+        """The published plugins have been fetched: the plugin service counts
+        the installed ones with a newer version and answers with
+        plugins.updates (see _on_plugins_updates)."""
+        self._plugins.note_index(plugins, announce=announce)
+
+    def _on_plugins_updates(self, topic, info):
+        """Show the count on the Plugins entry in the sidebar and, when the
+        service says it is news, say so once (and only to someone who can see
+        it, see _announce_plugin_updates). Delivered on the scheduler thread,
+        which is the Tk main thread."""
+        count = info["count"]
         self._plugin_update_count = count
         item = getattr(self, "_nav_items", {}).get("plugins")
         if item is not None:
             item.set_badge(count)
-        if announce and count > self._plugin_updates_told:
+        if info["announce"]:
             self._announce_plugin_updates(count)
-        self._plugin_updates_told = count if announce else min(
-            self._plugin_updates_told, count)
 
     def _announce_plugin_updates(self, count):
         """Say that plugins have updates, with a button to the Plugins screen.
@@ -2570,11 +1994,16 @@ class App(ctk.CTk):
         if tray is not None and tray.poll() is None:
             tray.terminate()
         # Stop control IPC server
-        if hasattr(self, "_control_server"):
-            self._control_server.stop()
+        control = getattr(self, "_control", None)
+        if control is not None:
+            control.stop_server()
         # Shutdown plugins
         if hasattr(self, "_plugin_manager"):
             self._plugin_manager.shutdown()
+        # Device services stop their workers and release the hardware.
+        core = getattr(self, "core", None)
+        if core is not None:
+            core.stop()
         # Give HID threads time to close their devices before tearing down
         import time
         time.sleep(0.4)
@@ -2640,21 +2069,19 @@ Categories=Utility;
     print(f"Installed: {desktop_path}")
     print(f"Installed: {icon_dst}")
 
-    # Update autostart .desktop if it exists
+    # Update the autostart .desktop if it exists (the AppImage may have moved).
+    # It starts the web interface (the plain start, which falls back to the
+    # classic one where the web window cannot open), unless --classic is given
+    # here or the entry already started the classic one.
     if os.path.exists(AUTOSTART_FILE):
-        with open(AUTOSTART_FILE, "w") as f:
-            f.write(
-                "[Desktop Entry]\n"
-                "Type=Application\n"
-                "Name=BaseCamp Linux\n"
-                "Comment=Mountain Everest Max display control\n"
-                f'Exec="{appimage_path}" --minimized\n'
-                "Icon=basecamp-linux\n"
-                "Hidden=false\n"
-                "NoDisplay=false\n"
-                "X-GNOME-Autostart-enabled=true\n"
-            )
-        print(f"Updated:   {AUTOSTART_FILE}")
+        try:
+            with open(AUTOSTART_FILE) as f:
+                was_classic = "--classic" in f.read()
+        except OSError:
+            was_classic = False
+        ui = "classic" if (was_classic or "--classic" in sys.argv) else "web"
+        save_autostart_enabled(True, ui=ui)
+        print(f"Updated:   {AUTOSTART_FILE} ({ui} interface)")
 
     # Refresh desktop cache so the launcher picks up the new .desktop immediately.
     # A glib tool, so it gets the sanitised environment like every other system
@@ -2692,9 +2119,49 @@ def run():
         except ValueError as e:
             print(json.dumps({"ok": False, "error": f"invalid JSON: {e}"}))
             sys.exit(2)
-        reply = send_command(obj)
+        # An upload to an Everest Max key takes up to a minute, and a command
+        # for the Everest Max waits for Monitor Mode to let go of it first.
+        cmd = str(obj.get("cmd", "")).lower() if isinstance(obj, dict) else ""
+        wait = 200 if cmd in ("image", "run") else 40
+        reply = send_command(obj, timeout=wait)
         print(json.dumps(reply))
         sys.exit(0 if reply.get("ok") else 1)
+    # The web interface (ui_web/) is the default since 4.0: the same core in a
+    # pywebview window. It checks for a running instance itself. When it
+    # cannot open here (no pywebview, or no web view for it) this file's
+    # classic interface starts instead, with one line on the console and a
+    # hint in its window. That is the case of an AppImage from before 4.0 that
+    # the in-app update gave this source: the update brings Python files, not
+    # pywebview. --classic skips the question; --web insists on the web
+    # interface and says why it cannot start rather than falling back.
+    global _WEB_FALLBACK
+    if "--classic" in sys.argv:
+        if "--demo" in sys.argv:
+            print("[BaseCamp] --demo is the new interface's; the classic one has "
+                  "no demo mode.", file=sys.stderr, flush=True)
+            sys.exit(2)
+        # Chosen, so the autostart entry this interface writes starts it too.
+        import shared.config as _config
+        _config.AUTOSTART_UI = "classic"
+    else:
+        strict = "--web" in sys.argv
+        try:
+            from ui_web import launch
+            backend, why = launch.ready()
+        except Exception as e:       # a source tree without a working ui_web/
+            launch = None
+            backend, why = None, "ui_web does not load: %s: %s" % (type(e).__name__, e)
+        if backend or strict:
+            from ui_web.app import main as web_main
+            sys.exit(web_main([a for a in sys.argv[1:] if a != "--web"]))
+        print(launch.fallback_line(why) if launch else
+              "[BaseCamp] The new interface cannot start (%s); starting the classic one." % why,
+              file=sys.stderr, flush=True)
+        if "--demo" in sys.argv:
+            print("[BaseCamp] --demo is the new interface's; the classic one has "
+                  "no demo mode.", file=sys.stderr, flush=True)
+            sys.exit(2)
+        _WEB_FALLBACK = why
     psutil.cpu_percent()
     start_minimized = "--minimized" in sys.argv
     # One instance per session. A second one used to start fully and then fight

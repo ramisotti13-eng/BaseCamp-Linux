@@ -553,108 +553,21 @@ def pick_color(parent, initial_rgb=(255, 255, 255), title="Pick Color", show_bri
 
 
 # ── Keyboard layout for CustomRGBWindow ───────────────────────────────────────
+#
+# The Everest Max's key and ring geometry is data of the core now
+# (core/devices/everest_max/layout.py), so a web interface draws the same
+# keyboard. The names below are the ones gui.py and this module always used.
 
-def _build_kb_layout():
-    """Return list of (label, led_idx_or_None, x, y, w, h) for all keys."""
-    SC = 0.82
-    KH = int(30 * SC)
-    RS = int(32 * SC)
-    IW = int(510 * SC)
-    FW = int(616 * SC)
-    OX = 14 + int(26 * SC)
-    OY = 14 + int(12 * SC)
-    NP_X0 = 14 + int(642 * SC) + 32
-    NPS   = int(33 * SC)
-    NPG   = int(7 * SC)
-    MS  = 25
-    MG  = 4
-    MX  = OX + IW + 8
-    NPTAL = KH + RS
-
-    def sbet(specs, inner_w, y):
-        total = sum(int(w * SC) for _, _, w in specs)
-        gap   = (inner_w - total) / max(1, len(specs) - 1)
-        res, x = [], OX
-        for lbl, idx, cw in specs:
-            pw = int(cw * SC)
-            res.append((lbl, idx, int(x), y, pw, KH))
-            x += pw + gap
-        return res
-
-    L = []
-    L += sbet([
-        ('ESC',0,30),('F1',9,30),('F2',18,30),('F3',27,30),
-        ('F4',36,30),('F5',45,30),('F6',54,30),('F7',63,30),
-        ('F8',72,30),('F9',81,30),('F10',90,30),('F11',99,30),
-        ('F12',108,30),('PrtSc',117,30),('ScrLk',114,30),('Pause',123,30),
-    ], FW, OY)
-
-    y1 = OY + RS
-    L += sbet([
-        ('`',1,30),('1',10,30),('2',19,30),('3',28,30),('4',37,30),
-        ('5',46,30),('6',55,30),('7',64,30),('8',73,30),('9',82,30),
-        ('0',91,30),('-',100,30),('=',109,30),('⌫',87,68),
-    ], IW, y1)
-    L += [('Ins',96,MX+MS+MG,y1,MS,KH), ('Del',88,MX+2*(MS+MG),y1,MS,KH)]
-
-    y2 = OY + 2 * RS
-    L += sbet([
-        ('Tab',2,50),('Q',11,30),('W',20,30),('E',29,30),('R',38,30),
-        ('T',47,30),('Y',56,30),('U',65,30),('I',74,30),('O',83,30),
-        ('P',92,30),('[',101,30),(']',110,30),('\\',119,50),
-    ], IW, y2)
-    L += [('Home',105,MX+MS+MG,y2,MS,KH), ('PgUp',115,MX+2*(MS+MG),y2,MS,KH)]
-
-    y3 = OY + 3 * RS
-    L += sbet([
-        ('Caps',3,60),('A',12,30),('S',21,30),('D',30,30),('F',39,30),
-        ('G',48,30),('H',57,30),('J',66,30),('K',75,30),('L',84,30),
-        (';',93,30),("'",102,30),('↵',120,73),
-    ], IW, y3)
-    L += [('End',97,MX+MS+MG,y3,MS,KH), ('PgDn',106,MX+2*(MS+MG),y3,MS,KH)]
-
-    y4 = OY + 4 * RS
-    L += sbet([
-        ('⇧',4,80),('Z',22,30),('X',31,30),('C',40,30),('V',49,30),
-        ('B',58,30),('N',67,30),('M',76,30),(',',85,30),('.',94,30),
-        ('/',103,30),('⇧',121,88),
-    ], IW, y4)
-    L.append(('↑', 124, MX + MS + MG, y4, MS, KH))
-
-    y5 = OY + 5 * RS
-    L += sbet([
-        ('Ctrl',5,42),('⊞',14,42),('Alt',23,42),(' ',41,210),
-        ('Alt',68,42),('⊞',77,42),('FN',86,42),('≡',None,42),('Ctrl',95,42),
-    ], IW, y5)
-    L += [
-        ('←',104,MX,y5,MS,KH),
-        ('↓',113,MX+MS+MG,y5,MS,KH),
-        ('→',122,MX+2*(MS+MG),y5,MS,KH),
-    ]
-
-    npx = NP_X0 + int(5 * SC)
-    npy = OY
-    for i, (lbl, idx) in enumerate([('NumLk',6),('/',24),('*',16),('-',15)]):
-        L.append((lbl, idx, npx + i*(NPS+NPG), npy, NPS, KH))
-    for i, (lbl, idx) in enumerate([('7',61),('8',69),('9',70)]):
-        L.append((lbl, idx, npx + i*(NPS+NPG), npy+RS, NPS, KH))
-    L.append(('+', 7, npx + 3*(NPS+NPG), npy+RS, NPS, NPTAL))
-    for i, (lbl, idx) in enumerate([('4',51),('5',52),('6',60)]):
-        L.append((lbl, idx, npx + i*(NPS+NPG), npy+2*RS, NPS, KH))
-    for i, (lbl, idx) in enumerate([('1',34),('2',42),('3',43)]):
-        L.append((lbl, idx, npx + i*(NPS+NPG), npy+3*RS, NPS, KH))
-    L.append(('↵', 33, npx + 3*(NPS+NPG), npy+3*RS, NPS, NPTAL))
-    L.append(('0', 78, npx, npy+4*RS, 2*NPS+NPG, KH))
-    L.append(('.', 79, npx + 2*NPS+2*NPG, npy+4*RS, NPS, KH))
-
-    return L
-
-
-_KB_LAYOUT   = _build_kb_layout()
-_KB_CANVAS_W = 14 + int(642 * 0.82) + 32 + int(166 * 0.82) + 14
-_KB_CANVAS_H = (14 + int(12 * 0.82)) + 5 * int(32 * 0.82) + int(30 * 0.82) + 18 + 24
-_SIDE_SZ     = 9
-_SIDE_OFFSET = 12
+from core.devices.everest_max.layout import (   # noqa: E402
+    build_layout as _build_kb_layout,
+    LAYOUT as _KB_LAYOUT,
+    CANVAS_W as _KB_CANVAS_W,
+    CANVAS_H as _KB_CANVAS_H,
+    SIDE_LED_SIZE as _SIDE_SZ,
+    SIDE_OFFSET as _SIDE_OFFSET,
+    QWERTZ_MAP as _QWERTZ_MAP,
+    SIDE_ZONE_INDICES as _SIDE_ZONE_INDICES,
+)
 
 
 def _build_kb60_layout():
@@ -728,25 +641,6 @@ _QUICK_COLORS = [
     ("#ffffff", (255, 255, 255)), ("#000000", (0, 0, 0)),
 ]
 
-# QWERTY → QWERTZ label substitution (German keyboard layout)
-_QWERTZ_MAP = {
-    'Y': 'Z', 'Z': 'Y',
-    '`': '^', '-': 'ß', '=': '´',
-    '[': 'ü', ']': '+', '\\': '#',
-    ';': 'ö', "'": 'ä', '/': '-',
-}
-
-_SIDE_ZONE_INDICES = [
-    [13,14,15,7,6,5,4,3,2,1,0],
-    [9,8,10,11],
-    [20,21,22,23,24,25,26,27,28,29,30,12],
-    [16,17,18,19],
-    [31,44,43,42],
-    [41,40,39],
-    [35,36,37,38],
-    [32,33,34],
-]
-
 
 _RGB_RAIL_W = 236   # colour column beside the keyboard
 
@@ -814,6 +708,34 @@ class CustomRGBWindow(ctk.CTkFrame):
 
         self._build_ui()
         self.after(50, self._draw_keys)
+
+        # The Everest Max's editor (no apply_cmd of its own) sends through
+        # the Everest Max service, which pauses Monitor Mode for it; the
+        # Everest 60 passes its own controller as apply_cmd and keeps the
+        # command-line path below.
+        self._core_jobs = {}
+        svc = self._service()
+        if svc is not None:
+            from shared.ui.core_bridge import subscribe_tk
+            subscribe_tk(app.core, "everest_max.rgb_applied", self,
+                         self._on_rgb_applied)
+
+    def _service(self):
+        if self._apply_cmd:
+            return None
+        core = getattr(self._app, "core", None)
+        return core.service("everest_max") if core is not None else None
+
+    def _on_rgb_applied(self, _topic, p):
+        what = self._core_jobs.pop(p.get("job"), None)
+        if what is None:
+            return
+        ok = p.get("ok")
+        done = "custom_rgb_persisted" if what == "persist" else "custom_rgb_applied"
+        self._status.configure(
+            text=self._T(done) if ok
+            else self._T("custom_rgb_error", err=(p.get("error") or "")[:40]),
+            text_color=GRN if ok else RED)
 
     def _T(self, key, **kw):
         s = self._lang.get(key, key) if self._lang else key
@@ -1340,6 +1262,12 @@ class CustomRGBWindow(ctk.CTkFrame):
 
     def _apply_brightness_live(self):
         self._bri_debounce_id = None
+        svc = self._service()
+        if svc is not None:
+            # Never pauses Monitor Mode; skipped while it holds the keyboard.
+            svc.preview_per_key(self._leds, self._payload_side(),
+                                self._current_bri())
+            return
         payload = self._build_payload()
         def run():
             try:
@@ -1349,12 +1277,14 @@ class CustomRGBWindow(ctk.CTkFrame):
                 pass
         threading.Thread(target=run, daemon=True).start()
 
+    def _payload_side(self):
+        return list(self._side_leds) if self._has_side else None
+
     def _build_payload(self):
-        import json as _j
-        d = {"leds": [list(c) for c in self._leds], "brightness": self._current_bri()}
-        if self._has_side:
-            d["side"] = [list(c) for c in self._side_leds]
-        return _j.dumps(d)
+        """The controllers' per-key JSON (both keyboards take the same)."""
+        from core.devices.everest_max.protocol import per_key_payload
+        return per_key_payload(self._leds, self._payload_side(),
+                               self._current_bri())
 
     def _cmd(self, *args):
         if self._apply_cmd:
@@ -1364,6 +1294,12 @@ class CustomRGBWindow(ctk.CTkFrame):
     def _apply(self):
         self._status.configure(text=self._T("custom_rgb_sending"), text_color=YLW)
         self.update_idletasks()
+        svc = self._service()
+        if svc is not None:
+            job = svc.apply_per_key(self._leds, self._payload_side(),
+                                    self._current_bri())
+            self._core_jobs[job] = "apply"
+            return
         payload = self._build_payload()
         was_running = self._app._stop_cpu_proc()
         def run():
@@ -1383,6 +1319,12 @@ class CustomRGBWindow(ctk.CTkFrame):
     def _persist(self):
         self._status.configure(text=self._T("custom_rgb_persisting"), text_color=YLW)
         self.update_idletasks()
+        svc = self._service()
+        if svc is not None:
+            job = svc.apply_per_key(self._leds, self._payload_side(),
+                                    self._current_bri(), persist=True)
+            self._core_jobs[job] = "persist"
+            return
         payload = self._build_payload()
         was_running = self._app._stop_cpu_proc()
         def run():
@@ -1474,8 +1416,26 @@ class CustomRGBWindow(ctk.CTkFrame):
 
 # ── Library Picker Dialog ──────────────────────────────────────────────────────
 
+def library_groups(lib_dir):
+    """[(pack, [file name relative to lib_dir])]: the library's own
+    pictures first (pack None), then each subfolder's, a picture pack such
+    as the Mountain icon pack (core/mountain_assets.py). Empty groups are
+    left out."""
+    from core.devices.displaypad.library import entries
+    groups = []
+    for e in entries(lib_dir):
+        if not groups or groups[-1][0] != e["pack"]:
+            groups.append((e["pack"], []))
+        groups[-1][1].append(os.path.relpath(e["path"], lib_dir))
+    return groups
+
+
 class LibraryPickerDialog(ctk.CTkToplevel):
-    """Show icon library thumbnails + Browse button. result=(src_path, gif_frame, thumb_fname)."""
+    """Show icon library thumbnails + Browse button. result=(src_path, gif_frame, thumb_fname).
+
+    A subfolder of the library is a picture pack: its pictures follow the
+    library's own under the folder's name, and thumb_fname is then
+    "<pack>/<file>", relative to the library like any other."""
 
     def __init__(self, parent, app, lib_dir=None, thumb_w=64, thumb_h=64, cols=4,
                  skip_gif_picker=False):
@@ -1527,17 +1487,18 @@ class LibraryPickerDialog(ctk.CTkToplevel):
         self._load_grid(scroll)
 
     def _load_grid(self, container):
-        try:
-            files = sorted(f for f in os.listdir(self._lib_dir)
-                          if f.lower().endswith((".png", ".gif", ".jpg", ".jpeg", ".bmp")))
-        except FileNotFoundError:
-            files = []
-
-        if not files:
+        groups = library_groups(self._lib_dir)
+        if not groups:
             ctk.CTkLabel(container, text=self._app.T("multi_upload_empty"),
                          font=(_ui.FONT_FAMILY, 11), text_color=FG2).pack(pady=20)
             return
+        for pack, files in groups:
+            if pack:
+                ctk.CTkLabel(container, text=pack, font=(_ui.FONT_FAMILY, 10, "bold"),
+                             text_color=FG2).pack(anchor="w", padx=4, pady=(8, 2))
+            self._load_group(container, files)
 
+    def _load_group(self, container, files):
         row_frame = None
         for i, fname in enumerate(files):
             if i % self._cols == 0:
@@ -1659,7 +1620,12 @@ def pick_dp_fullscreen_image(parent, app):
 # ── Multi Upload Dialog ────────────────────────────────────────────────────────
 
 class MultiUploadDialog(ctk.CTkToplevel):
-    """Upload images to D1–D4 in one go, with library thumbnails per slot."""
+    """Upload images to D1–D4 in one go, with library thumbnails per slot.
+
+    The uploads are jobs of the Everest Max service (one pause of Monitor
+    Mode for all of them, an unchanged key skipped); this dialog picks the
+    pictures and shows the jobs' progress.
+    """
 
     def __init__(self, app):
         super().__init__(app)
@@ -1675,9 +1641,12 @@ class MultiUploadDialog(ctk.CTkToplevel):
         self._status_lbls = [None] * 4
         self._status_bars = [None] * 4
         self._upload_btn  = None
+        self._jobs        = {}     # service job id -> slot
 
         self._load_initial_thumbs()
         self._build_ui()
+        from shared.ui.core_bridge import subscribe_tk
+        subscribe_tk(app.core, "everest_max.*", self, self._on_core_event)
 
         self.update_idletasks()
         pw = app.winfo_rootx() + app.winfo_width() // 2
@@ -1794,72 +1763,43 @@ class MultiUploadDialog(ctk.CTkToplevel):
             self._pick_slot(idx)
         if not self._selections[idx]:
             return
-        self._upload_btn.configure(state="disabled")
-        was_running = self._app._stop_cpu_proc()
-        items = [(idx, *self._selections[idx])]
-        threading.Thread(
-            target=self._upload_loop, args=(items, was_running), daemon=True
-        ).start()
+        self._submit([(idx, *self._selections[idx])])
 
     def _start_upload(self):
         items = [(i, *self._selections[i]) for i in range(4)
                  if self._selections[i] is not None]
         if not items:
             return
+        self._submit(items)
+
+    def _submit(self, items):
+        """One service job per key, queued back to back: Monitor Mode lets
+        go once for all of them, a key that shows its picture already is
+        skipped."""
         self._upload_btn.configure(state="disabled")
-        was_running = self._app._stop_cpu_proc()
-        threading.Thread(
-            target=self._upload_loop, args=(items, was_running), daemon=True
-        ).start()
-
-    def _upload_loop(self, items, was_running):
-        stored = _load_icon_last()
-        first  = True
+        svc = self._app.core.service("everest_max")
         for idx, src, gif_frame, thumb_fname in items:
-            resolved = thumb_fname or _compute_lib_hash(src, gif_frame)
-            if resolved and resolved == stored.get(str(idx)):
-                self.after(0, lambda i=idx: self._set_status(i, "skipped"))
-                continue
+            job = svc.upload_dbutton(idx, src, gif_frame or 0, thumb_fname)
+            self._jobs[job] = idx
 
-            self.after(0, lambda i=idx: self._set_status(i, "uploading"))
-            time.sleep(2.5 if (first and was_running) else 0.5)
-            first = False
-
-            cmd = self._app._cmd("upload", str(idx), src)
-            if gif_frame:
-                cmd = self._app._cmd("upload", str(idx), src, "--frame", str(gif_frame))
-
-            bar  = self._status_bars[idx]
-            # Merge stderr into stdout to avoid full-buffer deadlock during wait().
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                                    stderr=subprocess.STDOUT, text=True)
-            last_non_progress = ""
-            for line in proc.stdout:
-                if line.startswith("PROGRESS:"):
-                    try:
-                        pct = int(line.strip()[9:])
-                        self.after(0, lambda v=pct, b=bar: b.set(v / 100.0))
-                    except ValueError:
-                        pass
-                else:
-                    stripped = line.rstrip()
-                    if stripped:
-                        last_non_progress = stripped
-            proc.wait()
-            ok       = proc.returncode == 0
-            err_hint = last_non_progress
-
-            if ok:
-                new_fname = thumb_fname or _save_to_library(src, gif_frame)
-                if new_fname:
-                    _save_icon_last(idx, new_fname)
-
-            self.after(0, lambda i=idx, s=ok, e=err_hint: self._set_status(i, s, e))
-            self.after(0, lambda b=bar: b.set(0))
-
-        if was_running:
-            self.after(0, self._app._start_cpu_auto)
-        self.after(0, lambda: self._upload_btn.configure(state="normal"))
+    def _on_core_event(self, topic, p):
+        idx = self._jobs.get(p.get("id"))
+        if idx is None:
+            return
+        if topic.endswith(".job_progress"):
+            if p.get("stage") == "uploading":
+                self._set_status(idx, "uploading")
+            elif p.get("pct") is not None:
+                self._status_bars[idx].set(p["pct"] / 100.0)
+        elif topic.endswith(".job_done"):
+            del self._jobs[p["id"]]
+            if p.get("skipped"):
+                self._set_status(idx, "skipped")
+            else:
+                self._set_status(idx, bool(p.get("ok")), p.get("error") or "")
+                self._status_bars[idx].set(0)
+            if not self._jobs:
+                self._upload_btn.configure(state="normal")
 
     def _set_status(self, idx, state, err=""):
         lbl = self._status_lbls[idx]

@@ -1,17 +1,21 @@
-"""Mountain Everest 60 panel for BaseCamp Linux."""
-import os
-import subprocess
-import threading
+"""Mountain Everest 60 panel for BaseCamp Linux.
+
+A client of Everest60Service (core/devices/everest60/service.py): the
+service owns the lighting settings, the replay when the board appears and
+the controller calls; this screen fills its widgets from the service, sends
+what the person chose, and shows the results the service publishes.
+"""
 import tkinter as tk
 import customtkinter as ctk
 
 import shared.ui as UI
+from shared.ui.core_bridge import subscribe_tk
 from shared.ui_helpers import (CardColumns, BG, BG2, BG3, FG, FG2, BLUE, GRN, RED, YLW, BORDER,
                                cap_scroll_speed)
-from shared.config import (CONFIG_DIR, load_rgb_config, save_rgb_config,
-                            _load_per_key_60, _save_per_key_60,
-                            _load_presets_60, _save_presets_60)
-from devices.everest60.controller import detect_model, PID_ANSI
+from shared.config import (_load_per_key_60, _save_per_key_60,
+                           _load_presets_60, _save_presets_60)
+from core.devices.everest60 import protocol as P
+from core.devices.everest60.protocol import PID_ANSI
 
 
 def _hex(r, g, b):
@@ -31,12 +35,20 @@ class Everest60Panel(ctk.CTkFrame):
         self._sections  = []
         self._i18n      = []   # (widget, attr, key)
 
-        pid, model = detect_model()
-        self._model_name = model or "Everest 60"
-        if pid:
-            self.PID = pid
+        self._svc = app.core.service("everest60")
+        # The application builds the controller's command line; the service
+        # runs it (one call at a time, off this thread).
+        self._svc.use_command(lambda *a: app._cmd_for_device("everest60", *a))
+        found = self._svc.detect()
+        self._model_name = found["model"]
+        if found["pid"]:
+            self.PID = found["pid"]
+        # The device registry tells the service whether the board is here,
+        # also before this screen existed; the banner follows the service.
+        self._connected = bool(self._svc.present)
 
         self._build_ui()
+        subscribe_tk(app.core, "everest60.*", self, self._on_core_event)
 
     # ── i18n ─────────────────────────────────────────────────────────────────
 
@@ -81,17 +93,24 @@ class Everest60Panel(ctk.CTkFrame):
     def _cmd(self, *args):
         return self._app._cmd_for_device("everest60", *args)
 
-    def _run_async(self, cmd, on_done=None):
-        def _worker():
-            try:
-                r = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
-                ok = r.returncode == 0 and r.stdout.strip() == "ok"
-                if on_done:
-                    self.after(0, lambda: on_done(ok, r.stdout.strip()))
-            except Exception as e:
-                if on_done:
-                    self.after(0, lambda e=e: on_done(False, str(e)))
-        threading.Thread(target=_worker, daemon=True).start()
+    # ── Results from the service ──────────────────────────────────────────────
+
+    def _on_core_event(self, topic, payload):
+        if topic == "everest60.presence":
+            self._show_connected(self._svc.present)
+            return
+        if topic != "everest60.rgb_applied":
+            return
+        op, ok, msg = payload.get("op"), payload.get("ok"), payload.get("detail") or ""
+        if op == "lighting":
+            self._rgb_status.configure(
+                text=self.T("rgb_applied") if ok else f"{self.T('rgb_error')}: {msg[:40]}",
+                text_color=GRN if ok else RED)
+            self.after(3000, lambda: self._rgb_status.configure(text=""))
+        elif op == "side_ring":
+            self._side_leds_status.configure(
+                text=self.T("side_leds_applied") if ok else msg,
+                text_color=GRN if ok else RED)
 
     # ── UI ────────────────────────────────────────────────────────────────────
 
@@ -134,29 +153,15 @@ class Everest60Panel(ctk.CTkFrame):
         self._build_rgb_content(s.content)
 
     def _build_rgb_content(self, parent):
-        # Effect capability table (issue #32). Instead of separate "… Rainbow"
-        # entries, each effect declares which colour modes it supports and a
-        # single Color-mode dropdown offers only those — this is what the
-        # original Base Camp does and it stops the old "rainbow page sticks"
-        # confusion. dir_kind is None / "wave" (4-way) / "tornado" (2-way).
-        #   (cli_sub, colour_modes, has_speed, has_bri, dir_kind)
-        _RGB_EFFECTS = [
-            ("Static",    "static",   ("single",),                 False, True,  None),
-            ("Breathing", "breathing",("single", "dual", "rainbow"), True, True,  None),
-            ("Wave",      "wave",     ("single", "dual", "rainbow"), True, True,  "wave"),
-            ("Tornado",   "tornado",  ("single", "rainbow"),        True, True,  "tornado"),
-            ("Reactive",  "reactive", ("dual",),                    True, True,  None),
-            ("Matrix",    "matrix",   ("dual",),                    True, True,  None),  # #38
-            ("Yeti",      "yeti",     ("dual",),                    True, True,  None),
-            # "Custom" (issue #34): opens the per-key editor; no effect controls.
-            ("Custom",    "custom",   (),                           False, False, None),
-            ("Off",       "off",      (),                           False, False, None),
-        ]
+        # Effect capability table (issue #32), from the core: each effect
+        # declares the colour modes it supports and a single Color-mode
+        # dropdown offers only those, as the original Base Camp does.
+        #   name -> (cli_sub, colour_modes, has_speed, has_bri, dir_kind)
         self._rgb_effect_map = {
-            name: (sub, modes, hs, hb, dk)
-            for name, sub, modes, hs, hb, dk in _RGB_EFFECTS
+            e.name: (e.sub, e.color_modes, e.has_speed, e.has_brightness, e.direction)
+            for e in P.RGB_EFFECTS
         }
-        _rgb_names = [e[0] for e in _RGB_EFFECTS]
+        _rgb_names = [e.name for e in P.RGB_EFFECTS]
         # Color-mode display labels ↔ internal keys.
         self._cmode_labels = {
             "single":  self.T("rgb_cmode_single"),
@@ -243,10 +248,9 @@ class Everest60Panel(ctk.CTkFrame):
         self._rgb_dir_row = dir_row
         self._reg(ctk.CTkLabel(dir_row, text="", text_color=FG2,
                                font=(UI.FONT_FAMILY, 11)), "rgb_direction_label").pack(side="left", padx=(0, 6))
-        self._dir_wave    = ["→ L→R", "↓ T→B", "← R→L", "↑ B→T"]
-        self._dir_tornado = ["↻ CW", "↺ CCW"]
-        self._rgb_dir_map = {"→ L→R": 0, "↓ T→B": 2, "← R→L": 4, "↑ B→T": 6,
-                             "↻ CW": 0, "↺ CCW": 1}
+        self._dir_wave    = [d[1] for d in P.DIRECTIONS["wave"]]
+        self._dir_tornado = [d[1] for d in P.DIRECTIONS["tornado"]]
+        self._rgb_dir_map = {d[1]: d[2] for kind in P.DIRECTIONS.values() for d in kind}
         self._rgb_dir_var = tk.StringVar(value=self._dir_wave[0])
         self._rgb_dir_menu = ctk.CTkOptionMenu(
             dir_row, variable=self._rgb_dir_var, values=self._dir_wave,
@@ -280,27 +284,20 @@ class Everest60Panel(ctk.CTkFrame):
             font=(UI.FONT_FAMILY, 9), text_color=FG2, fg_color="transparent")
         self._rgb_build_ver = _ver  # refreshed in apply_lang (takes a format arg)
 
-        # Restore saved settings
-        saved = load_rgb_config()
-        if saved.get("effect") in self._rgb_effect_map:
-            self._rgb_mode_var.set(saved["effect"])
-        if "speed" in saved:
-            self._rgb_speed_sl.set(saved["speed"])
-        if "brightness" in saved:
-            self._rgb_bri_sl.set(saved["brightness"])
-        if "color1" in saved:
-            self._rgb_color1 = tuple(saved["color1"])
-            h = _hex(*self._rgb_color1)
-            self._rgb_c1_btn.configure(fg_color=h, hover_color=h)
-        if "color2" in saved:
-            self._rgb_color2 = tuple(saved["color2"])
-            h = _hex(*self._rgb_color2)
-            self._rgb_c2_btn.configure(fg_color=h, hover_color=h)
-        if "direction" in saved:
-            self._rgb_dir_var.set(saved["direction"])
-        saved_cmode = saved.get("cmode")
-        if saved_cmode in self._cmode_labels:
-            self._rgb_cmode_var.set(self._cmode_labels[saved_cmode])
+        # Restore the saved settings (the service reads them; anything not
+        # saved comes back as the defaults these widgets start with).
+        saved = self._svc.lighting()
+        self._rgb_mode_var.set(P.effect(saved["effect"]).name)
+        self._rgb_speed_sl.set(saved["speed"])
+        self._rgb_bri_sl.set(saved["brightness"])
+        self._rgb_color1 = tuple(saved["color1"])
+        h = _hex(*self._rgb_color1)
+        self._rgb_c1_btn.configure(fg_color=h, hover_color=h)
+        self._rgb_color2 = tuple(saved["color2"])
+        h = _hex(*self._rgb_color2)
+        self._rgb_c2_btn.configure(fg_color=h, hover_color=h)
+        self._rgb_dir_var.set(P.direction(saved["direction"])[1])
+        self._rgb_cmode_var.set(self._cmode_labels[saved["color_mode"]])
 
         self._rgb_update_controls()
 
@@ -322,7 +319,8 @@ class Everest60Panel(ctk.CTkFrame):
         self._reg(ctk.CTkLabel(
             row, text="", text_color=FG2,
             font=(UI.FONT_FAMILY, 11)), "side_leds_color_label").pack(side="left", padx=(0, 4))
-        self._side_led_color = (255, 0, 67)  # Mountain brand magenta default
+        ring = self._svc.side_ring()   # magenta and 100 until changed
+        self._side_led_color = tuple(ring["color"])
         self._side_led_btn = ctk.CTkButton(
             row, text="", width=40, height=28,
             fg_color=_hex(*self._side_led_color),
@@ -335,7 +333,7 @@ class Everest60Panel(ctk.CTkFrame):
         self._reg(ctk.CTkLabel(bri_row, text="", text_color=FG2,
                                font=(UI.FONT_FAMILY, 11), width=120, anchor="w"),
                   "rgb_brightness_label").pack(side="left")
-        val_lbl = ctk.CTkLabel(bri_row, text="100", text_color=FG,
+        val_lbl = ctk.CTkLabel(bri_row, text=str(ring["brightness"]), text_color=FG,
                                font=(UI.FONT_FAMILY, 11), width=30)
         val_lbl.pack(side="right")
         self._side_bri_sl = ctk.CTkSlider(
@@ -343,7 +341,7 @@ class Everest60Panel(ctk.CTkFrame):
             fg_color=BG3, progress_color=BLUE,
             button_color=BLUE, button_hover_color=BLUE,
             width=180, height=16)
-        self._side_bri_sl.set(100)
+        self._side_bri_sl.set(ring["brightness"])
         self._side_bri_sl.pack(side="left", padx=(0, 4))
         self._side_bri_sl.configure(
             command=lambda v, l=val_lbl: l.configure(text=str(int(v))))
@@ -377,37 +375,11 @@ class Everest60Panel(ctk.CTkFrame):
         self._side_led_btn.configure(fg_color=h, hover_color=h)
 
     def _apply_side_leds(self):
-        import json as _j
-        r, g, b = self._side_led_color
-        bri = int(self._side_bri_sl.get())
-        # Preserve the current main-key colours instead of blanking them: the
-        # side ring can only be driven in custom mode, so we pull the last saved
-        # per-key state and push it alongside the uniform ring in one write
-        # (issue #4 follow-up — FransM: "the leds of the kbd are turned off").
-        try:
-            leds, _saved_side, _saved_bri = _load_per_key_60()
-            leds = [list(c) for c in leds]
-        except Exception:
-            leds = []
-        if not leds:
-            # No saved per-key state — light the keys white instead of letting
-            # the controller pad them black, so the keyboard never goes dark
-            # (issue #4, FransM: "I really hate it when my kbd goes dark").
-            leds = [[255, 255, 255]] * 64
-        payload = _j.dumps({
-            "leds": leds,
-            "side": [[r, g, b]] * 44,
-            "brightness": bri,
-        })
-        cmd = self._cmd("per-key-rgb", payload)
-        try:
-            subprocess.run(cmd, check=True,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-            self._side_leds_status.configure(
-                text=self.T("side_leds_applied"), text_color=GRN)
-        except subprocess.CalledProcessError as e:
-            self._side_leds_status.configure(
-                text=str(e.stderr.decode() if e.stderr else e), text_color=RED)
+        """Light the side ring in one colour. The service keeps the saved key
+        colours alongside it (issue #4: the ring is only reachable in custom
+        mode, so a ring-only write would turn the keys off)."""
+        self._svc.set_side_ring(color=self._side_led_color,
+                                brightness=int(self._side_bri_sl.get()))
 
     def _open_custom_rgb(self):
         from shared.ui_helpers import CustomRGBWindow, _KB60_LAYOUT, _KB60_CANVAS_W, _KB60_CANVAS_H, _KB60_NUM_LEDS
@@ -460,9 +432,7 @@ class Everest60Panel(ctk.CTkFrame):
             if self._cmode_from_label.get(self._rgb_cmode_var.get()) not in modes:
                 self._rgb_cmode_var.set(self._cmode_labels[modes[0]])
         try:
-            cfg = load_rgb_config()
-            cfg["effect"] = name
-            save_rgb_config(cfg)
+            self._svc.save_effect(name)
         except Exception:
             pass
         self._rgb_update_controls()
@@ -552,122 +522,50 @@ class Everest60Panel(ctk.CTkFrame):
             self._rgb_color2 = rgb
             self._rgb_c2_btn.configure(fg_color=h, hover_color=h)
 
-    def _build_rgb_command(self):
-        """Translate the current UI selection into an everest60 `rgb` CLI command.
-
-        Returns (cmd, save_dict). cmd is None for Custom (the editor applies it)
-        and Off-less unknowns. Rainbow colour-mode routes to the `<effect>-rainbow`
-        subcommand; single/dual pass a trailing colour-mode value (0/16)."""
-        name = self._rgb_mode_var.get()
-        sub, modes, hs, hb, dk = self._rgb_effect_map.get(
-            name, ("off", (), False, False, None))
-        cmode = self._current_cmode(name)
-        speed = int(self._rgb_speed_sl.get())
-        bri   = int(self._rgb_bri_sl.get())
-        r1, g1, b1 = self._rgb_color1
-        r2, g2, b2 = self._rgb_color2
-        direction  = self._rgb_dir_map.get(self._rgb_dir_var.get(), 0)
-        cm_val = 0 if cmode == "single" else 16   # COLOR_SINGLE / COLOR_DUAL
-
-        save = {
-            "effect": name, "cmode": cmode or "dual", "speed": speed,
-            "brightness": bri, "color1": list(self._rgb_color1),
-            "color2": list(self._rgb_color2), "direction": self._rgb_dir_var.get(),
+    def _form_settings(self):
+        """The lighting settings as the form shows them (the service takes the
+        names and labels as well as ids)."""
+        return {
+            "effect": self._rgb_mode_var.get(),
+            "color_mode": self._cmode_from_label.get(self._rgb_cmode_var.get()),
+            "speed": int(self._rgb_speed_sl.get()),
+            "brightness": int(self._rgb_bri_sl.get()),
+            "color1": list(self._rgb_color1),
+            "color2": list(self._rgb_color2),
+            "direction": self._rgb_dir_var.get(),
         }
 
-        if sub == "custom":
-            return None, {"effect": name}
-        if sub == "off":
-            return self._cmd("rgb", "off"), save
-        if sub == "static":
-            return self._cmd("rgb", "static", str(r1), str(g1), str(b1), str(bri)), save
-        if cmode == "rainbow" and sub in ("breathing", "wave", "tornado"):
-            args = [f"{sub}-rainbow", str(bri), str(speed)]
-            if dk is not None:
-                args.append(str(direction))
-            return self._cmd("rgb", *args), save
-        if sub == "breathing":
-            return self._cmd("rgb", "breathing", str(r1), str(g1), str(b1),
-                             str(r2), str(g2), str(b2), str(bri), str(speed),
-                             str(cm_val)), save
-        if sub == "wave":
-            return self._cmd("rgb", "wave", str(r1), str(g1), str(b1),
-                             str(r2), str(g2), str(b2), str(bri), str(speed),
-                             str(direction), str(cm_val)), save
-        if sub == "tornado":
-            return self._cmd("rgb", "tornado", str(r1), str(g1), str(b1),
-                             str(bri), str(speed), str(direction)), save
-        if sub in ("reactive", "matrix", "yeti"):
-            return self._cmd("rgb", sub, str(r1), str(g1), str(b1),
-                             str(r2), str(g2), str(b2), str(bri), str(speed)), save
-        return None, None
-
     def _apply_rgb(self):
-        cmd, save = self._build_rgb_command()
-        if cmd is None:
-            return
-        if save:
-            save_rgb_config(save)
-
+        settings = self._form_settings()
+        if P.rgb_args(P.normalize(settings)) is None:
+            return                      # Custom: the per-key editor applies it
         self._rgb_status.configure(text=self.T("rgb_applying"), text_color=YLW)
-
-        def _done(ok, msg):
-            self._rgb_status.configure(
-                text=self.T("rgb_applied") if ok else f"{self.T('rgb_error')}: {msg[:40]}",
-                text_color=GRN if ok else RED)
-            self.after(3000, lambda: self._rgb_status.configure(text=""))
-
-        self._run_async(cmd, _done)
+        self._svc.apply_lighting(settings)
 
     def apply_saved_rgb(self):
-        """Re-push the saved lighting to the keyboard on connect/startup (#42):
-        settings were persisted to rgb_settings.json but never sent, so the board
-        kept its default lighting until the user pressed Apply. The widgets are
-        already primed from the saved config at build time, so we reuse the same
-        command builder. Custom mode replays its saved per-key map instead. Does
-        nothing when nothing has been saved yet (don't clobber the board)."""
+        """Re-push the saved lighting to the keyboard (#42). The service does
+        this by itself when the board appears; kept for callers."""
         try:
-            saved = load_rgb_config()
-            if not saved.get("effect"):
-                return
-            sub = self._rgb_effect_map.get(self._rgb_mode_var.get(), ("",))[0]
-            if sub == "custom":
-                self._apply_saved_custom()
-                return
-            cmd, _save = self._build_rgb_command()
-            if cmd:
-                self._run_async(cmd, None)
+            self._svc.apply_saved()
         except Exception:
             pass
-
-    def _apply_saved_custom(self):
-        """Replay the last per-key map for the Custom effect on connect (#42)."""
-        import json as _j
-        try:
-            leds, side, bri = _load_per_key_60()
-        except Exception:
-            return
-        if not leds:
-            return
-        payload = _j.dumps({
-            "leds": [list(c) for c in leds],
-            "side": [list(c) for c in side] if side else [],
-            "brightness": int(bri),
-        })
-        self._run_async(self._cmd("per-key-rgb", payload), None)
 
     # ── Connection state ──────────────────────────────────────────────────────
 
     def set_connected(self, connected: bool):
+        # The service replays the saved lighting when the board appears (#42),
+        # after a beat so the HID interface has finished enumerating. The
+        # device registry tells it; this is for callers that say it directly.
+        self._svc.set_present(connected)
+        self._show_connected(connected)
+
+    def _show_connected(self, connected):
+        connected = bool(connected)
         if connected == self._connected:
             return
         self._connected = connected
         if connected:
             self._banner.pack_forget()
-            # Push the saved lighting now that the board is present (#42). Delay
-            # a beat so the HID interface has finished enumerating before we open
-            # it — otherwise the very first apply can race the device coming up.
-            self.after(900, self.apply_saved_rgb)
         else:
             self._banner.pack(fill="x", padx=12, pady=(8, 4), before=self.winfo_children()[1])
 

@@ -95,6 +95,17 @@ This installs the icon and desktop entry to `~/.local/share/`. After that you ca
 
 USB permissions still need to be set up once (see below).
 
+From 4.0 on the AppImage opens the new interface, which is drawn by a web view
+it carries (Qt WebEngine), so it looks and behaves the same on every
+distribution. That makes it about 380 MB. The interface of 3.x is still there:
+start the AppImage with `--classic`. If the new interface cannot start on your
+machine, the classic one starts by itself and says why. See [Usage](#usage).
+
+> **Coming from 3.x:** the in-app update brings 4.0 to an older AppImage as a
+> source patch, and a source patch cannot add the web view. That AppImage keeps
+> working with the classic interface and says so once. Download the 4.0
+> AppImage once to get the new interface; your settings stay where they are.
+
 > **MacroPad owners with an older installation:** the pad arrived in 3.1.1, so a
 > `99-mountain.rules` written before that has no line for product id `0x0008`.
 > Without it the pad enumerates normally and the application still cannot reach
@@ -108,6 +119,11 @@ USB permissions still need to be set up once (see below).
 
 ---
 
+### Build the AppImage yourself
+
+The AppImage can be built from the source in a container with Docker or
+Podman, on Arch as on Debian or Ubuntu: see [docs/BUILDING.md](docs/BUILDING.md).
+
 ### Arch / CachyOS / Manjaro: AUR
 
 ```bash
@@ -116,6 +132,11 @@ paru -S basecamp-linux
 
 The udev rule is installed automatically. Just unplug and replug the keyboard after installation. Updates come through the app itself, see [Automatic updates](#automatic-updates).
 
+The package installs the AppImage (started as `basecamp-linux`), so it brings
+its own Python and the new interface's web view. Besides FUSE it only needs the
+graphics libraries every Arch desktop has (`libglvnd`, `mesa`). `basecamp-linux
+--classic` starts the interface of 3.x.
+
 ---
 
 ### From source
@@ -123,9 +144,34 @@ The udev rule is installed automatically. Just unplug and replug the keyboard af
 ```bash
 git clone https://github.com/ramisotti13-eng/BaseCamp-Linux.git
 cd BaseCamp-Linux
-pip install customtkinter pillow psutil obsws-python pystray hid pyusb
+pip install customtkinter pillow psutil obsws-python pystray hid pyusb pywebview
 python3 gui.py
 ```
+
+The new interface (4.0) runs in a [pywebview](https://pywebview.flowrl.com/)
+window, and pywebview draws with a web view your distribution provides.
+WebKit2GTK is the one to take; install it with its Python bindings:
+
+| Distribution | Packages |
+|---|---|
+| Arch, CachyOS, Manjaro | `sudo pacman -S python-pywebview python-gobject webkit2gtk-4.1` |
+| Debian 13, Ubuntu 24.04 and newer | `sudo apt install python3-webview python3-gi gir1.2-webkit2-4.1` |
+| Debian 12 | `sudo apt install python3-gi gir1.2-webkit2-4.1`, and pywebview from pip (Debian 12's `python3-webview` is 3.3, too old) |
+| Fedora, Nobara | `sudo dnf install python3-gobject webkit2gtk4.1`, and pywebview from pip (Fedora has no package for it) |
+
+pywebview 5.0 or newer is needed. If you install pywebview with pip into a
+virtual environment, create it with `--system-site-packages`, or it will not
+see the distribution's `gi` module. Qt WebEngine works as well instead of
+WebKit2GTK: `pyside6 python-qtpy` on Arch, `python3-pyqt6.qtwebengine
+python3-qtpy` on Debian and Ubuntu. pywebview tries GTK first, and Qt first in
+a KDE session; `PYWEBVIEW_GUI=qt` or `=gtk` decides.
+
+Without pywebview or a web view, `python3 gui.py` starts the classic interface
+and says once what is missing; `python3 gui.py --classic` starts it directly.
+With WebKit2GTK the terminal shows `ERROR: invalid option:
+JSC_SIGNAL_FOR_GC=30` a few times at start. That is WebKit commenting on the
+setting that keeps it off the signal the tray icon's Open uses; it takes the
+setting all the same.
 
 Two packages are optional and only unlock extras: `tkinterdnd2` for dragging image files onto button tiles, and `python-xlib` as a fallback for reading the cursor position on X11 when `xdotool` is not installed. Both soft-fail, the app starts fine without them.
 
@@ -235,13 +281,24 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 python3 gui.py
 ```
 
-The GUI starts with a splash screen and auto-activates Monitor mode. The app minimizes to the system tray when closed.
+The app opens the new interface and auto-activates Monitor mode. It hides in
+the system tray when its window is closed, and quits when there is no tray. The
+same flags work for the AppImage and the AUR package (`basecamp-linux`).
 
 | Flag | Effect |
 |------|--------|
-| `--minimized` | Start straight to the tray, no splash screen (what the autostart entry uses) |
+| `--classic` | The interface of 3.x (CustomTkinter), with its splash screen |
+| `--minimized` | Start straight to the tray, no window (what the autostart entry uses) |
+| `--no-tray` | New interface: no tray icon; closing the window quits |
+| `--web` | The new interface only: if it cannot start, say why and stop instead of starting the classic one |
+| `--demo` | New interface: made-up devices and a throw-away configuration, nothing reaches your devices or your settings |
+| `--debug` | New interface: with the web inspector |
 | `--install` | Install the icon and desktop entry to `~/.local/share/`, then exit (AppImage) |
 | `--ctl '<json>'` | Send one command to the running instance, print the JSON reply and exit 0 on success, 1 on failure |
+
+When the new interface cannot start (no pywebview, or no web view for it),
+the classic one starts instead. The terminal gets one line saying why, and the
+window says it once per version.
 
 ---
 
@@ -774,6 +831,8 @@ Click "Update now" and the app downloads the new version in the background with 
 
 Source updates are verified against a SHA-256 checksum that ships alongside the tarball on the GitHub release. A tarball without a published checksum is treated as suspect, and a checksum mismatch aborts the install before anything is extracted. The extraction itself uses Python's `tarfile.data_filter`, which refuses path-traversal entries, symlinks pointing outside the destination, and setuid bits.
 
+A source patch carries Python files only. When a release needs something native that the running AppImage does not have, the next AppImage brings it: 4.0's web view is such a case (an AppImage from before 4.0 updated by a source patch keeps the classic interface, see [Installation](#appimage-debian-ubuntu-mint-fedora-nobara)).
+
 The AUR package installs the AppImage, so it gets the popup and the source patches like any other AppImage install. `paru -Syu` only brings something when a new AppImage is published, and pacman goes on showing the version of the AppImage it installed, not the one you run. From source the popup does not appear, since `git pull` is the update there; the sidebar still names the new version so you know there is something to pull.
 
 ### File picker
@@ -797,9 +856,28 @@ X-GNOME-Autostart-enabled=true
 
 Save that as `~/.config/autostart/basecamp-linux.desktop`. If you installed from the AppImage, replace `basecamp-linux` in the `Exec=` line with the full path to your AppImage (for example `/home/you/Applications/BaseCamp-Linux.AppImage`).
 
+The autostart switch in Settings writes this file for you, with `--minimized`
+so the app starts in the tray. It starts the new interface (or the classic one
+where the new one cannot start); switched on from the classic interface started
+with `--classic`, it adds `--classic`. `--install` refreshes an existing entry
+with the AppImage's current path.
+
 ---
 
 ## Troubleshooting
+
+### The classic interface starts instead of the new one
+
+The terminal says why, in a line that starts with `[BaseCamp] The new interface cannot start`. From source, install pywebview and a web view as [From source](#from-source) describes. An AppImage older than 4.0 that updated itself cannot get the web view that way: download the 4.0 AppImage. `--web` starts the new interface without the fallback, so its own error shows.
+
+### The new interface's window stays blank
+
+Qt WebEngine, the AppImage's web view, runs its pages in a sandbox that needs
+user namespaces. Where it cannot have them (started as root, Ubuntu 23.10 and
+newer restricting them through AppArmor, or a container) the app switches the
+sandbox off by itself and says so in the terminal. If the window still stays
+blank, try `QTWEBENGINE_CHROMIUM_FLAGS="--disable-gpu"` in front of the command,
+and tell us what the terminal shows. `--classic` works in any case.
 
 ### No update ever shows up (Arch, openSUSE and others)
 

@@ -1,0 +1,36 @@
+/* The colour popup (js/colorpicker.js) and the swatch that opens it */
+.cpswatch { width: 64px; height: 40px; padding: 4px; border: 2px solid var(--card-3); border-left: 4px solid var(--logo-blue);
+  background: var(--card-2); cursor: pointer; border-radius: 0; flex: none; display: inline-block; vertical-align: middle; }
+.cpswatch.colorin { width: 56px; border: 2px solid var(--card-3); border-left: 4px solid var(--logo-blue); background: var(--card-2); }
+.cpswatch .cp-fill { display: block; width: 100%; height: 100%; }
+.cpswatch:hover:not(:disabled), .cpswatch[aria-expanded=true] { border-color: #8a93b2; border-left-color: var(--logo-blue); }
+.cpswatch:focus-visible { outline: 2px solid var(--beak-hi); outline-offset: 2px; }
+.cpswatch:disabled { opacity: .4; cursor: default; }
+
+.cp-pop { position: fixed; z-index: 55; width: 232px; padding: 8px; box-sizing: border-box; background: var(--card); border: 1px solid var(--line);
+  box-shadow: 0 8px 28px rgba(0,0,0,.55); color: var(--fg); font: 12px var(--font-text); }
+.cp-main { display: flex; gap: 8px; }
+.cp-sv { position: relative; flex: 1; height: 108px; cursor: crosshair; touch-action: none;
+  background: linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, var(--hue, red)); }
+.cp-hue { position: relative; width: 14px; height: 108px; cursor: pointer; touch-action: none;
+  background: linear-gradient(to bottom, #f00, #ff0 17%, #0f0 33%, #0ff 50%, #00f 67%, #f0f 83%, #f00); }
+.cp-handle, .cp-hhandle { position: absolute; width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 50%; border: 2px solid #fff;
+  box-shadow: 0 0 0 1px rgba(0,0,0,.6); pointer-events: none; box-sizing: border-box; }
+.cp-hhandle { left: 50%; }
+.cp-sv:focus-visible, .cp-hue:focus-visible { outline: 2px solid var(--beak-hi); outline-offset: 1px; }
+.cp-fields { display: grid; grid-template-columns: 1.9fr 1fr 1fr 1fr; gap: 4px; margin-top: 8px; }
+.cp-fields input { width: 100%; min-width: 0; box-sizing: border-box; height: 26px; padding: 0 4px; background: var(--bg); color: var(--fg);
+  border: 1px solid var(--line); font: 12px var(--font-text); }
+.cp-fields input:focus { outline: 0; border-color: var(--logo-blue-hi); }
+.cp-caps { display: grid; grid-template-columns: 1.9fr 1fr 1fr 1fr; gap: 4px; margin-top: 3px; text-align: center; color: var(--fg-faint); font-size: 10px; letter-spacing: .06em; }
+.cp-savedhead { display: flex; align-items: center; gap: 4px; margin: 10px -8px 0; padding: 8px 8px 0; border-top: 1px solid var(--line); }
+.cp-savedtitle { flex: 1; padding-left: 6px; border-left: 3px solid var(--logo-blue); color: var(--fg-dim); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+.cp-ibtn { width: 24px; height: 24px; padding: 0; display: grid; place-items: center; background: none; border: 0; color: var(--fg-dim); cursor: pointer; }
+.cp-ibtn svg { width: 16px; height: 16px; }
+.cp-ibtn:hover:not(:disabled) { color: var(--fg); }
+.cp-ibtn:disabled { opacity: .35; cursor: default; }
+.cp-ibtn:focus-visible, .cp-chip:focus-visible { outline: 2px solid var(--beak-hi); outline-offset: 1px; }
+.cp-saved { display: grid; grid-template-columns: repeat(8, 1fr); gap: 6px; margin-top: 8px; max-height: 96px; overflow-y: auto; padding: 2px; }
+.cp-chip { aspect-ratio: 1; width: 100%; padding: 0; border: 1px solid rgba(255,255,255,.18); border-radius: 50%; cursor: pointer; }
+.cp-chip:hover { outline: 2px solid var(--fg-dim); }
+.cp-chip.on { outline: 2px solid #fff; outline-offset: 1px; }

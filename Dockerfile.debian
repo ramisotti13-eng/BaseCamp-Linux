@@ -4,7 +4,7 @@
 # AppImage runs on Debian/Ubuntu/Mint and older systems. python:3.14-bookworm
 # matches the bundled interpreter version and ships a working tkinter.
 #
-# Build:  docker build -f Dockerfile.debian -t basecamp-debian-builder .
+# Build:  docker build -f Dockerfile.debian -t basecamp4-debian-builder .
 # Use:    see build_appimage_debian.sh
 FROM python:3.14-bookworm
 
@@ -14,8 +14,23 @@ FROM python:3.14-bookworm
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libusb-1.0-0 libhidapi-hidraw0 libhidapi-libusb0 \
         tk libtk8.6 libtcl8.6 \
-        libx11-6 libxext6 libxrender1 libxft2 libxss1 \
+        libx11-6 libxext6 libxrender1 libxft2 libxss1 libxcursor1 \
         squashfs-tools file desktop-file-utils ca-certificates wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# What Qt's X11 platform plugin and Qt WebEngine link against, so PyInstaller
+# finds them and puts them in the bundle (it bundles what it can resolve on
+# the build machine). Qt 6 needs libxcb-cursor0 in particular, which many
+# desktops do not install. Left to the host, as PyInstaller always does: libc,
+# libGL/libEGL, libdrm, libgbm (the graphics driver's own).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
+        libxcb-render-util0 libxcb-shape0 libxcb-xfixes0 libxcb-xinerama0 libxcb-xkb1 \
+        libxcb-shm0 libxcb-sync1 libxcb-xinput0 libxkbcommon0 libxkbcommon-x11-0 \
+        libnss3 libnspr4 libxcomposite1 libxdamage1 libxrandr2 libxtst6 libxkbfile1 libxi6 \
+        libasound2 libdbus-1-3 libfontconfig1 libfreetype6 libexpat1 \
+        libegl1 libgl1 libopengl0 libgbm1 libdrm2 libxshmfence1 \
+        libwayland-client0 libwayland-cursor0 libwayland-egl1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Python deps pinned to the same versions used for the Fedora build.
@@ -24,6 +39,14 @@ RUN pip install --no-cache-dir \
         customtkinter==5.2.2 pillow==11.3.0 numpy==2.3.5 psutil==7.0.0 \
         PyYAML==6.0.2 pystray==0.19.5 tkinterdnd2==0.4.3 pyusb==1.3.1 \
         hid==1.0.6 obsws-python==1.8.0 packaging==25.0 python-xlib==0.33 six==1.17.0
+
+# The web interface's window (4.0): pywebview with its Qt backend, Qt
+# WebEngine through PySide6 (LGPL, the Qt project's own binding). PySide6
+# 6.10 is the newest series older than PyInstaller 6.19, whose hooks collect
+# QtWebEngineProcess and its resources. The Fedora build needs the same
+# three in its venv.
+RUN pip install --no-cache-dir \
+        pywebview==6.2.1 qtpy==2.4.3 PySide6==6.10.3
 
 # appimagetool, extracted so it runs without FUSE inside the container.
 RUN wget -qO /opt/appimagetool.AppImage \

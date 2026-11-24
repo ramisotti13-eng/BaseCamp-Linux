@@ -34,3 +34,9 @@ protocol/
 
 # Local secrets
 .env
+
+# v4: local-only material, never committed
+.test-logs/
+# Screenshots and files of Mountain's Windows Base Camp, used as a visual
+# reference for the new UI. Mountain/Listan material: keep it out of the repo.
+reference/

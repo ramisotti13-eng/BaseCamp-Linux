@@ -1,10 +1,16 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import sys as _sys
+_sys.path.insert(0, SPECPATH)
+# BUNDLED_VERSION: _overlay_bootstrap.py leaves out an overlay older than this bundle.
+from bundle_version import bundle_version_data
+_BUNDLE_VERSION = [bundle_version_data(workpath)]
+
 a = Analysis(
     ['makalu_entry.py'],
     pathex=['.'],
     binaries=[],
-    datas=[],
+    datas=_BUNDLE_VERSION,
     hiddenimports=['hid', 'devices.makalu67.controller'],
     hookspath=[],
     hooksconfig={},

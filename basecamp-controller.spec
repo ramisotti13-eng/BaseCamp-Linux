@@ -15,11 +15,17 @@ def _find_libusb():
     return []
 
 
+import sys as _sys
+_sys.path.insert(0, SPECPATH)
+# BUNDLED_VERSION: _overlay_bootstrap.py leaves out an overlay older than this bundle.
+from bundle_version import bundle_version_data
+_BUNDLE_VERSION = [bundle_version_data(workpath)]
+
 a = Analysis(
     ['emax_entry.py'],
     pathex=['.'],
     binaries=_find_libusb(),
-    datas=[],
+    datas=_BUNDLE_VERSION,
     hiddenimports=['PIL', 'psutil', 'obsws_python', 'usb', 'usb.core', 'usb.util', 'usb.backend.libusb1',
                    'emax_controller', 'shared.ipc', 'shared.macros', 'shared.config'],
     hookspath=[],

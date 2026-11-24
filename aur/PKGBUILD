@@ -6,7 +6,15 @@ pkgdesc="Unofficial Linux companion app for Mountain peripherals (Everest Max/60
 arch=('x86_64')
 url="https://github.com/ramisotti13-eng/BaseCamp-Linux"
 license=('GPL3')
-depends=('fuse2')
+# The package is the AppImage, and the AppImage brings everything Python
+# itself, the web interface's window included (pywebview with Qt WebEngine,
+# 4.0 on), so no python-* package is needed here. What it takes from the
+# system: FUSE to mount itself, and the graphics stack Qt WebEngine draws
+# with (libGL/libEGL from libglvnd, libgbm from mesa), which an AppImage
+# never carries because it belongs to the graphics driver. A source install
+# uses Arch's own packages instead (README: python-pywebview, python-gobject,
+# webkit2gtk-4.1).
+depends=('fuse2' 'libglvnd' 'mesa')
 optdepends=('xdotool: keypress/text actions on X11'
             'ydotool: keypress/text actions on Wayland'
             'zenity: native file picker on GNOME and other non-KDE desktops'

@@ -5,31 +5,28 @@ are plain: no screens, so there is nothing to upload and nothing to draw. What
 is left is the part the DisplayPad also has, lighting and what a key does when
 it is pressed.
 
-Key presses come in over the vendor HID collection. The report layout was
-measured on two owners' pads in issue #85 and lives in the controller as
-KEY_MAP; this screen only turns the decoded indices into actions.
-
-One thread owns the device. Commands from the UI go through a queue and are
-sent by that same thread between reads. The DisplayPad learned this the hard
-way (issues #26 to #28): a second opener of the one command interface makes
-key events and uploads eat each other.
+The pad itself lives in the core since 4.0: core/devices/macropad's
+MacroPadService owns the one thread that talks to the device (the DisplayPad
+lesson of issues #26 to #28: a second opener of the one command interface
+makes key events and uploads eat each other), turns key reports into presses
+(the layout measured in issue #85 lives in the controller as KEY_MAP), and
+keeps the key bindings and the lighting. This screen shows that state, edits
+it through the service, says in words what the service reports in codes, and
+lights a key's tile when it is pressed.
 """
 import os
-import queue
-import threading
-import time
 import tkinter as tk
 import customtkinter as ctk
 
 import shared.ui as UI
+from shared.ui.core_bridge import subscribe_tk
 from shared.ui_helpers import (
     AccordionSection, pick_color, cap_scroll_speed, menu_order,
     BG, BG2, BG3, FG, FG2, BLUE, GRN, RED, YLW, BORDER,
 )
-from shared.config import (
-    _load_macropad_actions, _save_macropad_actions,
-    _load_macropad_rgb, _save_macropad_rgb,
-    _load_last_dir, _save_last_dir,
+from shared.config import _load_last_dir, _save_last_dir
+from core.devices.macropad.service import (
+    ACTION_TYPES, EFFECT_CONTROLS, MacroPadService,
 )
 from devices.macropad import controller as mp
 
@@ -39,28 +36,13 @@ KEYS_PER_ROW  = 6      # M1 to M6 on top, M7 to M12 below, as the pad is printed
 _TILE         = 84
 _INSPECTOR_W  = 250
 
-# Action types this device offers. The DisplayPad list minus everything that
-# needs a screen or a page: no image, no page switch, no key redefinition.
-_ACTION_TYPES = ["none", "shell", "url", "folder", "app", "obs", "macro",
-                 "keypress", "text"]
+# Action types this device offers: the DisplayPad list minus everything that
+# needs a screen or a page (the service's list).
+_ACTION_TYPES = ACTION_TYPES
 
-# Which controls an effect actually uses. Sending a colour to an effect that
-# ignores it is harmless, but showing a colour button that changes nothing is
-# not, so the panel hides what the effect does not read.
-#   effect id: (speed, colour 1, colour 2, direction)
-_EFFECT_CONTROLS = {
-    mp.EFFECT_STATIC:     (False, True,  False, False),
-    mp.EFFECT_BREATHING:  (True,  True,  True,  False),
-    mp.EFFECT_WAVE:       (True,  True,  False, True),
-    mp.EFFECT_TORNADO:    (True,  True,  False, True),
-    mp.EFFECT_MATRIX:     (True,  True,  True,  False),
-    mp.EFFECT_YETI:       (True,  True,  True,  False),
-    mp.EFFECT_REACTIVE_A: (True,  True,  True,  False),
-    mp.EFFECT_REACTIVE_B: (True,  True,  True,  False),
-    mp.EFFECT_REACTIVE_C: (True,  True,  True,  False),
-    mp.EFFECT_CUSTOM:     (False, False, False, False),
-    mp.EFFECT_OFF:        (False, False, False, False),
-}
+# Which controls an effect actually uses, (speed, colour 1, colour 2,
+# direction) per effect id: the panel hides what the effect does not read.
+_EFFECT_CONTROLS = EFFECT_CONTROLS
 
 # Wave turns four ways, Tornado two. The wire values behind these are not
 # 0 to 3; the controller maps them (#85).
@@ -73,13 +55,19 @@ _DIRECTION_KEYS = {
 # and the labels cover almost all of it anyway, so lifting only the frame to
 # BG2 was a flash nobody could see.
 _PRESS_BG = "#243247"
-# How long a key stays deaf after it fired, so one press is one action.
-_DEBOUNCE = 0.25
-# How long the worker waits for a report before looking at the command queue.
-_READ_MS = 120
-# After a failed open, wait this long before trying again. The pad re-enumerates
-# on its own now and then, and a tight retry loop would spam the log.
-_RETRY_S = 2.0
+# The service's timings, under their 3.x names. _RETRY_S is read every time
+# the worker waits after a failed open, so changing it here takes effect.
+_DEBOUNCE = MacroPadService.DEBOUNCE_S
+_READ_MS = MacroPadService.READ_MS
+_RETRY_S = MacroPadService.RETRY_S
+
+# What the service's status codes say on screen.
+_STATUS_TEXT = {"ready": ("mp_ready", GRN), "applied": ("rgb_applied", GRN),
+                "saved": ("mp_saved", GRN)}
+
+
+def _retry_seconds():
+    return _RETRY_S
 
 
 def _hex(r, g, b):
@@ -115,37 +103,114 @@ def action_type_labels(app):
     return [lbl for _tid, lbl in _action_type_entries(app)]
 
 
+def _plugin_action_handler(app, type_id):
+    pm = getattr(app, "_plugin_manager", None)
+    return pm.get_action_handler(type_id) if pm else None
+
+
+def wire_actions(app):
+    """The core's shared key action dispatcher (core/actions.py), with this
+    application's OBS screen and plugin manager handed to it.
+
+    Both are looked up on every press, so an OBS screen or a plugin manager
+    replaced later (or by a test) is the one used. Lookups something else
+    already gave the dispatcher are left alone: this only fills them in
+    until the application wires them itself at start-up.
+    """
+    macros = app.core.service("macros")
+    actions = getattr(macros, "actions", None)
+    if actions is None:                 # the macros service failed to install
+        from core.actions import ActionDispatcher
+        actions = ActionDispatcher()
+    if not actions.has_obs:
+        actions.set_obs(lambda: getattr(getattr(app, "_obs_panel", None),
+                                        "execute_action", None))
+    if not actions.has_plugin_lookup:
+        actions.set_plugin_lookup(lambda type_id: _plugin_action_handler(app, type_id))
+    return actions
+
+
+def attach_core(panel, app):
+    """Connect a panel to the core's MacroPad service. Called from __init__;
+    a test calls it on a panel built without widgets."""
+    svc = app.core.service("macropad")
+    if svc is None:                     # the service failed to install
+        svc = app.core.add_service(MacroPadService(app.core))
+    panel._svc = svc
+    svc.retry_s = _retry_seconds
+    panel._dispatcher = wire_actions(app)
+
+
+def _service_view(attr, writable=True):
+    """A 3.x attribute of the screen that is now the service's state."""
+    def get(self):
+        return getattr(self._svc, attr)
+
+    def set_(self, value):
+        setattr(self._svc, attr, value)
+    return property(get, set_ if writable else None)
+
+
 class MacroPadPanel(ctk.CTkFrame):
     """Lighting and key actions for the Mountain MacroPad."""
 
     VID = mp.VID
     PID = mp.PID
 
+    # What this screen used to keep itself, now views onto the service: the
+    # bindings, the lighting, the device thread and its job queue, the key
+    # edge state. gui.py and tools/test_macropad_panel.py reach them.
+    _actions   = _service_view("_actions")
+    _rgb       = _service_view("_rgb")
+    _jobs      = _service_view("_jobs", writable=False)
+    _worker    = _service_view("_worker")
+    _stop      = _service_view("_stop")
+    _held      = _service_view("_held")
+    _last_fire = _service_view("_last_fire")
+
+    @property
+    def _connected(self):
+        return self._svc.present
+
+    @_connected.setter
+    def _connected(self, value):
+        # Only the flag: set_connected() starts and stops the worker itself.
+        self._svc.set_present(value, manage_worker=False)
+
     def __init__(self, parent, app):
         super().__init__(parent, fg_color=BG, corner_radius=0)
         self._app        = app
-        self._connected  = False
         self._sections   = []
         self._i18n       = []          # (widget, attr, key)
         self._selected   = 0           # key the inspector is editing
         self._loading    = False       # true while a key is filling the fields
         self._dirty      = False       # true once the fields have been edited
-
-        self._actions = _load_macropad_actions()
-        self._rgb     = _load_macropad_rgb()
-
-        # Device thread and the jobs the UI hands it.
-        self._jobs      = queue.Queue()
-        self._stop      = threading.Event()
-        self._worker    = None
-        self._held      = set()        # keys currently down, for edge detection
-        self._last_fire = {}
-        # Toggle macros keep their stop events here, the same contract the
-        # DisplayPad has: pressing the key again ends a running toggle macro.
-        self._macro_toggles = {}
         self._flash_jobs = {}          # per key, the pending un-flash timer
 
+        # The pad is the core's MacroPadService. Key actions run through the
+        # core's dispatcher, which also keeps the stop events of toggle
+        # macros: pressing the key again ends a running toggle macro, the
+        # same contract the DisplayPad has. This screen takes the presses
+        # over so it can light the key's tile before the action runs.
+        attach_core(self, app)
+        self._svc.set_press_handler(self._on_press)
+        # The device registry tells the service when the pad comes and goes;
+        # this screen follows its presence event and starts and stops the
+        # device thread itself (_start_worker, which the tests reach).
+        self._svc.worker_follows_presence = False
+        self._presence_shown = self._connected
+
         self._build_ui()
+        subscribe_tk(app.core, "macropad.*", self, self._on_core_event)
+
+    def destroy(self):
+        try:
+            if self._svc._press_handler == self._on_press:
+                self._svc.set_press_handler(None)
+            self._svc.worker_follows_presence = True
+        except Exception:
+            pass
+        super().destroy()
 
     # ── i18n ─────────────────────────────────────────────────────────────────
 
@@ -473,15 +538,16 @@ class MacroPadPanel(ctk.CTkFrame):
         if pending["type"] == "_separator":
             return
         self._dirty = False
-        if pending == self._actions[index]:
-            if announce:
-                self._set_key_status(self.T("mp_act_saved", k=index + 1), GRN)
-            return
-        self._actions[index] = pending
         try:
-            _save_macropad_actions(self._actions)
+            # The service applies the rules (none carries no value) and
+            # saves; False means the key already said that.
+            changed = self._svc.set_action(index, pending["type"], pending["action"])
         except Exception as exc:
             self._set_key_status(self.T("mp_save_failed", err=str(exc)), RED)
+            return
+        if not changed:
+            if announce:
+                self._set_key_status(self.T("mp_act_saved", k=index + 1), GRN)
             return
         self._refresh_tile(index)
         self._set_key_status(self.T("mp_act_saved", k=index + 1), GRN)
@@ -627,9 +693,8 @@ class MacroPadPanel(ctk.CTkFrame):
             return mp.EFFECT_STATIC
 
     def _on_effect_change(self):
-        self._rgb["effect"] = self._current_effect()
+        self._set_lighting(effect=self._current_effect())
         self._update_rgb_controls()
-        self._store_rgb()
 
     def _update_rgb_controls(self):
         """Show only what the chosen effect reads.
@@ -675,18 +740,18 @@ class MacroPadPanel(ctk.CTkFrame):
 
     def _on_direction_change(self):
         try:
-            self._rgb["direction"] = self._dir_labels.index(self._dir_var.get())
+            direction = self._dir_labels.index(self._dir_var.get())
         except (ValueError, AttributeError):
-            self._rgb["direction"] = 0
-        self._store_rgb()
+            direction = 0
+        self._set_lighting(direction=direction)
 
     def _set_rgb(self, key, value):
-        self._rgb[key] = value
-        self._store_rgb()
+        self._set_lighting(**{key: value})
 
-    def _store_rgb(self):
+    def _set_lighting(self, **fields):
+        """Hand lighting changes to the service, which keeps and saves them."""
         try:
-            _save_macropad_rgb(self._rgb)
+            self._svc.update_lighting(**fields)
         except Exception as exc:
             self._set_rgb_status(self.T("mp_save_failed", err=str(exc)), RED)
 
@@ -696,9 +761,8 @@ class MacroPadPanel(ctk.CTkFrame):
                          title=self.T("color_picker_title"), show_brightness=False)
         if rgb is None:
             return
-        self._rgb["color%d" % slot] = list(rgb)
         self._color_rows[slot][1].configure(fg_color=_hex(*rgb), hover_color=_hex(*rgb))
-        self._store_rgb()
+        self._set_lighting(**{"color%d" % slot: list(rgb)})
 
     def _pick_key_color(self):
         index = self._selected
@@ -707,34 +771,31 @@ class MacroPadPanel(ctk.CTkFrame):
                          title=self.T("color_picker_title"), show_brightness=False)
         if rgb is None:
             return
-        self._rgb["colors"][index] = list(rgb)
+        try:
+            self._svc.set_key_color(index, rgb)
+        except Exception as exc:
+            self._set_rgb_status(self.T("mp_save_failed", err=str(exc)), RED)
         self._key_color_btn.configure(fg_color=_hex(*rgb), hover_color=_hex(*rgb))
         self._refresh_tile(index)
-        self._store_rgb()
 
     def _set_rgb_status(self, text, color=FG2):
         self._rgb_status.configure(text=text, text_color=color)
 
     # ── Talking to the pad ───────────────────────────────────────────────────
+    # The service builds the jobs and its device thread sends them; this
+    # screen says what is going on, and why nothing happens without a pad.
+
+    def _not_connected(self):
+        return self.T("device_not_connected", model="MacroPad")
 
     def _apply_lighting(self):
         """Send the current effect. Custom uploads the 12 colours instead."""
-        effect = self._current_effect()
-        brightness = int(self._rgb["brightness"])
-        if effect == mp.EFFECT_CUSTOM:
+        if self._current_effect() == mp.EFFECT_CUSTOM:
             self._apply_key_colors()
             return
-        _has_speed, has_c1, has_c2, has_dir = _EFFECT_CONTROLS.get(
-            effect, (True, True, True, False))
-        kwargs = {"brightness": brightness, "speed": int(self._rgb["speed"])}
-        if has_c1:
-            kwargs["color1"] = tuple(self._rgb["color1"])
-        if has_c2:
-            kwargs["color2"] = tuple(self._rgb["color2"])
-        if has_dir:
-            kwargs["direction"] = int(self._rgb.get("direction", 0))
         self._set_rgb_status(self.T("rgb_applying"))
-        self._submit("effect", effect=effect, kwargs=kwargs)
+        if not self._svc.apply_lighting():
+            self._set_rgb_status(self._not_connected(), RED)
 
     def _apply_key_colors(self):
         """Send the 12 key colours. The pad switches to the Custom effect to
@@ -745,42 +806,46 @@ class MacroPadPanel(ctk.CTkFrame):
                 self._effect_names[self._effect_ids.index(mp.EFFECT_CUSTOM)])
             self._on_effect_change()
         self._set_rgb_status(self.T("rgb_applying"))
-        if self._submit("colors",
-                        colors=[tuple(c) for c in self._rgb["colors"]],
-                        brightness=int(self._rgb["brightness"])):
+        if self._svc.apply_key_colors():
             self._set_key_status(self.T("rgb_applying"))
         else:
+            self._set_rgb_status(self._not_connected(), RED)
             # The button that was pressed is in the inspector, so the reason
             # nothing happened belongs next to it as well.
-            self._set_key_status(
-                self.T("device_not_connected", model="MacroPad"), RED)
+            self._set_key_status(self._not_connected(), RED)
 
     def _save_to_device(self):
         """Write the current state into the pad's flash, so it survives a
         replug without the app running."""
         self._set_rgb_status(self.T("mp_saving"))
-        self._submit("save")
+        if not self._svc.save_to_device():
+            self._set_rgb_status(self._not_connected(), RED)
 
     def _submit(self, kind, **payload):
         """Hand a job to the device thread. False when there is no pad to
         hand it to, so a caller can say so where the button was pressed."""
-        if not self._connected:
-            self._set_rgb_status(self.T("device_not_connected", model="MacroPad"), RED)
+        if not self._svc.submit(kind, **payload):
+            self._set_rgb_status(self._not_connected(), RED)
             return False
-        payload["kind"] = kind
-        self._jobs.put(payload)
         return True
 
-    # ── The one thread that owns the device ──────────────────────────────────
+    # ── The device thread (the service's) ────────────────────────────────────
 
     def set_connected(self, connected):
-        """Called by the device scan. Owning the pad is what makes key presses
-        arrive, so the thread runs whenever the pad is here, not only while
-        this screen is the one on show."""
+        """The pad is here or gone. The device registry tells the service,
+        and this screen follows the service's presence event; this is for
+        callers that say it directly. Owning the pad is what makes key
+        presses arrive, so the thread runs whenever the pad is here, not only
+        while this screen is the one on show."""
         connected = bool(connected)
-        if connected == self._connected:
+        self._svc.set_present(connected, manage_worker=False)
+        self._show_presence(connected)
+
+    def _show_presence(self, connected):
+        """The banner and the device thread, once per change."""
+        if connected == self._presence_shown:
             return
-        self._connected = connected
+        self._presence_shown = connected
         if connected:
             self._banner.pack_forget()
             self._start_worker()
@@ -789,137 +854,63 @@ class MacroPadPanel(ctk.CTkFrame):
             self._stop_worker()
 
     def _start_worker(self):
-        """Start the device thread, waiting out any predecessor first.
-
-        A pad unplugged and plugged back in within a second or two would
-        otherwise leave two threads on the one command interface: the outgoing
-        one has not reached its next stop check yet. Each worker owns its own
-        stop event, so a stopped one can never be revived, and the retry runs
-        from the Tk loop rather than blocking it on a join.
-
-        The "already serving" case has to end the chain rather than book
-        another retry, or a pad flapping twice leaves a 500 ms timer waking the
-        application forever, one more chain per flap.
-        """
-        if not self._connected:
-            return
-        previous = self._worker
-        if previous is not None and previous.is_alive():
-            if not self._stop.is_set():
-                return                      # serving already, nothing to do
-            self.after(500, self._start_worker)
-            return
-        stop = threading.Event()
-        self._stop = stop
-        self._worker = threading.Thread(target=self._worker_loop, args=(stop,),
-                                        daemon=True)
-        self._worker.start()
+        """Start the service's device thread (see MacroPadService.start_worker:
+        it waits out a predecessor that is still winding down)."""
+        self._svc.start_worker()
 
     def _stop_worker(self):
-        # The reference stays, so _start_worker can see the thread is still on
-        # its way out. is_alive() is what tells the two apart.
-        self._stop.set()
-        self._held.clear()
-
-    def _worker_loop(self, stop):
-        while not stop.is_set():
-            pad = None
-            try:
-                pad = mp.MacroPad()
-                pad.init()
-            except Exception as exc:
-                if pad is not None:
-                    pad.close()
-                self._post_status(str(exc), RED)
-                # Whatever was queued was meant for a pad that is not
-                # answering. Dropping it keeps a person clicking Apply at an
-                # unreachable pad from building a backlog that all fires at
-                # once the moment it comes back.
-                self._drop_jobs()
-                # A pad that is present but not readable is almost always the
-                # udev rule; the app says so once through _check_device_access.
-                stop.wait(_RETRY_S)
-                continue
-            self._post_status(self.T("mp_ready"), GRN)
-            try:
-                self._serve(pad, stop)
-            except Exception as exc:
-                self._post_status(str(exc), RED)
-                stop.wait(_RETRY_S)
-            finally:
-                pad.close()
-                self._held.clear()
-
-    def _drop_jobs(self):
-        while True:
-            try:
-                self._jobs.get_nowait()
-            except queue.Empty:
-                return
-
-    def _serve(self, pad, stop):
-        """Send what the UI queued, read what the pad says, until told to stop."""
-        while not stop.is_set():
-            while True:
-                try:
-                    job = self._jobs.get_nowait()
-                except queue.Empty:
-                    break
-                self._run_job(pad, job)
-            data = pad.dev.read(mp.PAYLOAD_LEN, timeout=_READ_MS)
-            if data:
-                self._on_report(data)
-            # A command reply arriving with key reports behind it parks them
-            # on the device object rather than dropping them.
-            for event in pad.drain_key_events():
-                self._on_report(event)
-
-    def _run_job(self, pad, job):
-        kind = job.get("kind")
-        try:
-            if kind == "effect":
-                # Wave and Tornado ride a different command with a different
-                # struct; the controller picks (#85).
-                pad.set_effect_auto(job["effect"], **job["kwargs"])
-                self._post_status(self.T("rgb_applied"), GRN)
-            elif kind == "colors":
-                pad.set_key_colors(job["colors"], brightness=job["brightness"])
-                self._post_status(self.T("rgb_applied"), GRN)
-            elif kind == "save":
-                pad.save()
-                self._post_status(self.T("mp_saved"), GRN)
-        except Exception as exc:
-            self._post_status(self.T("dp_error", err=str(exc)), RED)
+        self._svc.stop_worker()
 
     def _on_report(self, data):
-        """One input report: fire the actions for keys that just went down."""
-        if not mp.is_key_event(data):
-            return
-        pressed = mp.decode_key_event(data)
-        new = pressed - self._held
-        self._held = pressed
-        now = time.monotonic()
-        for index in sorted(new):
-            if now - self._last_fire.get(index, 0.0) < _DEBOUNCE:
-                continue
-            self._last_fire[index] = now
-            try:
-                self.after(0, lambda i=index: self._fire(i))
-            except Exception:
-                # The window is going away underneath us. Reports arriving in
-                # that moment are not worth taking the thread down for, and
-                # without this the failure surfaces as a device error and the
-                # worker starts reopening a pad nobody is watching.
-                return
+        """One input report: the service turns keys that just went down into
+        presses, which come back here through _on_press."""
+        self._svc.feed_report(data)
 
-    def _post_status(self, text, color=FG2):
-        """Status from the worker thread, applied on the UI thread."""
-        try:
-            self.after(0, lambda: self._set_rgb_status(text, color))
-        except Exception:
-            pass
+    # ── What the service says ────────────────────────────────────────────────
+
+    def _on_core_event(self, topic, payload):
+        event = topic.rsplit(".", 1)[-1]
+        if event == "presence":
+            # As the service has it now: a late event must not undo a newer
+            # change.
+            self._show_presence(self._svc.present)
+        elif event == "status":
+            self._show_status(payload.get("code"), payload.get("detail", ""))
+        elif event == "actions_changed":
+            index = payload.get("index")
+            if isinstance(index, int) and 0 <= index < NUM_KEYS:
+                self._refresh_tile(index)
+        elif event == "lighting_changed":
+            self._sync_lighting()
+
+    def _show_status(self, code, detail=""):
+        """The device thread's status codes, in words."""
+        if code in _STATUS_TEXT:
+            key, color = _STATUS_TEXT[code]
+            self._set_rgb_status(self.T(key), color)
+        elif code == "job_failed":
+            self._set_rgb_status(self.T("dp_error", err=detail), RED)
+        elif code in ("open_failed", "failed"):
+            self._set_rgb_status(detail, RED)
+
+    def _sync_lighting(self):
+        """Follow a lighting change, whoever made it: the colour strips, the
+        selected key's colour, and the effect menu when the effect moved."""
+        if not hasattr(self, "_effect_menu"):
+            return
+        for index in range(NUM_KEYS):
+            self._refresh_tile(index)
+        color = self._rgb["colors"][self._selected]
+        self._key_color_btn.configure(fg_color=_hex(*color), hover_color=_hex(*color))
+        if self._current_effect() != self._svc.effect():
+            self._refresh_effect_menu()
+            self._update_rgb_controls()
 
     # ── Actions ──────────────────────────────────────────────────────────────
+
+    def _on_press(self, index):
+        """A key went down (the service's press handler, on the main loop)."""
+        self._fire(index)
 
     def _fire(self, index):
         action = self._actions[index] if index < len(self._actions) else {}
@@ -955,63 +946,9 @@ class MacroPadPanel(ctk.CTkFrame):
                 pass
 
     def _run_action(self, type_id, value):
-        """Run one action. The types are the DisplayPad's, minus the ones that
-        need a page or a screen, and they route to the same helpers."""
-        if type_id == "obs" and value:
-            obs = getattr(self._app, "_obs_panel", None)
-            if obs is None:
-                return
-            if value.startswith("scene:"):
-                obs.execute_action("scene", value[6:])
-            elif value in ("record", "stream"):
-                obs.execute_action(value)
-            return
-        if type_id == "macro" and value:
-            from shared.macros import execute_macro
-            from shared.config import load_macros
-            macro = load_macros().get("macros", {}).get(value)
-            if not macro:
-                return
-            stop_event = None
-            if macro.get("repeat_mode") == "toggle":
-                if value in self._macro_toggles:
-                    self._macro_toggles.pop(value).set()
-                    return
-                stop_event = threading.Event()
-                self._macro_toggles[value] = stop_event
-            threading.Thread(target=execute_macro, args=(macro, stop_event),
-                             daemon=True).start()
-            return
-        if type_id == "keypress" and value:
-            from shared.macros import simulate_keypress
-            threading.Thread(target=simulate_keypress, args=(value,),
-                             daemon=True).start()
-            return
-        if type_id == "text" and value:
-            from shared.macros import simulate_text
-            threading.Thread(target=simulate_text, args=(value,), daemon=True).start()
-            return
-        pm = getattr(self._app, "_plugin_manager", None)
-        if pm:
-            handler = pm.get_action_handler(type_id)
-            if handler:
-                threading.Thread(target=handler, args=(value,), daemon=True).start()
-                return
-        if type_id == "none" or not value:
-            return
-        # Only the built-in types reach a shell. A key still bound to a plugin
-        # type whose plugin has been removed used to fall through to here, and
-        # its stored value, which was written for that plugin and not for a
-        # shell, was run as a command.
-        if type_id not in ("shell", "app", "url", "folder"):
-            print("[MacroPad] key action type %r is not installed, "
-                  "doing nothing" % type_id, flush=True)
-            return
-        from shared.macros import _run_shell, _run_xdg_open
-        try:
-            if type_id in ("url", "folder"):
-                _run_xdg_open(value)
-            else:
-                _run_shell(value)
-        except Exception:
-            pass
+        """Run one action as a key of this pad. The types are the DisplayPad's,
+        minus the ones that need a page or a screen, and the core's shared
+        dispatcher (core/actions.py) runs them by the same rules: only the
+        built-in types reach a shell, so a key still bound to a plugin that
+        has been removed runs nothing."""
+        self._svc.run_action(type_id, value)

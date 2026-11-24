@@ -1,30 +1,28 @@
-"""Everest Max device panel for BaseCamp Linux hub."""
+"""Everest Max device panel for BaseCamp Linux hub.
+
+Since 4.0 this is a client of EverestMaxService (core/devices/everest_max):
+the service owns Monitor Mode, every command to the keyboard, the main
+display mode and the plugin pictures for D1-D4; this screen shows its state,
+asks it for changes and follows its events. The members gui.py, the plugin
+API and the tests reach for (_cpu_proc, _stop_cpu_proc, _start_cpu_auto,
+_start_cpu_auto_clean, _toggle_cpu, push_dbutton_image, _btn_type,
+_btn_action, ...) are kept and hand over to the service.
+"""
 import os
 import sys
-import json
-import time
-import hashlib
-import threading
-import subprocess
 import tkinter as tk
 import customtkinter as ctk
 import shared.ui as UI
-from PIL import Image, ImageTk
+from PIL import Image
 
+from core.devices.everest_max import protocol as P
+from core.devices.everest_max.backend import wait_for_exit as _wait_for_controller  # noqa: F401
 from shared.config import (
-    CONFIG_DIR, MAIN_MODE_FILE,
-    load_config as load_style, save_config as save_style,
-    load_buttons, save_buttons,
     load_autostart_enabled, save_autostart_enabled,
     load_splash_enabled, save_splash_enabled,
-    load_rgb_settings as load_rgb_config, save_rgb_settings as save_rgb_config,
-    load_zone_config, save_zone_config,
-    _load_icon_last, _save_icon_last,
-    _save_to_library, _save_to_main_library,
-    _compute_lib_hash, _compute_main_lib_hash,
     macro_names,
 )
-from shared.volume import system_volume, start_watch
+from shared.ui.core_bridge import subscribe_tk
 from shared.ui_helpers import (CardColumns,
     BG, BG2, BG3, FG, FG2, BLUE, YLW, GRN, RED, BORDER,
     AccordionSection, LibraryPickerDialog, MultiUploadDialog, CustomRGBWindow,
@@ -33,87 +31,66 @@ from shared.ui_helpers import (CardColumns,
     _rgb_hex,
 )
 
-# STYLES dict for this module
+# STYLES dict for this module: the label shown -> the style the service takes
 STYLES = {"Analog": "analog", "Digital": "digital"}
+_STYLE_LABELS = {v: k for k, v in STYLES.items()}
 
 # ── EverestMaxPanel ────────────────────────────────────────────────────────────
-
-
-def _wait_for_controller(proc, timeout=8):
-    """Wait for a stopped controller, but never for ever.
-
-    Every stop here runs on the interface thread, and the controller now
-    releases the keyboard on its way out instead of dying where it stands.
-    That release is quick, but it talks to a device that may be mid-reset,
-    so waiting without a bound would freeze the window on it. The controller
-    ends itself after five seconds if its own cleanup does not come back;
-    this is the backstop for that backstop.
-    """
-    try:
-        proc.wait(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        print("[Everest] controller did not stop in %ds, killing it" % timeout,
-              file=sys.stderr, flush=True)
-        proc.kill()
-        try:
-            proc.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            pass
 
 
 class EverestMaxPanel(ctk.CTkFrame):
     """All Everest Max specific UI, packaged as a CTkFrame."""
 
+    _model_name = "Everest Max"
+
     def __init__(self, parent, app):
         super().__init__(parent, fg_color=BG, corner_radius=0)
         self._app = app
+        svc = self._svc
+        svc.reload_settings()       # read when the screen is built, as before
 
         # ── Local state ──────────────────────────────────────────────────────
-        self._cpu_proc        = None
-        self._init_dbutton_push()
         self._sections        = []
         self._custom_rgb_win  = None
         self._multi_upload_win = None
         self._rgb_win         = None
 
-        # Button action/type vars
+        # Button action/type vars (gui.py's set_key writes into them)
         self._btn_action = [tk.StringVar(value="") for _ in range(4)]
         self._btn_type   = [tk.StringVar(value="shell") for _ in range(4)]
-        buttons = load_buttons()
-        for i, b in enumerate(buttons):
+        for i, b in enumerate(svc.get_buttons()):
             self._btn_action[i].set(b.get("action", ""))
             self._btn_type[i].set(b.get("type", "shell"))
 
         # Clock format + style
-        def _read_cfg(name, default):
-            try:
-                with open(os.path.join(CONFIG_DIR, name)) as f:
-                    return f.read().strip()
-            except FileNotFoundError:
-                return default
-
-        self._clock_format = tk.StringVar(value=_read_cfg("clock_format", "24H"))
-        self._current_style = tk.StringVar(value=next(
-            (k for k, v in STYLES.items() if v == load_style()), "Analog"))
+        self._clock_format = tk.StringVar(value=svc.clock_format)
+        self._current_style = tk.StringVar(
+            value=_STYLE_LABELS.get(svc.style, "Analog"))
 
         # Splash / autostart
         self._splash_var    = tk.BooleanVar(value=load_splash_enabled())
         self._autostart_var = tk.BooleanVar(value=load_autostart_enabled())
 
-        # Main display mode
-        try:
-            with open(MAIN_MODE_FILE) as f:
-                _saved_mode = f.read().strip()
-        except FileNotFoundError:
-            _saved_mode = "clock"
-        self._main_mode = _saved_mode if _saved_mode in (
-            "image", "clock", "volume", "cpu", "gpu", "hd", "network", "ram", "apm"
-        ) else "clock"
-        self._main_just_uploaded = False
-        self._after_dial_reset   = False
-
         # Build UI
         self._build_ui()
+        subscribe_tk(app.core, "everest_max.*", self, self._on_core_event)
+        if svc.monitor_wanted:      # started before this screen was built
+            self._show_monitor_state(svc.monitor_state())
+
+    # ── The service ───────────────────────────────────────────────────────────
+
+    @property
+    def _svc(self):
+        return self._app.core.service("everest_max")
+
+    @property
+    def _main_mode(self):
+        return self._svc.main_mode
+
+    @property
+    def _cpu_proc(self):
+        """The running Monitor Mode controller (gui.py ends it on shutdown)."""
+        return self._svc.monitor_process
 
     # ── Translation / i18n delegation ─────────────────────────────────────────
 
@@ -239,9 +216,8 @@ class EverestMaxPanel(ctk.CTkFrame):
         from shared.ui_helpers import cap_scroll_speed
         cap_scroll_speed(scroll)
 
-        # Start clock tick
+        # Start clock tick. Monitor Mode's state arrives as events.
         self._tick()
-        self._update_cpu_bar()
 
     # ── Section builders ──────────────────────────────────────────────────────
 
@@ -281,29 +257,19 @@ class EverestMaxPanel(ctk.CTkFrame):
                                         text_color=FG2, anchor="w")
         self._cpu_status.pack(fill="x")
         self._meter_after = None
-        self._net_last = None
 
     def _tick_meters(self):
         """Refresh the meters. Runs only while this screen is visible:
         the shell calls refresh() when it is shown and on_hide() when it is
         left, so nothing polls in the background for a screen nobody sees."""
         try:
-            import psutil, time
-            cpu = psutil.cpu_percent(interval=None)
-            ram = psutil.virtual_memory().percent
-            disk = psutil.disk_usage("/").percent
-            io = psutil.net_io_counters()
-            now = time.monotonic()
-            mbs = 0.0
-            if self._net_last:
-                dt = max(0.001, now - self._net_last[0])
-                mbs = ((io.bytes_sent + io.bytes_recv) - self._net_last[1]) / dt / 1e6
-            self._net_last = (now, io.bytes_sent + io.bytes_recv)
-            # Volume is the one meter that is not psutil: it is what the
-            # loop pushes to the wheel display, so show the same number. The
-            # watcher started in refresh() makes this a variable read; without
-            # it this would fork a mixer command on the Tk thread every tick.
-            vol = system_volume()
+            # The service samples what Monitor Mode sends (psutil, and the
+            # volume it pushes to the wheel display). The watcher started in
+            # refresh() makes the volume a variable read; without it this
+            # would fork a mixer command on the Tk thread every tick.
+            m = self._svc.meters()
+            cpu, ram, disk = m["cpu"], m["ram"], m["disk"]
+            mbs, vol = m["net_mbs"], m["volume"]
             for key, value, shown in (("cpu", cpu, f"{cpu:.0f}%"),
                                       ("ram", ram, f"{ram:.0f}%"),
                                       ("disk", disk, f"{disk:.0f}%"),
@@ -319,7 +285,7 @@ class EverestMaxPanel(ctk.CTkFrame):
 
     def refresh(self):
         self._sync_card_hints()
-        start_watch()          # follow the mixer while this screen is on show
+        self._svc.watch_volume()   # follow the mixer while this screen is on show
         if getattr(self, "_meter_after", None) is None:
             self._tick_meters()
 
@@ -338,10 +304,9 @@ class EverestMaxPanel(ctk.CTkFrame):
         self._main_card = s2
         b2 = s2.content
 
-        _MODE_KEYS = ["image", "clock", "volume", "cpu", "gpu", "hd", "network", "ram", "apm"]
-        _MODE_LANG = ["main_mode_image", "main_mode_clock", "main_mode_volume", "main_mode_cpu",
-                      "main_mode_gpu", "main_mode_hd", "main_mode_network",
-                      "main_mode_ram", "main_mode_apm"]
+        _MODE_KEYS = list(P.MAIN_MODES)
+        _MODE_LANG = ["main_mode_" + k for k in _MODE_KEYS]
+        self._mode_keys    = _MODE_KEYS
         self._mode_labels  = [self.T(k) for k in _MODE_LANG]
         self._mode_key_map = {lbl: key for key, lbl in zip(_MODE_KEYS, self._mode_labels)}
 
@@ -561,23 +526,10 @@ class EverestMaxPanel(ctk.CTkFrame):
             "rgb_mode_label"
         ).pack(side="left", padx=(0, 6))
 
-        _RGB_EFFECTS = [
-            ("Static",             "static",            False, True,  True,  False, False),
-            ("Breathing",          "breathing",         True,  True,  True,  False, False),
-            ("Breathing Rainbow",  "breathing-rainbow", True,  True,  False, False, False),
-            ("Breathing Dual",     "breathing-dual",    True,  True,  True,  True,  False),
-            ("Wave",               "wave",              True,  True,  True,  False, True),
-            ("Wave Rainbow",       "wave-rainbow",      True,  True,  False, False, True),
-            ("Tornado",            "tornado",           True,  True,  True,  False, True),
-            ("Tornado Rainbow",    "tornado-rainbow",   True,  True,  False, False, True),
-            ("Reactive",           "reactive",          True,  True,  True,  True,  False),
-            ("Yeti",               "yeti",              True,  True,  True,  True,  False),
-            ("Matrix",             "matrix",            True,  True,  True,  True,  False),
-            ("Off",                "off",               False, False, False, False, False),
-        ]
+        # The effects and what each one uses come from the core's table.
         self._rgb_effect_map = {name: (eid, hs, hb, hc1, hc2, hd)
-                                for name, eid, hs, hb, hc1, hc2, hd in _RGB_EFFECTS}
-        _rgb_names = [e[0] for e in _RGB_EFFECTS]
+                                for eid, name, hs, hb, hc1, hc2, hd in P.RGB_EFFECTS}
+        _rgb_names = [e[1] for e in P.RGB_EFFECTS]
         self._rgb_mode_var  = tk.StringVar(value=_rgb_names[0])
         self._rgb_mode_menu = ctk.CTkOptionMenu(
             rgb_mode_row, variable=self._rgb_mode_var, values=_rgb_names,
@@ -631,10 +583,9 @@ class EverestMaxPanel(ctk.CTkFrame):
         self._rgb_dir_row = dir_row
         self._reg(ctk.CTkLabel(dir_row, text="", text_color=FG2, font=(UI.FONT_FAMILY, 11)),
                   "rgb_direction_label").pack(side="left", padx=(0, 6))
-        self._dir_wave    = ["→ L→R", "↓ T→B", "← R→L", "↑ B→T"]
-        self._dir_tornado = ["↻ CW", "↺ CCW"]
-        self._rgb_dir_val_map = {"→ L→R": 0, "↓ T→B": 2, "← R→L": 4, "↑ B→T": 6,
-                                 "↻ CW": 9, "↺ CCW": 10}
+        self._dir_wave    = [lbl for lbl, _ in P.WAVE_DIRECTIONS]
+        self._dir_tornado = [lbl for lbl, _ in P.TORNADO_DIRECTIONS]
+        self._rgb_dir_val_map = dict(P.DIRECTION_VALUES)
         self._rgb_dir_var  = tk.StringVar(value=self._dir_wave[0])
         self._rgb_dir_menu = ctk.CTkOptionMenu(
             dir_row, variable=self._rgb_dir_var, values=self._dir_wave,
@@ -642,24 +593,18 @@ class EverestMaxPanel(ctk.CTkFrame):
             text_color=FG, font=(UI.FONT_FAMILY, 11), width=120, height=28)
         self._rgb_dir_menu.pack(side="left")
 
-        # Load saved RGB settings
-        _rgb_saved = load_rgb_config()
-        if _rgb_saved.get("effect") in self._rgb_effect_map:
-            self._rgb_mode_var.set(_rgb_saved["effect"])
-        if "speed" in _rgb_saved:
-            self._rgb_speed_sl.set(_rgb_saved["speed"])
-        if "brightness" in _rgb_saved:
-            self._rgb_bri_sl.set(_rgb_saved["brightness"])
-        if "color1" in _rgb_saved and len(_rgb_saved["color1"]) == 3:
-            self._rgb_color1 = tuple(_rgb_saved["color1"])
-            _c1h = "#{:02x}{:02x}{:02x}".format(*self._rgb_color1)
-            self._rgb_c1_btn.configure(fg_color=_c1h, hover_color=_c1h)
-        if "color2" in _rgb_saved and len(_rgb_saved["color2"]) == 3:
-            self._rgb_color2 = tuple(_rgb_saved["color2"])
-            _c2h = "#{:02x}{:02x}{:02x}".format(*self._rgb_color2)
-            self._rgb_c2_btn.configure(fg_color=_c2h, hover_color=_c2h)
-        if "direction" in _rgb_saved and _rgb_saved["direction"] in self._rgb_dir_val_map:
-            self._rgb_dir_var.set(_rgb_saved["direction"])
+        # Load saved RGB settings (the service reads rgb_settings.json)
+        _rgb_saved = self._svc.rgb_settings()
+        self._rgb_mode_var.set(P.effect_info(_rgb_saved["effect"])["name"])
+        self._rgb_speed_sl.set(_rgb_saved["speed"])
+        self._rgb_bri_sl.set(_rgb_saved["brightness"])
+        self._rgb_color1 = tuple(_rgb_saved["color1"])
+        _c1h = "#{:02x}{:02x}{:02x}".format(*self._rgb_color1)
+        self._rgb_c1_btn.configure(fg_color=_c1h, hover_color=_c1h)
+        self._rgb_color2 = tuple(_rgb_saved["color2"])
+        _c2h = "#{:02x}{:02x}{:02x}".format(*self._rgb_color2)
+        self._rgb_c2_btn.configure(fg_color=_c2h, hover_color=_c2h)
+        self._rgb_dir_var.set(_rgb_saved["direction_label"])
 
         rgb_apply_row = ctk.CTkFrame(c, fg_color="transparent")
         self._rgb_apply_row = rgb_apply_row
@@ -699,8 +644,6 @@ class EverestMaxPanel(ctk.CTkFrame):
 
     def _tick(self):
         import datetime
-        import threading
-        import resource
         now = datetime.datetime.now()
         if self._clock_format.get() == "12H":
             time_str = now.strftime("%I:%M:%S %p")
@@ -718,17 +661,8 @@ class EverestMaxPanel(ctk.CTkFrame):
 
         self._app.after(1000, self._tick)
 
-    def _update_cpu_bar(self):
-        if self._cpu_proc and self._cpu_proc.poll() is not None:
-            self._cpu_proc = None
-            self._btn_cpu.configure(text=self.T("monitor_start"),
-                                    fg_color=UI.ACCENT, text_color=UI.tokens.ACCENT_TEXT)
-            self._cpu_status.configure(text=self.T("monitor_stopped"), text_color=RED)
-        self._app.after(5000, self._update_cpu_bar)
-
     def _on_format_change(self):
-        with open(os.path.join(CONFIG_DIR, "clock_format"), "w") as f:
-            f.write(self._clock_format.get())
+        self._svc.set_clock_format(self._clock_format.get())
 
     def _sync_card_hints(self):
         """Card headers show the current value, so the hint has to follow it."""
@@ -744,87 +678,55 @@ class EverestMaxPanel(ctk.CTkFrame):
     def _on_style_change(self):
         self._sync_card_hints()
         label = self._current_style.get()
-        save_style(STYLES[label])
         self._style_status.configure(
             text=self.T("style_sending", style=label), text_color=BLUE)
-        was_running = self._cpu_proc and self._cpu_proc.poll() is None
-        if was_running:
-            self._cpu_proc.terminate()
-            _wait_for_controller(self._cpu_proc)
-            self._cpu_proc = None
+        # Saved, then sent with a time sync while Monitor Mode lets go of the
+        # keyboard; the result comes back as the time_sync job's event.
+        self._svc.set_style(STYLES[label])
 
-        def cb(ok):
-            self._style_status.configure(
-                text=self.T("style_active", style=label) if ok else self.T("style_error"),
-                text_color=GRN if ok else RED)
-            if was_running:
-                self._start_cpu_auto()
-        self._run_sync(callback=cb)
-
-    def _run_sync(self, callback=None):
-        style_arg = STYLES[self._current_style.get()]
-        def task():
-            result = subprocess.run(self._cmd(style_arg), capture_output=True)
-            ok = result.returncode == 0
-            if callback:
-                self._app.after(0, lambda: callback(ok))
-        threading.Thread(target=task, daemon=True).start()
+    # ── Monitor Mode: run by the service; gui.py and the tests use these ─────
 
     def _stop_cpu_proc(self):
-        """Terminate CPU monitor if running. Returns True if it was running."""
-        if self._cpu_proc and self._cpu_proc.poll() is None:
-            self._cpu_proc.terminate()
-            _wait_for_controller(self._cpu_proc)
-            self._cpu_proc = None
-            return True
-        return False
+        """Turn Monitor Mode off. Returns True if it was on.
+
+        Returns at once: the service stops the controller on its own thread,
+        and anything that needs the keyboard next goes through the service,
+        which waits for the controller to let go of it.
+        """
+        return self._svc.stop_monitor()
 
     def _start_cpu_auto(self):
-        if not (self._cpu_proc and self._cpu_proc.poll() is None):
-            self._toggle_cpu()
+        self._svc.start_monitor()
 
     def _start_cpu_auto_clean(self):
-        _FROZEN = getattr(sys, "frozen", False)
-        def run():
-            pkill = "basecamp-controller.*cpu" if _FROZEN else r"emax_controller\.py.*cpu"
-            subprocess.run(["pkill", "-f", pkill], capture_output=True)
-            time.sleep(0.4)
-            self._app.after(0, self._start_cpu_auto)
-        threading.Thread(target=run, daemon=True).start()
+        """At start-up: end Monitor Mode processes a crash left behind (they
+        hold the keyboard), then start it."""
+        self._svc.start_monitor(clean=True)
 
     def _toggle_cpu(self):
-        if self._cpu_proc and self._cpu_proc.poll() is None:
-            self._cpu_proc.terminate()
-            self._cpu_proc = None
-            self._btn_cpu.configure(text=self.T("monitor_start"),
-                                    fg_color=UI.ACCENT, text_color=UI.tokens.ACCENT_TEXT)
-            self._cpu_status.configure(text=self.T("monitor_stopped"), text_color=RED)
+        self._svc.toggle_monitor()
+
+    def _show_monitor_state(self, st):
+        if not hasattr(self, "_btn_cpu"):
+            return
+        on = bool(st.get("wanted"))
+        # Stopping a monitor is not destructive; red here only competed with
+        # the actual delete buttons elsewhere. The state is in the line below
+        # the button. Paused for a command it still reads as on: it comes
+        # back by itself.
+        self._btn_cpu.configure(
+            text=self.T("monitor_stop") if on else self.T("monitor_start"),
+            fg_color=UI.ACCENT, text_color=UI.tokens.ACCENT_TEXT)
+        if st.get("error"):
+            self._cpu_status.configure(text=f"{self.T('error')}: {st['error']}",
+                                       text_color=RED)
+        elif on:
+            self._cpu_status.configure(text=self.T("monitor_running"), text_color=GRN)
         else:
-            style_arg = STYLES[self._current_style.get()]
-            _stderr_log = None
-            try:
-                _stderr_log = open(os.path.join(CONFIG_DIR, "controller_error.log"), "w")
-                self._cpu_proc = subprocess.Popen(
-                    self._cmd("cpu", style_arg),
-                    stdout=subprocess.DEVNULL, stderr=_stderr_log)
-                # Stopping a monitor is not destructive; red here only
-                # competed with the actual delete buttons elsewhere. The state
-                # is in the line below the button.
-                self._btn_cpu.configure(text=self.T("monitor_stop"),
-                                        fg_color=UI.ACCENT,
-                                        text_color=UI.tokens.ACCENT_TEXT)
-                self._cpu_status.configure(text=self.T("monitor_running"), text_color=GRN)
-            except Exception as e:
-                self._cpu_status.configure(text=f"{self.T('error')}: {e}", text_color=RED)
-            finally:
-                if _stderr_log is not None:
-                    _stderr_log.close()
+            self._cpu_status.configure(text=self.T("monitor_stopped"), text_color=RED)
 
     def _reset_dial_image(self):
-        def run():
-            subprocess.run(self._cmd("reset-dial"), capture_output=True)
-            self._app.after(0, lambda: setattr(self, "_after_dial_reset", True))
-        threading.Thread(target=run, daemon=True).start()
+        self._svc.reset_dial()
 
     def _rgb_update_controls(self):
         name = self._rgb_mode_var.get()
@@ -875,86 +777,15 @@ class EverestMaxPanel(ctk.CTkFrame):
 
     def _apply_rgb(self):
         name = self._rgb_mode_var.get()
-        eid, hs, hb, hc1, hc2, hd = self._rgb_effect_map[name]
+        eid = self._rgb_effect_map[name][0]
         speed = int(self._rgb_speed_sl.get())
         bri   = int(self._rgb_bri_sl.get())
-        r1, g1, b1 = self._rgb_color1
-        r2, g2, b2 = self._rgb_color2
-        c1_hex    = f"{r1:02x}{g1:02x}{b1:02x}"
-        c2_hex    = f"{r2:02x}{g2:02x}{b2:02x}"
         direction = self._rgb_dir_val_map.get(self._rgb_dir_var.get(), 0)
         self._rgb_status.configure(text=self.T("rgb_applying"), text_color=YLW)
-        was_running = self._cpu_proc and self._cpu_proc.poll() is None
-        if was_running:
-            self._cpu_proc.terminate()
-            _wait_for_controller(self._cpu_proc)
-            self._cpu_proc = None
-
-        def run():
-            r = subprocess.run(
-                self._cmd("rgb", eid, str(speed), str(bri), c1_hex, c2_hex, str(direction)),
-                capture_output=True)
-            ok  = r.returncode == 0
-            err = (r.stderr.decode(errors="replace").strip().splitlines() or [""])[-1]
-            if ok:
-                save_rgb_config({
-                    "effect": name, "speed": speed, "brightness": bri,
-                    "color1": list(self._rgb_color1),
-                    "color2": list(self._rgb_color2),
-                    "direction": self._rgb_dir_var.get(),
-                })
-            def finish():
-                self._rgb_status.configure(
-                    text=self.T("rgb_applied") if ok else f"{self.T('rgb_error')}: {err}",
-                    text_color=GRN if ok else RED)
-                if was_running:
-                    self._start_cpu_auto()
-            self._app.after(0, finish)
-        threading.Thread(target=run, daemon=True).start()
-
-    def _pick_zone_color(self, zone_key):
-        initial = self._zone_colors.get(zone_key, (0, 0, 0))
-        rgb = pick_color(self._app, initial_rgb=initial, title=self.T("ui_pick_color"), show_brightness=False)
-        if rgb is None:
-            return
-        self._zone_colors[zone_key] = rgb
-        hex_color = _rgb_hex(rgb)
-        self._zone_btns[zone_key].configure(fg_color=hex_color, hover_color=hex_color)
-
-    def _reset_zones(self):
-        self._zone_colors = dict(self._zone_defaults)
-        for k, rgb in self._zone_colors.items():
-            hex_color = "#{:02x}{:02x}{:02x}".format(*rgb)
-            if k in self._zone_btns:
-                self._zone_btns[k].configure(fg_color=hex_color, hover_color=hex_color)
-        self._zone_status.configure(text="", text_color=FG2)
-
-    def _apply_zones(self):
-        self._zone_status.configure(text=self.T("zone_applying"), text_color=YLW)
-        was_running = self._cpu_proc and self._cpu_proc.poll() is None
-        if was_running:
-            self._cpu_proc.terminate()
-            _wait_for_controller(self._cpu_proc)
-            self._cpu_proc = None
-        brightness = int(self._zone_bri_sl.get())
-        tokens = []
-        for k, rgb in self._zone_colors.items():
-            tokens.append(f"{k}:{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}")
-        tokens.append(f"brightness:{brightness}")
-        def run():
-            result = subprocess.run(self._cmd("custom-rgb", *tokens), capture_output=True)
-            ok  = result.returncode == 0
-            err = (result.stderr.decode(errors="replace").strip().splitlines() or [""])[-1]
-            if ok:
-                save_zone_config(self._zone_colors, brightness)
-            def finish():
-                self._zone_status.configure(
-                    text=self.T("zone_applied") if ok else f"{self.T('zone_error')}: {err}",
-                    text_color=GRN if ok else RED)
-                if was_running:
-                    self._start_cpu_auto()
-            self._app.after(0, finish)
-        threading.Thread(target=run, daemon=True).start()
+        # Monitor Mode lets go for it, and the settings are saved once the
+        # keyboard took them; the result comes back as rgb_applied.
+        self._svc.apply_rgb(eid, speed, bri, self._rgb_color1, self._rgb_color2,
+                            direction)
 
     def _open_rgb_editor(self):
         """Open the per-key editor as a screen, not as a window on top of the
@@ -1115,10 +946,8 @@ class EverestMaxPanel(ctk.CTkFrame):
         search_var.trace_add("write", lambda *_: _rebuild(search_var.get()))
 
     def _apply_btn(self, idx):
-        buttons = load_buttons()
-        buttons[idx]["action"] = self._btn_action[idx].get().strip()
-        buttons[idx]["type"]   = self._btn_type[idx].get()
-        save_buttons(buttons)
+        self._svc.set_button(idx, self._btn_type[idx].get(),
+                             self._btn_action[idx].get())
         self._numpad_info.configure(text=self.T("action_saved", d=idx+1), text_color=GRN)
 
     def _open_multi_upload(self):
@@ -1128,315 +957,118 @@ class EverestMaxPanel(ctk.CTkFrame):
         self._multi_upload_win = MultiUploadDialog(self._app)
 
     def _reset_buttons_flash(self):
-        was_running = self._stop_cpu_proc()
         self._numpad_info.configure(text=self.T("reset_buttons_running"), text_color=FG2)
-
-        def _run():
-            time.sleep(0.5)
-            r = subprocess.run(self._cmd("reset-buttons"), capture_output=True)
-            if r.returncode == 0:
-                self._app.after(0, lambda: self._numpad_info.configure(
-                    text=self.T("reset_buttons_done"), text_color=GRN))
-            else:
-                self._app.after(0, lambda: self._numpad_info.configure(
-                    text=self.T("reset_buttons_error"), text_color=RED))
-            if was_running:
-                self._app.after(0, self._start_cpu_auto)
-
-        threading.Thread(target=_run, daemon=True).start()
-
-    def _upload_image(self, idx):
-        result = pick_library_image(self._app, self._app)
-        if result is None:
-            return
-        path, gif_frame, thumb_fname = result
-
-        stored   = _load_icon_last().get(str(idx))
-        resolved = thumb_fname or _compute_lib_hash(path, gif_frame)
-        if resolved and resolved == stored:
-            self._numpad_info.configure(
-                text=self.T("image_unchanged", d=idx+1), text_color=FG2)
-            return
-
-        self._numpad_info.configure(text=self.T("image_uploading", d=idx+1),
-                                    text_color=BLUE)
-
-        was_running = self._cpu_proc and self._cpu_proc.poll() is None
-        if was_running:
-            self._cpu_proc.terminate()
-            _wait_for_controller(self._cpu_proc)
-            self._cpu_proc = None
-
-        def do_upload():
-            time.sleep(2.5 if was_running else 0.5)
-            cmd = self._cmd("upload", str(idx), path)
-            if gif_frame:
-                cmd = self._cmd("upload", str(idx), path, "--frame", str(gif_frame))
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                                    stderr=subprocess.PIPE, text=True)
-            stdout_data, stderr_data = proc.communicate()
-            ok = proc.returncode == 0
-            if ok:
-                new_fname = thumb_fname or _save_to_library(path, gif_frame)
-                if new_fname:
-                    _save_icon_last(idx, new_fname)
-                # Whatever a plugin put there is gone; its next picture has
-                # to be written even if it is the one it sent before.
-                with self._dpush_lock:
-                    self._dpush_sent.pop(idx, None)
-            if was_running:
-                self._app.after(0, self._start_cpu_auto)
-            err_hint = (stderr_data.strip().splitlines() or [""])[-1]
-
-            def finish():
-                self._numpad_info.configure(
-                    text=(self.T("image_uploaded", d=idx+1) if ok
-                          else self.T("image_error_detail", d=idx+1, err=err_hint)
-                          if err_hint else self.T("image_error", d=idx+1)),
-                    text_color=GRN if ok else RED)
-            self._app.after(0, finish)
-
-        threading.Thread(target=do_upload, daemon=True).start()
+        self._svc.reset_buttons_flash()
 
     # ── Pictures on D1-D4 from plugins (#113) ────────────────────────────────
-
-    def _init_dbutton_push(self):
-        self._dpush_lock = threading.Lock()
-        self._dpush_pending = {}     # key -> (file, digest), the latest only
-        self._dpush_inflight = {}    # key -> digest being uploaded right now
-        self._dpush_sent = {}        # key -> digest of what the key shows
-        self._dpush_busy = False
-        self._dpush_resume = False   # Monitor Mode ran before the pause
 
     def push_dbutton_image(self, idx, pil_image):
         """Put a picture on D1-D4 (idx 0-3) for a plugin. Thread-safe and
         returns at once; whether the picture was taken.
 
-        The keys keep their pictures in the keyboard's flash, so every one is
-        an erase and a rewrite of two sectors, and Monitor Mode has to let go
-        of the keyboard for it: measured on an Everest Max, 45 to 60 seconds
-        per picture, the same as uploading one by hand. Base Camp for Windows
-        does the same for its Spotify covers, and only when the song changes.
-        So here as well: a picture the key already shows is not written
-        again, pictures that arrive while one is being written go in the same
-        pause, and per key only the latest is written.
+        The service queues it: a picture the key already shows is not
+        written again, pictures that arrive while one is being written go in
+        the same pause of Monitor Mode, and per key only the latest is
+        written (see EverestMaxService.push_dbutton_image).
         """
-        if not (isinstance(idx, int) and 0 <= idx <= 3):
-            return False
-        try:
-            img = pil_image.convert("RGB").resize((72, 72), Image.LANCZOS)
-        except Exception:
-            return False
-        digest = hashlib.sha1(img.tobytes()).hexdigest()
-        path = os.path.join(CONFIG_DIR, f"everest_plugin_d{idx + 1}.png")
-        with self._dpush_lock:
-            on_key = self._dpush_inflight.get(idx, self._dpush_sent.get(idx))
-            if digest == on_key:
-                self._dpush_pending.pop(idx, None)
-                return True
-            queued = self._dpush_pending.get(idx)
-            if queued and queued[1] == digest:
-                return True
-            # Replaced whole, so an upload reading the previous picture keeps
-            # reading the previous picture.
-            tmp = path + ".tmp"
-            img.save(tmp, "PNG")
-            os.replace(tmp, path)
-            self._dpush_pending[idx] = (path, digest)
-            if self._dpush_busy:
-                return True
-            self._dpush_busy = True
-        try:
-            self._app.after(0, self._dpush_begin)
-        except Exception:
-            with self._dpush_lock:
-                self._dpush_busy = False
-            return False
-        return True
+        return self._svc.push_dbutton_image(idx, pil_image)
 
-    def _dpush_begin(self):
-        """On the interface thread, like every other stop of the monitor."""
-        try:
-            was_running = self._stop_cpu_proc()
-        except Exception:
-            was_running = False
-        with self._dpush_lock:
-            self._dpush_resume = self._dpush_resume or was_running
-        threading.Thread(target=self._dpush_run, args=(was_running,),
-                         daemon=True).start()
-
-    def _dpush_run(self, was_running):
-        # The controller hands the keyboard back on its way out; the manual
-        # upload gives it the same moment before claiming it again.
-        time.sleep(2.5 if was_running else 0.5)
-        while True:
-            with self._dpush_lock:
-                batch = dict(self._dpush_pending)
-                self._dpush_pending.clear()
-                self._dpush_inflight = {i: d for i, (_f, d) in batch.items()}
-                if not batch:
-                    self._dpush_busy = False
-                    resume, self._dpush_resume = self._dpush_resume, False
-                    if resume:
-                        # Booked under the lock: a push that arrives now books
-                        # its own pause behind this restart, never before it,
-                        # so a monitor and an upload never hold the keyboard
-                        # at once.
-                        try:
-                            self._app.after(0, self._start_cpu_auto)
-                        except Exception:
-                            pass
-                    return
-            for idx, (path, digest) in sorted(batch.items()):
-                err = ""
-                try:
-                    done = subprocess.run(self._cmd("upload", str(idx), path),
-                                          capture_output=True, text=True,
-                                          timeout=180)
-                    ok = done.returncode == 0
-                    err = ((done.stderr or "").strip().splitlines() or [""])[-1]
-                except Exception as e:
-                    ok, err = False, str(e)
-                with self._dpush_lock:
-                    self._dpush_inflight.pop(idx, None)
-                    if ok:
-                        self._dpush_sent[idx] = digest
-                    else:
-                        self._dpush_sent.pop(idx, None)
-                if ok:
-                    # The key shows the plugin's picture now, not the library
-                    # one on record: uploading that again must not be refused
-                    # as unchanged.
-                    _save_icon_last(idx, None)
-                else:
-                    print(f"[Everest] D{idx + 1}: plugin picture not uploaded: {err}",
-                          flush=True)
+    # ── Main display ─────────────────────────────────────────────────────────
 
     def _set_main_mode(self, mode):
         self._sync_card_hints()
-        self._main_mode = mode
-        with open(MAIN_MODE_FILE, "w") as f:
-            f.write(mode)
         self._main_status.configure(text="", text_color=FG2)
-
-        was_running = self._cpu_proc and self._cpu_proc.poll() is None
-        if was_running:
-            self._cpu_proc.terminate()
-            _wait_for_controller(self._cpu_proc)
-            self._cpu_proc = None
-
-        just_uploaded  = self._main_just_uploaded
-        self._main_just_uploaded = False
-        needs_monitor  = (mode != "image")
-        _FROZEN        = getattr(sys, "frozen", False)
-
-        def run():
-            delay = 2.0 if just_uploaded else 0.8 if was_running else 0.5
-            if just_uploaded:
-                self._app.after(0, lambda: self._main_status.configure(
-                    text=self.T("waiting_for_keyboard"), text_color=YLW))
-            time.sleep(delay)
-            pkill = "basecamp-controller.*cpu" if _FROZEN else r"emax_controller\.py.*cpu"
-            subprocess.run(["pkill", "-f", pkill], capture_output=True)
-            time.sleep(0.3)
-            r = subprocess.run(self._cmd("main-mode", mode), capture_output=True)
-            if r.returncode != 0:
-                err = (r.stderr.decode(errors="replace").strip().splitlines() or [""])[-1]
-                self._app.after(0, lambda: self._main_status.configure(
-                    text=f"{mode}: {err or 'error'}", text_color=RED))
-                return
-            if needs_monitor:
-                time.sleep(0.3)
-                self._app.after(0, self._start_cpu_auto)
-        threading.Thread(target=run, daemon=True).start()
+        self._svc.set_main_mode(mode)
 
     def _upload_main_image(self):
         result = pick_main_library_image(self._app, self._app)
         if result is None:
             return
         path, gif_frame, thumb_fname = result
-
-        stored   = _load_icon_last().get("main")
-        resolved = thumb_fname or _compute_main_lib_hash(path, gif_frame)
-        if resolved and resolved == stored:
+        if self._svc.upload_main_image(path, gif_frame, thumb_fname) is None:
             self._main_status.configure(
                 text=self.T("main_display_unchanged"), text_color=FG2)
             return
-
         self._main_status.configure(text=self.T("main_display_uploading"), text_color=BLUE)
         self._main_bar.set(0)
 
-        was_running = self._cpu_proc and self._cpu_proc.poll() is None
-        if was_running:
-            self._cpu_proc.terminate()
-            _wait_for_controller(self._cpu_proc)
-            self._cpu_proc = None
+    def _show_main_mode(self, mode):
+        keys = getattr(self, "_mode_keys", None)
+        if not keys or mode not in keys:
+            return
+        label = self._mode_labels[keys.index(mode)]
+        if self._main_mode_var.get() != label:
+            self._main_mode_var.set(label)
+        self._sync_card_hints()
 
-        need_mode_switch = (self._main_mode != "image")
-        after_reset      = self._after_dial_reset
-        self._after_dial_reset = False
+    # ── What the service says ─────────────────────────────────────────────────
 
-        def do_upload():
-            time.sleep(2.5 if was_running else 0.5)
-            if need_mode_switch and not after_reset:
-                self._main_mode = "image"
-                subprocess.run(self._cmd("main-mode", "image"), capture_output=True)
-                time.sleep(0.3)
-            extras = ["--frame", str(gif_frame)] if gif_frame else []
-            if after_reset:
-                extras.append("--activate-custom")
-            cmd    = self._cmd("upload-main", path, *extras)
-            ok     = False
-            err_hint = ""
-            for attempt in range(3):
-                if attempt > 0:
-                    self._app.after(0, lambda a=attempt: self._main_status.configure(
-                        text=f"Retry {a}/2…", text_color=YLW))
-                    time.sleep(2.0)
-                    self._app.after(0, lambda: self._main_bar.set(0))
-                # Merge stderr into stdout so we drain a single pipe — avoids
-                # the classic deadlock where a full stderr buffer blocks the
-                # subprocess while we're stuck in proc.wait().
-                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                                        stderr=subprocess.STDOUT, text=True)
-                last_non_progress = ""
-                for line in proc.stdout:
-                    if line.startswith("PROGRESS:"):
-                        try:
-                            pct = int(line.strip()[9:])
-                            self._app.after(0, lambda v=pct: self._main_bar.set(v / 100.0))
-                        except ValueError:
-                            pass
-                    else:
-                        stripped = line.rstrip()
-                        if stripped:
-                            last_non_progress = stripped
-                        print(line, end="", flush=True)
-                proc.wait()
-                ok       = proc.returncode == 0
-                err_hint = last_non_progress
-                if ok:
-                    break
+    def _on_core_event(self, topic, p):
+        what = topic.rsplit(".", 1)[-1]
+        if what == "monitor":
+            self._show_monitor_state(p)
+        elif what == "main_mode":
+            self._show_main_mode(p.get("mode"))
+        elif what == "buttons_changed":
+            # Like gui.py's set_key: the values follow, the editor's layout
+            # is redrawn when the screen is next built.
+            for i, b in enumerate((p.get("buttons") or [])[:4]):
+                if self._btn_type[i].get() != b.get("type", "shell"):
+                    self._btn_type[i].set(b.get("type", "shell"))
+                if self._btn_action[i].get() != b.get("action", ""):
+                    self._btn_action[i].set(b.get("action", ""))
+        elif what == "clock":
+            label = _STYLE_LABELS.get(p.get("style"))
+            if label and self._current_style.get() != label:
+                self._current_style.set(label)
+            if p.get("format") and self._clock_format.get() != p["format"]:
+                self._clock_format.set(p["format"])
+            self._sync_card_hints()
+        elif what == "rgb_applied" and p.get("kind") == "effect":
+            ok = p.get("ok")
+            self._rgb_status.configure(
+                text=self.T("rgb_applied") if ok
+                else f"{self.T('rgb_error')}: {p.get('error', '')}",
+                text_color=GRN if ok else RED)
+        elif what in ("job_progress", "job_done"):
+            self._on_job(what, p)
 
-            if ok:
-                new_fname = thumb_fname or _save_to_main_library(path, gif_frame)
-                if new_fname:
-                    _save_icon_last("main", new_fname)
-
-            def finish():
-                self._main_bar.set(0)
+    def _on_job(self, what, p):
+        kind = p.get("kind")
+        done = what == "job_done"
+        ok = p.get("ok")
+        err = p.get("error") or ""
+        if kind == "time_sync" and done:
+            label = _STYLE_LABELS.get(p.get("style"), p.get("style"))
+            self._style_status.configure(
+                text=self.T("style_active", style=label) if ok else self.T("style_error"),
+                text_color=GRN if ok else RED)
+        elif kind == "reset_buttons" and done:
+            self._numpad_info.configure(
+                text=self.T("reset_buttons_done") if ok else self.T("reset_buttons_error"),
+                text_color=GRN if ok else RED)
+        elif kind == "main_mode":
+            if not done and p.get("stage") == "waiting":
                 self._main_status.configure(
-                    text=(self.T("main_display_uploaded") if ok
-                          else f"{self.T('main_display_error')} — {err_hint}" if err_hint
-                          else self.T("main_display_error")),
-                    text_color=GRN if ok else RED)
-                if ok:
-                    self._main_mode = "image"
-                    self._main_mode_var.set(self._mode_labels[0])
-                    self._main_just_uploaded = True
-            self._app.after(0, finish)
-
-        threading.Thread(target=do_upload, daemon=True).start()
+                    text=self.T("waiting_for_keyboard"), text_color=YLW)
+            elif done and not ok:
+                self._main_status.configure(
+                    text=f"{p.get('mode')}: {err or 'error'}", text_color=RED)
+        elif kind == "main_upload":
+            if not done:
+                if p.get("stage") == "retry":
+                    self._main_status.configure(
+                        text=f"Retry {p.get('attempt')}/{p.get('tries', 2)}…",
+                        text_color=YLW)
+                elif p.get("pct") is not None:
+                    self._main_bar.set(p["pct"] / 100.0)
+                return
+            self._main_bar.set(0)
+            self._main_status.configure(
+                text=(self.T("main_display_uploaded") if ok
+                      else f"{self.T('main_display_error')} — {err}" if err
+                      else self.T("main_display_error")),
+                text_color=GRN if ok else RED)
 
     # ── Public interface for App ───────────────────────────────────────────────
 
@@ -1446,12 +1078,7 @@ class EverestMaxPanel(ctk.CTkFrame):
         # starts and stops, so on a language change they keep whichever words
         # were current at the time. Write them again from the state itself.
         if hasattr(self, "_btn_cpu"):
-            running = getattr(self, "_cpu_proc", None) is not None \
-                and self._cpu_proc.poll() is None
-            self._btn_cpu.configure(
-                text=self.T("monitor_stop") if running else self.T("monitor_start"))
-            self._cpu_status.configure(
-                text=self.T("monitor_running") if running else self.T("monitor_stopped"))
+            self._show_monitor_state(self._svc.monitor_state())
         if hasattr(self, "_btn_type_menus"):
             new_labels = self._numpad_type_labels_fn()
             type_internal = self._numpad_type_internal_fn()

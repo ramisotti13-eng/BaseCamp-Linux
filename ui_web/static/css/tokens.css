@@ -1,0 +1,33 @@
+/* Fonts: bundled, no request leaves the machine (SIL OFL, see fonts/OFL-*.txt) */
+@font-face { font-family: "Ropa Sans"; font-style: normal; font-weight: 400; font-display: swap;
+  src: url(../fonts/RopaSans-Regular.ttf) format("truetype"); }
+@font-face { font-family: "Ropa Sans"; font-style: italic; font-weight: 400; font-display: swap;
+  src: url(../fonts/RopaSans-Italic.ttf) format("truetype"); }
+@font-face { font-family: Roboto; font-style: normal; font-weight: 100 900; font-stretch: 75% 100%; font-display: swap;
+  src: url(../fonts/Roboto-Variable.ttf) format("truetype"); }
+
+/* Colours of the BaseCamp-Linux logo */
+:root {
+  --logo-blue: #0038e2;
+  --logo-blue-hi: #2f5dff;
+  --beak: #fd9d02;
+  --beak-hi: #ffb534;
+  --ink: #000000;
+  --night: #141f3a;
+  --wedge: #17181e;
+
+  --bg: #0f1116;
+  --bar: #08090c;
+  --card: #181a21;
+  --card-2: #20232c;
+  --card-3: #2f3442;
+  --line: #2a2e3a;
+  --fg: #f4f6ff;
+  --fg-dim: #9aa3bf;
+  --fg-faint: #6b7493;
+  --danger: #ff5c6c;
+  --ok: #3ecf7a;
+
+  --font-head: "Ropa Sans", "Segoe UI", sans-serif;
+  --font-text: Roboto, "Segoe UI", system-ui, sans-serif;
+}

@@ -8,6 +8,7 @@ Everest Max, or run background services.
 
 ## Table of Contents
 
+0. [What Changes in 4.0](#what-changes-in-40)
 1. [Quick Start](#quick-start)
 2. [Plugin Structure](#plugin-structure)
 3. [Manifest (plugin.json)](#manifest)
@@ -33,6 +34,60 @@ Everest Max, or run background services.
     - [Notification Sound (Action)](#example-notification-sound)
     - [LED API Server (Service)](#example-led-api-server)
     - [Now Playing (Panel + Service + Action + DisplayPad)](#example-now-playing)
+
+---
+
+## What Changes in 4.0
+
+Version 4.0 moves the application's logic out of the CustomTkinter windows
+into a UI-free `core/` package, so that other interfaces (a web UI, a Windows
+port) can use it later. For plugin authors this is almost invisible.
+
+**Unchanged:**
+
+- The plugin folder, `plugin.json` and the `Plugin(ctx)` constructor.
+- Every `PluginContext` method and its behaviour (translations, config,
+  `schedule`, `get_displaypad()`, `push_displaypad_image`,
+  `register_action_type`, ...). `from shared.plugin_api import PluginContext`
+  stays the public import.
+- **Service plugins and action plugins work as before.** Services are started
+  after the window is up, action handlers run in daemon threads, page-bound
+  services still follow the DisplayPad page.
+- `from shared.plugins import PluginManager` still works; the code now lives
+  in `core/plugins.py` and `shared/plugins.py` re-exports it.
+
+**Panel plugins stay CustomTkinter-only for now.** `create_panel()` returns a
+`CTkFrame`, which only the CustomTkinter interface can show. A web interface
+will not show panel plugins until a toolkit-neutral panel API exists. Write
+the logic of such a plugin as a service or action plugin and keep the panel a
+thin view of it, and it will be easy to give it another front end. A plugin
+that needs no widgets should not import `customtkinter` at all; today it is
+harmless, but it ties the plugin to that toolkit.
+
+**Fixed in 4.0:** disabling or reloading a plugin now removes the action types
+it registered by plugin id. Before, they were matched by the handler's bound
+instance, so an action registered with a lambda or a plain function survived
+a disable and stayed in the button editor. Nothing to change in your plugin;
+if you worked around it, you can stop.
+
+**Everest Max D-keys.** `ctx.push_keyboard_dbutton_image()` works as soon as
+the keyboard is plugged in, whether or not its screen has been opened. A
+plugin action type assigned to a D-key does nothing in the keyboard's button
+daemon (a separate process that cannot reach your handler); before 4.0 the
+daemon ran the key's value as a shell command instead. Plugin action types
+keep working on the DisplayPad and the MacroPad.
+
+**Timers.** `ctx.schedule()` and `ctx.schedule_repeat()` run on the core's
+scheduler, which under the current interface is still the window's main
+thread, so callbacks may touch widgets as before. Cancelling a repeat from
+inside its own callback now works.
+
+**Core services.** The core has services with events and commands
+(`displaypad.*`, `makalu.*`, `macros.*`, `plugins.*`, ...). They are not part
+of the plugin API yet: `PluginContext` does not hand them out, and names and
+payloads may still change before they are declared stable. Build on
+`PluginContext`; this guide will say here when a service or event becomes
+something a plugin may rely on.
 
 ---
 
@@ -630,7 +685,7 @@ To test your plugin module standalone:
 ```python
 python3 -c "
 import sys; sys.path.insert(0, '/path/to/mountain-time-sync')
-from shared.plugins import PluginManager
+from core.plugins import PluginManager      # shared.plugins re-exports it
 from shared.plugin_api import PluginContext
 
 pm = PluginManager()
