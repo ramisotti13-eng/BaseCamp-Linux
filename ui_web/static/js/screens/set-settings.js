@@ -6,6 +6,7 @@ import { h, append, clear, toast, makeScope, confirmDialog } from "../ui.js";
 const put = (host, ...kids) => append(host, kids);
 import { frame, panel, errText } from "./set-common.js";
 import { errMsg } from "../profiles-page.js";
+import { openHistory } from "../update-history.js";
 
 let scope = null;
 let lastTab = "general";              // the tab shown last, kept while the app runs
@@ -67,7 +68,7 @@ export async function mount(el) {
   }
 
   // ── start-up ───────────────────────────────────────────────────────────────
-  const appHost = h("div", { class: "checks" });
+  const appHost = h("div", { class: "checks", id: "settings-app-row" });
   function drawApp(s) {
     clear(appHost);
     appHost.append(
@@ -75,6 +76,19 @@ export async function mount(el) {
         const r = await bc.call("settings.set_autostart", { enabled: v });
         if (!r.ok) { box.checked = !v; toast(errText(r), "err"); } else toast(t("settings_saved"), "ok");
       }));   // no splash option: this interface has no splash screen (see ui_web/app.py)
+    // The classic interface of 3.x: chosen here, back again in its own settings.
+    // On the autostart line: a row of its own would make the page scroll at 1100x700.
+    appHost.append(h("button", { class: "btn uiswitch", type: "button", title: t("settings_ui_classic_hint"),
+      onclick: toClassic }, t("settings_ui_classic_btn")));
+  }
+  async function toClassic() {
+    const ok = await confirmDialog({ title: t("settings_ui_classic"), message: t("settings_ui_classic_confirm"),
+      okLabel: t("settings_ui_restart") });
+    if (!ok) return;
+    const r = await bc.call("settings.set_interface", { interface: "classic" });
+    if (!r.ok) { toast(errText(r), "err"); return; }
+    const rr = await bc.call("shell.restart");
+    if (rr && rr.ok === false) toast(errText(rr), "err");
   }
 
   // ── profiles: they live on each device's page now; left-over 3.x folders can still be imported ──
@@ -122,13 +136,15 @@ export async function mount(el) {
     } else {
       if (U.state === "error") updHost.append(h("div", { class: "msg err", role: "alert" }, updateError(U.errCode, U.error)));
       if (U.info) {
-        line(t("settings_update_available", { ver: U.info.version }));
+        line([t("settings_update_available", { ver: U.info.version }), " ",
+          h("button", { class: "linkbtn", type: "button", onclick: () => openHistory({ focus: U.info.version }) }, t("upd_whats_new"))]);
         if (U.canInstall && U.info.url) updHost.append(h("div", { class: "actions" },
           h("button", { class: "btn primary", type: "button", onclick: download }, t("settings_update_button"))));
         else updHost.append(h("div", { class: "help" }, t(UPDATE_HINTS[U.type] || UPDATE_HINTS.source)));
       } else if (U.checked) line(t("settings_update_current", { ver: U.version }));
       updHost.append(h("div", { class: "actions", style: "margin-top:12px" },
-        h("button", { class: "btn", type: "button", disabled: U.checking, onclick: checkNow }, U.checking ? t("pluginmgr_loading") : t("set_update_check"))));
+        h("button", { class: "btn", type: "button", disabled: U.checking, onclick: checkNow }, U.checking ? t("pluginmgr_loading") : t("set_update_check")),
+        h("button", { class: "btn", type: "button", onclick: () => openHistory() }, t("upd_history_btn"))));
     }
   }
   async function checkNow() {

@@ -51,7 +51,7 @@ a = Analysis(
     ['appentry.py'],
     pathex=[],
     binaries=[],
-    datas=_BUNDLE_VERSION + [('lang', 'lang'), ('resources', 'resources'), ('default_presets.json', '.'), ('default_makalu_presets.json', '.'), ('default_presets_60.json', '.'), ('plugins', 'plugins'),
+    datas=_BUNDLE_VERSION + [('lang', 'lang'), ('resources', 'resources'), ('default_presets.json', '.'), ('default_makalu_presets.json', '.'), ('default_presets_60.json', '.'), ('CHANGELOG.md', '.'), ('plugins', 'plugins'),
            ('ui_web/static', 'ui_web/static')],
     hiddenimports=['PIL', 'PIL._tkinter_finder', 'PIL._imagingtk', 'psutil', 'pystray', 'obsws_python',
                    'devices.macros', 'devices.macros.panel', 'shared.macros',

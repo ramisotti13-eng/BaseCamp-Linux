@@ -25,6 +25,7 @@ import threading
 import urllib.request
 from dataclasses import asdict, dataclass
 
+from core import changelog
 from core.commands import CommandError
 from core.platform import install as _install
 from core.service import Service
@@ -42,10 +43,20 @@ class UpdateInfo:
     url: str = ""           # what to download: source tarball, else AppImage
     sha_url: str = ""       # checksum sidecar of the source tarball
     kind: str = "appimage"  # "source" | "appimage"
+    notes: str = ""         # the release's notes on GitHub (Markdown), cut at MAX_NOTES
 
     def as_dict(self):
         return asdict(self)
 
+
+#: The name of a 4.x source patch: `overlay4-<version>.tar.gz` and its
+#: `.sha256`. 3.x looks for `source-` and would put a 4.x patch on a 3.x
+#: AppImage, which has no web view for the 4.0 interface; under this name a
+#: 3.x installation never sees the patch and takes the full AppImage.
+OVERLAY_PREFIX = "overlay4-"
+
+#: The release notes an update brings along are cut here.
+MAX_NOTES = 20000
 
 _PRE_RANK = {"dev": 0, "alpha": 1, "a": 1, "beta": 2, "b": 2, "rc": 3}
 
@@ -96,9 +107,10 @@ class UrllibHttp:
 class UpdateService(Service):
     name = "update"
 
-    def __init__(self, app, version, home=None, http=None):
+    def __init__(self, app, version, home=None, http=None, config_dir=None):
         super().__init__(app)
         self.version = version
+        self.config_dir = config_dir
         if home is None:
             from core.platform.user import resolve_real_user
             home = resolve_real_user()[0]
@@ -163,18 +175,22 @@ class UpdateService(Service):
         # back to the AppImage path, because an unsigned tarball is the
         # easiest tamper point on the update flow (compromised release ->
         # arbitrary code).
+        # A patch only within the same major version: a new one may need what
+        # the running AppImage does not carry (as 4.0 needed a web view).
         source_url = ""
         source_sha_url = ""
         url = ""
-        if install_type == "appimage":
+        same_major = version_tuple(tag)[0] == version_tuple(self.version)[0]
+        if install_type == "appimage" and same_major:
             for asset in assets:
                 name = (asset.get("name") or "").lower()
-                if name.startswith("source-") and name.endswith(".tar.gz"):
+                if name.startswith(OVERLAY_PREFIX) and name.endswith(".tar.gz"):
                     source_url = asset.get("browser_download_url") or ""
-                elif name.startswith("source-") and name.endswith(".tar.gz.sha256"):
+                elif name.startswith(OVERLAY_PREFIX) and name.endswith(".tar.gz.sha256"):
                     source_sha_url = asset.get("browser_download_url") or ""
             if not source_sha_url:
                 source_url = ""
+        if install_type == "appimage":
             variant = _install.appimage_variant(os.environ.get("APPIMAGE", "") or "")
             for asset in assets:
                 name = (asset.get("name") or "").lower()
@@ -187,9 +203,11 @@ class UpdateService(Service):
                     if name.endswith(".appimage"):
                         url = asset.get("browser_download_url") or ""
                         break
+        notes = data.get("body") if isinstance(data.get("body"), str) else ""
         return UpdateInfo(version=ver, install_type=install_type,
                           url=source_url or url, sha_url=source_sha_url,
-                          kind="source" if source_url else "appimage")
+                          kind="source" if source_url else "appimage",
+                          notes=notes[:MAX_NOTES])
 
     def check_async(self):
         """check() on a thread; the event is published on the scheduler."""
@@ -414,7 +432,49 @@ class UpdateService(Service):
             return {"restarting": False}    # only reached when nothing was replaced
 
         return {"check": check, "status": status, "download": download,
-                "restart": restart}
+                "restart": restart, "history": self.history,
+                "whats_new": self.whats_new, "seen": self.mark_seen}
+
+    # ── Version history ────────────────────────────────────────────────────
+    def _config_dir(self):
+        if self.config_dir is not None:
+            return self.config_dir
+        from shared import config
+        return config.CONFIG_DIR
+
+    def history(self):
+        """The shipped CHANGELOG.md by version, newest first: {installed,
+        entries: [{version, date, body}], update: {version, notes} | None}."""
+        upd = None
+        if self.info is not None:
+            upd = {"version": self.info.version, "notes": self.info.notes}
+        return {"installed": self.version, "entries": changelog.load(), "update": upd}
+
+    def whats_new(self):
+        """{version, show}: show is True once after the application was
+        updated (the version differs from the one last seen). A first start
+        records the version and shows nothing."""
+        path = changelog.seen_path(self._config_dir())
+        try:
+            with open(path, encoding="utf-8") as f:
+                last = f.read().strip()
+        except OSError:
+            last = None
+        if last is None:
+            self.mark_seen()
+            return {"version": self.version, "show": False}
+        return {"version": self.version, "show": last != self.version}
+
+    def mark_seen(self):
+        """The installed version's notes were offered: not again."""
+        d = self._config_dir()
+        try:
+            os.makedirs(d, exist_ok=True)
+            with open(changelog.seen_path(d), "w", encoding="utf-8") as f:
+                f.write(self.version)
+        except OSError as e:
+            log.warning("could not store the last seen version: %s", e)
+        return {"version": self.version}
 
     def can_install(self):
         """True when this installation can replace itself (an AppImage that

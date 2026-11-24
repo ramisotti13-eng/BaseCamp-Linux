@@ -320,6 +320,16 @@ class SettingsPanel(ctk.CTkFrame):
                        self._do_reset_pickers, width=140,
                        height=UI.CTRL_H_SM).pack(side="right")
 
+        # Back to the new interface (4.0): chosen there, undone here.
+        ui_row = ctk.CTkFrame(appc.body, fg_color="transparent")
+        ui_row.pack(fill="x", pady=(6, 0))
+        ctk.CTkLabel(ui_row, text=app.T("settings_ui_web_label"),
+                     font=(UI.FONT_FAMILY, 11), text_color=FG2,
+                     anchor="w").pack(side="left")
+        UI.GhostButton(ui_row, app.T("settings_ui_web"),
+                       self._do_switch_to_web, width=140,
+                       height=UI.CTRL_H_SM).pack(side="right")
+
         # ── Backup ──
         bak = UI.Card(grid, title=app.T("settings_backup_section"))
         bak.grid(row=2, column=0, sticky="nsew", padx=(0, UI.S3))
@@ -460,6 +470,18 @@ class SettingsPanel(ctk.CTkFrame):
         except Exception:
             pass
         self._app._on_lang_change(val)
+
+    def _do_switch_to_web(self):
+        app = self._app
+        if not UI.ask_yes_no(self, app.T("settings_ui_web_label"), app.T("settings_ui_web_confirm"),
+                             app.T("settings_ui_restart"), app.T("ui_cancel")):
+            return
+        try:
+            app._settings.set_interface("web")
+        except Exception as e:
+            self._status.configure(text=str(e), text_color=RED)
+            return
+        app.restart_app()
 
     def _do_reset_pickers(self):
         self._app._settings.reset_last_dirs()
@@ -626,7 +648,7 @@ class UpdateAvailableDialog(ctk.CTkToplevel):
 
 # ── App ────────────────────────────────────────────────────────────────────────
 
-APP_VERSION = "4.0.0-beta.1"
+APP_VERSION = "4.0.0-beta.2"
 
 #: Why the web interface could not start, when run() started this one in its
 #: place (None otherwise). The window says so once per version.
@@ -691,6 +713,9 @@ class App(ctk.CTk):
         # is this window's main loop, so the logic that moves out of the
         # panels keeps running on the thread it ran on before. Services are
         # added as they are needed; core.start() comes after the device ones.
+        # A 3.x configuration is saved once before 4.x first touches it.
+        from core import firstrun
+        firstrun.backup_before_first_start(CONFIG_DIR)
         self.core = CoreApp(scheduler=TkScheduler(self))
 
         # i18n: the strings live in the core's i18n service; _lang, _lang_code
@@ -1833,6 +1858,24 @@ class App(ctk.CTk):
             info, on_progress=on_progress, on_installing=on_installing,
             on_done=on_done, on_error=failed)
 
+    def restart_app(self):
+        """Start the application anew (the interface chosen in the
+        settings), as after an update."""
+        tray = getattr(self, "_tray_proc", None)
+        if tray is not None and tray.poll() is None:
+            try:
+                tray.terminate()
+                tray.wait(timeout=2)
+            except Exception:
+                try:
+                    tray.kill()
+                except Exception:
+                    pass
+        from core.platform import install
+        from shared.macros import clean_child_env
+        install.restart_self(os.environ.get("APPIMAGE", ""), clean_child_env())
+        self.destroy()
+
     def restart_after_update(self):
         """Re-exec the (now updated) AppImage. Kills the tray helper first:
         execv preserves the PID, so the helper would otherwise sit on the new
@@ -2097,6 +2140,15 @@ Categories=Utility;
     print("Done. BaseCamp Linux should now appear in your app menu.")
 
 
+def wants_classic(args, chosen):
+    """Start the classic interface? --classic on the command line, or the
+    classic one chosen in the settings unless --web or --demo (the new
+    interface's demo mode) asks for the new one."""
+    if "--classic" in args:
+        return True
+    return chosen == "classic" and "--web" not in args and "--demo" not in args
+
+
 def run():
     """Real entry point — kept as a function so the AppImage's tiny
     appentry.py shim can call it after wiring up the source-overlay path.
@@ -2135,14 +2187,20 @@ def run():
     # pywebview. --classic skips the question; --web insists on the web
     # interface and says why it cannot start rather than falling back.
     global _WEB_FALLBACK
-    if "--classic" in sys.argv:
+    import shared.config as _config
+    # The interface chosen in the settings (shared/config.py INTERFACE_FILE);
+    # --classic and --web on the command line come first, and --demo is the
+    # new interface's.
+    if wants_classic(sys.argv[1:], _config.load_interface()):
         if "--demo" in sys.argv:
             print("[BaseCamp] --demo is the new interface's; the classic one has "
                   "no demo mode.", file=sys.stderr, flush=True)
             sys.exit(2)
-        # Chosen, so the autostart entry this interface writes starts it too.
-        import shared.config as _config
-        _config.AUTOSTART_UI = "classic"
+        if "--classic" in sys.argv:
+            # Asked for on the command line, so the autostart entry this
+            # interface writes starts it too (a choice in the settings needs
+            # no flag: the plain entry follows it).
+            _config.AUTOSTART_UI = "classic"
     else:
         strict = "--web" in sys.argv
         try:

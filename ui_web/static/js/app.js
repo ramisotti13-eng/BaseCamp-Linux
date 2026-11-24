@@ -6,6 +6,7 @@ import * as devices from "./devices.js";
 import * as safety from "./makalu-safety.js";
 import { h, icon, clear, toast } from "./ui.js";
 import * as shell from "./shell-state.js";
+import { openHistory } from "./update-history.js";
 import { startToasts as startProfileToasts } from "./profiles-page.js";
 
 const ROUTES = [
@@ -164,6 +165,17 @@ function announcePlugins() {
     { ms: 15000, action: { label: t("plugin_updates_show"), fn: () => { location.hash = "#/settings/plugins"; } } });
 }
 
+// After an update: once, "Updated to X" with the way to its notes. Shown when
+// the window is up (a start in the tray waits), and only then marked as seen.
+let updatedTo = null;
+function announceUpdated() {
+  if (!updatedTo || !shell.state.visible) return;
+  const ver = updatedTo;
+  updatedTo = null;
+  toast(t("upd_updated_toast", { ver }), "ok", { ms: 15000, action: { label: t("upd_whats_new"), fn: () => openHistory({ focus: ver }) } });
+  bc.call("update.seen");
+}
+
 async function initShell() {
   shell.onChange(() => renderGearBadge());
   bc.on("update.available", (_t, p) => { if (p && p.version) { shell.set({ update: p }); announceUpdate(); } });
@@ -176,7 +188,7 @@ async function initShell() {
     const visible = !!(p && p.visible);
     shell.set({ visible });
     // A moment after the window is drawn, so the message lands on the screen (gui: 600 ms).
-    if (visible) setTimeout(() => { if (waitingPlugins) announcePlugins(); announceUpdate(); }, 600);
+    if (visible) setTimeout(() => { if (waitingPlugins) announcePlugins(); announceUpdate(); announceUpdated(); }, 600);
   });
   // Pages from the control socket (`basecamp --ctl '{"cmd":"page",...}'`).
   bc.on("ui.page", (_t, p) => { const r = p && pageRoute(p.page); if (r) location.hash = r; });
@@ -186,6 +198,8 @@ async function initShell() {
   if (up.ok && up.update) shell.set({ update: up.update });
   if (pl.ok) shell.set({ plugins: Number(pl.count || 0) });
   announceUpdate();
+  const wn = await bc.call("update.whats_new");
+  if (wn.ok && wn.show) { updatedTo = wn.version; announceUpdated(); }
 }
 
 function renderWindowControls() {

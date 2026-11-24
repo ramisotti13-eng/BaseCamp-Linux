@@ -136,6 +136,7 @@ AUTOSTART_FILE   = os.path.join(
     _real_home, ".config", "autostart", "basecamp-linux.desktop"
 )
 SPLASH_FILE      = os.path.join(CONFIG_DIR, "splash")
+INTERFACE_FILE   = os.path.join(CONFIG_DIR, "interface")
 WINDOW_FILE      = os.path.join(CONFIG_DIR, "window")
 ZONE_FILE        = os.path.join(CONFIG_DIR, "zone_colors.json")
 RGB_FILE         = os.path.join(CONFIG_DIR, "rgb_settings.json")
@@ -652,6 +653,34 @@ def save_autostart_enabled(val, ui=None):
             os.remove(AUTOSTART_FILE)
         except FileNotFoundError:
             pass
+
+
+# ── Interface ──────────────────────────────────────────────────────────────────
+
+#: Which interface a plain start opens: "web" (the default since 4.0) or
+#: "classic" (the CustomTkinter one of 3.x). Chosen in either interface's
+#: settings; --classic and --web on the command line come first (gui.run).
+INTERFACES = ("web", "classic")
+
+
+def load_interface():
+    try:
+        with open(INTERFACE_FILE) as f:
+            ui = f.read().strip().lower()
+    except OSError:
+        return "web"
+    return ui if ui in INTERFACES else "web"
+
+
+def save_interface(ui):
+    if ui not in INTERFACES:
+        raise ValueError("interface must be one of %s" % ", ".join(INTERFACES))
+    with open(INTERFACE_FILE, "w") as f:
+        f.write(ui)
+    # An autostart entry with --classic would start the classic interface
+    # whatever is chosen: the plain entry follows the choice.
+    if load_autostart_enabled():
+        save_autostart_enabled(True, ui="web")
 
 
 # ── Splash ─────────────────────────────────────────────────────────────────────

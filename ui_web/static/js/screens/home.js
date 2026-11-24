@@ -1,4 +1,4 @@
-// Home: a card per plugged-in device, three banners, footer. Devices that are not plugged in are left out.
+// Home: a card per plugged-in device, two banners, footer (GitHub and Ko-fi). Devices that are not plugged in are left out.
 import bc from "../bridge.js";
 import { t } from "../i18n.js";
 import * as devices from "../devices.js";
@@ -54,6 +54,14 @@ function banner(cls, eyebrow, title, url, cta) {
     cta ? h("span", { class: "cta", "aria-hidden": "true" }, cta) : null);
 }
 
+/** A small icon link in the footer, opened in the browser. */
+function footLink(url, label, ic) {
+  const i = icon(ic);
+  i.setAttribute("width", 20);
+  i.setAttribute("height", 20);
+  return h("a", { href: url, "aria-label": label, title: label, onclick: (e) => { e.preventDefault(); bc.openExternal(url); } }, i);
+}
+
 function render(el, version) {
   clear(el);
   const list = devices.DEVICES.filter((d) => devices.isPresent(d.id));
@@ -62,10 +70,10 @@ function render(el, version) {
       : h("p", { class: "home-empty" }, t("home_no_devices")),
     h("div", { class: "banners" },
       banner("b1", t("home_help_eyebrow"), t("home_help_title"), LINKS.help),
-      banner("b2", t("home_plugins_eyebrow"), t("home_plugins_title"), LINKS.plugins, [icon("wrench"), t("home_plugins_btn")]),
-      banner("b3", t("home_kofi_eyebrow"), t("home_kofi_title"), LINKS.kofi, "Ko-fi")),
+      banner("b2", t("home_plugins_eyebrow"), t("home_plugins_title"), LINKS.plugins, [icon("wrench"), t("home_plugins_btn")])),
     h("div", { class: "foot" },
-      h("a", { href: REPO, "aria-label": "GitHub", title: "GitHub", onclick: (e) => { e.preventDefault(); bc.openExternal(REPO); } }, (() => { const i = icon("github"); i.setAttribute("width", 20); i.setAttribute("height", 20); return i; })()),
+      footLink(REPO, "GitHub", "github"),
+      footLink(LINKS.kofi, t("home_kofi_title"), "cup"),
       h("span", { class: "ver" }, version ? t("home_version", { ver: version }) : ""))));
 }
 

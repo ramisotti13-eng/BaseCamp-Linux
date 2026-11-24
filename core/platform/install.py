@@ -87,6 +87,13 @@ def restart_self(appimage, env, execve=os.execve, popen=subprocess.Popen):
     except Exception:
         pass
     try:
-        popen([appimage] if appimage else [sys.executable], env=env)
+        popen([appimage] if appimage else [sys.executable, entry_script()], env=env)
     except Exception:
         pass
+
+
+def entry_script():
+    """gui.py of this tree: what a start from source runs (a bare
+    sys.executable would start an interactive Python)."""
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__)))), "gui.py")

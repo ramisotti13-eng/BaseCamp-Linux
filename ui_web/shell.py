@@ -434,6 +434,7 @@ class Shell:
                                               "tray": self.tray_running()}, replace=True)
         if self.app.service("update") is not None and cmds.has("update.restart"):
             cmds.register("update.restart", self._restart_after_update, replace=True)
+        cmds.register("shell.restart", self.restart, replace=True)
         control = self.app.service("control")
         if control is not None:
             control.attach_ui(screens=self.screens)
@@ -453,6 +454,24 @@ class Shell:
         finally:
             self.quit()
         return {"restarting": False}
+
+    def restart(self, execve=None, popen=None):
+        """Start the application again (the interface chosen in the
+        settings): the tray helper first, then the same program anew, then
+        this window closes if the process was not replaced."""
+        from core.platform import install
+        from shared.macros import clean_child_env
+        self.stop_tray()
+        kwargs = {}
+        if execve:
+            kwargs["execve"] = execve
+        if popen:
+            kwargs["popen"] = popen
+        try:
+            install.restart_self(os.environ.get("APPIMAGE", ""), clean_child_env(), **kwargs)
+        finally:
+            self.quit()
+        return {"restarting": True}
 
     # ── Start-up ───────────────────────────────────────────────────────────
     def start(self):

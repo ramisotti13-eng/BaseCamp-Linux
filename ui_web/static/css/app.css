@@ -87,7 +87,7 @@ svg { display: block; }
 .dev .pic.mouse { right: 36px; }
 .dev.off { opacity: .5; }
 .home-empty { color: var(--fg-dim); margin: 8px 0 30px; }
-.banners { margin-top: auto; display: grid; grid-template-columns: repeat(3, 1fr); min-height: clamp(110px, 19vh, 160px); flex: none; }
+.banners { margin-top: auto; display: grid; grid-template-columns: repeat(2, 1fr); min-height: clamp(110px, 19vh, 160px); flex: none; }
 .banner { position: relative; padding: clamp(20px, 4.2vh, 36px) 34px; overflow: hidden; display: block; color: #fff; text-decoration: none; }
 .banner .bar { position: absolute; left: 34px; top: clamp(18px, 4vh, 34px); width: 4px; height: 52px; background: #fff; }
 .banner .e { margin-left: 26px; font-size: 15px; opacity: .9; }
@@ -96,8 +96,6 @@ svg { display: block; }
 .banner:focus-visible { outline-offset: -4px; }
 .b1 { background: var(--logo-blue); }
 .b2 { background: linear-gradient(120deg, var(--night), #0b1430); }
-.b3 { background: #ece9e1; color: #111; }
-.b3 .bar { background: #111; }
 .foot { display: flex; align-items: center; gap: 22px; margin-top: 22px; color: var(--fg-dim); flex: none; }
 .foot a { display: inline-flex; color: var(--fg-dim); }
 .foot a:hover { color: var(--fg); }
@@ -915,3 +913,33 @@ svg.e60pic { width: 330px; height: auto; }
 /* D1-D4 pictures fill their key. `.kbf-everest_max .kbf-key { background: ... }` above is a shorthand
    of the same weight and later, and reset the size: the picture was drawn at its own size from the corner. */
 .kbf .kbf-key.dkey { background-size: cover; background-position: center; background-repeat: no-repeat; }
+
+/* The version history (update-history.js, markdown.js) */
+.dialog.wide { width: min(820px, 94vw); }
+.vh { max-height: min(62vh, 560px); overflow: auto; padding-right: 6px; }
+.vh-note { margin: 0 0 10px; }
+.vh-entry { border-top: 1px solid var(--line); padding: 6px 0; }
+.vh-entry > summary { cursor: pointer; display: flex; align-items: baseline; gap: 12px; padding: 6px 0; list-style: none; }
+.vh-entry > summary::-webkit-details-marker { display: none; }
+.vh-entry > summary::before { content: "\25B8"; color: var(--fg-faint); width: 10px; }
+.vh-entry[open] > summary::before { content: "\25BE"; }
+.vh-ver { font-size: 17px; }
+.vh-date { color: var(--fg-faint); font-size: 12px; }
+.vh-badge { margin-left: auto; }
+.md { color: var(--fg-dim); font-size: 13px; line-height: 1.5; padding: 2px 0 8px 22px; }
+.dialog .md p { margin: 4px 0 8px; white-space: normal; }
+.dialog .md ul { margin: 2px 0 8px; padding-left: 18px; }
+.md li { margin: 3px 0; }
+.md strong { color: var(--fg); }
+.md code { font-size: 12px; background: rgba(255,255,255,.06); padding: 0 4px; border-radius: 2px; }
+.md pre { font-size: 12px; background: rgba(255,255,255,.04); padding: 8px; overflow-x: auto; white-space: pre; }
+.md a { color: var(--logo-blue-hi); }
+.md-h { color: var(--fg); margin: 10px 0 4px; font-weight: 600; }
+.md-h1, .md-h2 { font-size: 15px; }
+.md-h3, .md-h4 { font-size: 14px; }
+.md-quote { border-left: 3px solid var(--line); padding-left: 10px; }
+.linkbtn { background: none; border: 0; padding: 0; color: var(--logo-blue-hi); font: inherit; cursor: pointer; text-decoration: underline; }
+.linkbtn:hover { color: var(--fg); }
+/* Settings > Application: the autostart switch and, on its line, the way to the classic interface */
+#settings-app-row { display: flex; align-items: center; gap: 12px; flex-wrap: nowrap; }
+#settings-app-row .uiswitch { margin-left: auto; white-space: nowrap; height: 32px; padding: 0 14px; flex: none; }

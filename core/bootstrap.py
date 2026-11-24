@@ -171,7 +171,9 @@ def build_core(scheduler=None, *, presence=None, transports=None, version="",
     # directory when it is imported, and a caller (the demo mode) has to be
     # able to point it elsewhere first.
     from shared.config import CONFIG_DIR, shipped_path
-    from core import runtime
+    from core import firstrun, runtime
+    # Before any service reads or migrates a 3.x configuration: save it once.
+    firstrun.backup_before_first_start(CONFIG_DIR)
     from core.control import ControlService
     from core.devices import install_all
     from core.devices.registry import DeviceRegistry

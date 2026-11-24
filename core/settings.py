@@ -79,6 +79,19 @@ class SettingsService(Service):
     def autostart(self):
         return self.config.load_autostart_enabled()
 
+    def interface(self):
+        """"web" or "classic": what a plain start opens."""
+        return self.config.load_interface()
+
+    def set_interface(self, ui):
+        """Choose the interface of the next start; the caller restarts."""
+        try:
+            self.config.save_interface(ui)
+        except ValueError as e:
+            raise CommandError(str(e))
+        self.publish("changed", interface=ui)
+        return ui
+
     def set_autostart(self, enabled, ui=None):
         """`ui` "classic" or "web": which interface the entry starts (None:
         shared.config.AUTOSTART_UI, "web" since 4.0, "classic" in a start
@@ -128,6 +141,8 @@ class SettingsService(Service):
             "import_backup": self._cmd_import_backup,
             "set_autostart": self._cmd_set_autostart,
             "set_splash": self._cmd_set_splash,
+            "interface": lambda: {"interface": self.interface()},
+            "set_interface": lambda interface: {"interface": self.set_interface(interface)},
             "get": self._cmd_get,
             "saved_colors": lambda: {"colors": self.saved_colors()},
             "set_saved_colors": lambda colors: {"colors": self.set_saved_colors(colors)},
@@ -171,4 +186,5 @@ class SettingsService(Service):
 
     def _cmd_get(self):
         return {"autostart": self.autostart(), "splash": self.splash(),
+                "interface": self.interface(),
                 "profiles": self.profiles(), "active_profile": self.active_profile()}

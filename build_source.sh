@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
 # Build a source-overlay tarball (no PyInstaller, takes seconds).
 #
-# Output: source-<APP_VERSION>.tar.gz at the repo root, containing the
+# Output: overlay4-<APP_VERSION>.tar.gz at the repo root, containing the
 # user-side Python tree (gui.py + webui.py + core/ + shared/ + devices/ +
 # ui_web/ + plugins/ + lang/ + default_*.json) plus a VERSION file. Upload that tarball to the
 # matching GitHub release; the in-app updater will pick it up and extract
 # it to ~/.local/share/basecamp-linux/source-overlay/ on the user's box.
+#
+# The name is not source-*: 3.x updaters take source-* and would put this 4.x
+# tree on a 3.x AppImage without the web view (core/updates.py,
+# OVERLAY_PREFIX). Under overlay4-* only 4.x picks it up; 3.x takes the
+# release's full AppImage. Never attach a source-* file to a 4.x release.
 #
 # Native code (libusb, hidapi, customtkinter, pywebview and Qt WebEngine) is
 # NOT in here — those still need a full AppImage rebuild when they change.
@@ -34,6 +39,7 @@ cp emax_controller.py           "$ROOT/" 2>/dev/null || true
 cp default_presets.json         "$ROOT/" 2>/dev/null || true
 cp default_presets_60.json      "$ROOT/" 2>/dev/null || true
 cp default_makalu_presets.json  "$ROOT/" 2>/dev/null || true
+cp CHANGELOG.md                 "$ROOT/"      # the version history the app shows
 cp -r lang                      "$ROOT/"
 cp -r shared                    "$ROOT/"
 cp -r core                      "$ROOT/"
@@ -57,7 +63,7 @@ find "$ROOT" -type f -name '*.pyc' -delete 2>/dev/null || true
 
 echo "$VER" > "$ROOT/VERSION"
 
-OUT="source-${VER}.tar.gz"
+OUT="overlay4-${VER}.tar.gz"
 SHA="${OUT}.sha256"
 rm -f "$OUT" "$SHA"
 tar -C "$STAGE" -czf "$OUT" source-overlay

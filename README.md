@@ -101,10 +101,11 @@ distribution. That makes it about 380 MB. The interface of 3.x is still there:
 start the AppImage with `--classic`. If the new interface cannot start on your
 machine, the classic one starts by itself and says why. See [Usage](#usage).
 
-> **Coming from 3.x:** the in-app update brings 4.0 to an older AppImage as a
-> source patch, and a source patch cannot add the web view. That AppImage keeps
-> working with the classic interface and says so once. Download the 4.0
-> AppImage once to get the new interface; your settings stay where they are.
+> **Coming from 3.x:** the in-app update brings 4.0 as the whole AppImage,
+> which replaces the old one in place, so the new interface comes with it. 3.2.5
+> and newer save your settings to a ZIP first, and 4.0 saves them once more
+> before its first start (`mountain-time-sync-backup-before-4.0.zip` beside the
+> settings folder). Your settings stay where they are.
 
 > **MacroPad owners with an older installation:** the pad arrived in 3.1.1, so a
 > `99-mountain.rules` written before that has no line for product id `0x0008`.
@@ -831,7 +832,7 @@ Click "Update now" and the app downloads the new version in the background with 
 
 Source updates are verified against a SHA-256 checksum that ships alongside the tarball on the GitHub release. A tarball without a published checksum is treated as suspect, and a checksum mismatch aborts the install before anything is extracted. The extraction itself uses Python's `tarfile.data_filter`, which refuses path-traversal entries, symlinks pointing outside the destination, and setuid bits.
 
-A source patch carries Python files only. When a release needs something native that the running AppImage does not have, the next AppImage brings it: 4.0's web view is such a case (an AppImage from before 4.0 updated by a source patch keeps the classic interface, see [Installation](#appimage-debian-ubuntu-mint-fedora-nobara)).
+A source patch carries Python files only. When a release needs something native that the running AppImage does not have, the next AppImage brings it. A new major version always comes as the AppImage: 4.0's web view is such a case, and 4.x patches are named `overlay4-*`, which a 3.x updater never takes.
 
 The AUR package installs the AppImage, so it gets the popup and the source patches like any other AppImage install. `paru -Syu` only brings something when a new AppImage is published, and pacman goes on showing the version of the AppImage it installed, not the one you run. From source the popup does not appear, since `git pull` is the update there; the sidebar still names the new version so you know there is something to pull.
 
