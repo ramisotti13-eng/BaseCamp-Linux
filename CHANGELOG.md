@@ -1,5 +1,9 @@
 # Changelog
 
+## [3.2.5] - 2026-11-24
+
+- **Update preparation for 4.0.** This release changes nothing you can see in the application; it gets the updater ready for BaseCamp Linux 4.0, which comes soon. 4.0 brings a new interface that runs in a web view, and the 3.x AppImage does not carry one. So from this version on the updater treats a new major version differently: it never takes the small source patch for it, always the full AppImage (about 400 MB, the 4.0 AppImage carries its own web view), and before anything is replaced it saves your settings to `~/.config/mountain-time-sync-backup-3.2.5.zip`. If that backup cannot be written, the update is not installed. The update window says all of this before you click. Updates within 3.x come as small patches as before. Nothing changes for AUR, Debian package and source installs: they are updated by their package manager or git.
+
 ## [3.2.4] - 2026-11-22
 
 - **A plugin whose installed version is higher than the published one says so (#105).** After 3.2.3 @FransM's Pipe Text still wrote its frames into `~/.config`, and the cause was its `plugin.json`: it said 2.0, left over from when he wrote the plugin himself, while the published Pipe Text is 1.2.3. A higher installed version means there is nothing to update, so no update was offered, and nothing said why. The plugin's page in the Plugins screen now says when the installed version is higher than the published one, with a button that installs the published version. It is said there only, not in the sidebar's count and not by Update all: someone working on their own copy of a plugin raises its version on purpose and should not be pressed to throw it away.

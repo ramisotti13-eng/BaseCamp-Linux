@@ -575,5 +575,8 @@
   "toolkit_notice_body": "Installiert ist CustomTkinter {ver}, und diese Version von BaseCamp Linux unterstützt es noch nicht vollständig. Die Auswahllisten nutzen vorerst die Menüs von CustomTkinter. Aktualisiere BaseCamp Linux oder installiere die CustomTkinter-Version, die es unterstützt.",
   "toolkit_notice_detail": "Aktualisieren:  git pull\nOder:  pip install \"customtkinter<{below}\"",
   "toolkit_notice_ok": "OK",
-  "plugin_updates_show": "Anzeigen"
+  "plugin_updates_show": "Anzeigen",
+  "update_major_hint": "v{ver} ist ein großes Update mit neuer Oberfläche. Es kommt als neue AppImage (etwa 400 MB); deine Einstellungen bleiben und werden vorher nach {path} gesichert.",
+  "update_dialog_body_major": "BaseCamp Linux v{ver} ist da: ein großes Update mit neuer Oberfläche.\n\nEs kommt als neue AppImage (etwa 400 MB). Deine Einstellungen bleiben; sie werden vorher nach {path} gesichert.\n\nJetzt aktualisieren?",
+  "update_backup_failed": "Deine Einstellungen konnten nicht gesichert werden ({err}), darum wurde das Update nicht installiert."
 }

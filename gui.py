@@ -122,6 +122,7 @@ from devices.macros.panel import MacroPanel
 from devices.plugins.panel import PluginManagerPanel
 from shared.plugins import PluginManager
 from shared.plugin_api import PluginContext
+import shared.update_select as _upd_select
 
 # ── Keep backward-compatible module-level names used by existing code ──────────
 
@@ -709,7 +710,8 @@ class UpdateAvailableDialog(ctk.CTkToplevel):
         super().__init__(app)
         self._app = app
         self.title(app.T("update_dialog_title"))
-        self.geometry("420x210")
+        major = bool(getattr(app, "_update_major", False))
+        self.geometry("460x300" if major else "420x210")
         self.resizable(False, False)
         try:
             self.transient(app)
@@ -718,10 +720,17 @@ class UpdateAvailableDialog(ctk.CTkToplevel):
 
         ctk.CTkLabel(self, text=app.T("update_dialog_title"),
                      font=(UI.FONT_FAMILY, 14, "bold")).pack(pady=(16, 4))
-        ctk.CTkLabel(self,
-                     text=app.T("update_dialog_body",
-                                ver=getattr(app, "_update_version", "")),
-                     font=(UI.FONT_FAMILY, 11), wraplength=380,
+        ver = getattr(app, "_update_version", "")
+        if major:
+            # A new major version: what it is, its size, and where the
+            # settings are saved before it is installed.
+            body = app.T("update_dialog_body_major", ver=ver,
+                         path=_upd_select.backup_path(CONFIG_DIR, APP_VERSION)
+                         .replace(os.path.expanduser("~"), "~"))
+        else:
+            body = app.T("update_dialog_body", ver=ver)
+        ctk.CTkLabel(self, text=body,
+                     font=(UI.FONT_FAMILY, 11), wraplength=420 if major else 380,
                      justify="center").pack(pady=(0, 6), padx=12)
 
         self._status = ctk.CTkLabel(self, text="", font=(UI.FONT_FAMILY, 10),
@@ -777,7 +786,7 @@ class UpdateAvailableDialog(ctk.CTkToplevel):
 
 # ── App ────────────────────────────────────────────────────────────────────────
 
-APP_VERSION = "3.2.4"
+APP_VERSION = "3.2.5"
 
 # Window size. The minimum is what the widest screen needs: sidebar plus a
 # 6x2 key grid plus the inspector column, measured rather than guessed.
@@ -2136,54 +2145,29 @@ class App(ctk.CTk):
                     # silently fall back to the AppImage path, because an
                     # unsigned tarball is the easiest tamper point on the
                     # update flow (compromised release → arbitrary code).
-                    source_url = ""
-                    source_sha_url = ""
-                    if install_type == "appimage":
-                        for asset in data.get("assets") or []:
-                            name = (asset.get("name") or "").lower()
-                            if name.startswith("source-") and name.endswith(".tar.gz"):
-                                source_url = asset.get("browser_download_url") or ""
-                            elif name.startswith("source-") and name.endswith(".tar.gz.sha256"):
-                                source_sha_url = asset.get("browser_download_url") or ""
-                        if not source_sha_url:
-                            source_url = ""
-                    # AppImage installs: pick the asset that matches the
-                    # distro family. Filename of the running AppImage wins if
-                    # it explicitly says -debian/-fedora (user picked it on
-                    # download); otherwise read /etc/os-release to decide.
-                    # Debian-family glibc is older than Fedora's, so the wrong
-                    # variant will fail to start with cryptic ld errors.
-                    url = ""
-                    if install_type == "appimage":
-                        appimg = os.environ.get("APPIMAGE", "") or ""
-                        base = os.path.basename(appimg).lower()
-                        if "debian" in base:
-                            variant = "debian"
-                        elif "fedora" in base:
-                            variant = "fedora"
-                        else:
-                            variant = "fedora"
-                            try:
-                                with open("/etc/os-release") as f:
-                                    osr = f.read().lower()
-                                if ("id=debian" in osr or "id=ubuntu" in osr
-                                        or "id=linuxmint" in osr
-                                        or "id_like=debian" in osr
-                                        or "id_like=ubuntu" in osr):
-                                    variant = "debian"
-                            except OSError:
-                                pass
-                        for asset in data.get("assets") or []:
-                            name = (asset.get("name") or "").lower()
-                            if name.endswith(".appimage") and variant in name:
-                                url = asset.get("browser_download_url") or ""
-                                break
-                        if not url:
-                            for asset in data.get("assets") or []:
-                                name = (asset.get("name") or "").lower()
-                                if name.endswith(".appimage"):
-                                    url = asset.get("browser_download_url") or ""
-                                    break
+                    # Which file to fetch (shared/update_select.py): the
+                    # source patch within the same major version, else the
+                    # AppImage that matches the distro family. A newer major
+                    # version (4.0 needs a web view the 3.x AppImage lacks)
+                    # always comes as the AppImage, and the settings are
+                    # saved first.
+                    try:
+                        with open("/etc/os-release") as f:
+                            osr = f.read()
+                    except OSError:
+                        osr = ""
+                    picked = _upd_select.pick_assets(
+                        data.get("assets"), install_type,
+                        os.environ.get("APPIMAGE", "") or "", APP_VERSION, ver, osr)
+                    source_url = picked["source_url"]
+                    source_sha_url = picked["source_sha_url"]
+                    url = picked["url"]
+                    major = _upd_select.is_major_upgrade(APP_VERSION, ver)
+                    if major:
+                        msg += "\n" + self.T(
+                            "update_major_hint", ver=ver,
+                            path=_upd_select.backup_path(CONFIG_DIR, APP_VERSION)
+                            .replace(os.path.expanduser("~"), "~"))
                     def _apply():
                         self._update_message = msg
                         # Pick the actionable URL: source if available, else
@@ -2194,6 +2178,7 @@ class App(ctk.CTk):
                         self._update_kind = "source" if source_url else "appimage"
                         self._update_version = ver
                         self._update_install_type = install_type
+                        self._update_major = major
                         # Say it in the sidebar so the update is visible
                         # without opening anything. Works for every install
                         # type, source and AUR users see "there is something"
@@ -2310,6 +2295,15 @@ class App(ctk.CTk):
                        else os.path.join(_real_home, ".cache",
                                          "basecamp-source-update.tar.gz")
             try:
+                if kind == "appimage" and getattr(self, "_update_major", False):
+                    # A new major version: save the settings before anything
+                    # is replaced. No backup, no update.
+                    try:
+                        from shared.config import export_backup
+                        export_backup(_upd_select.backup_path(CONFIG_DIR, APP_VERSION))
+                    except Exception as e:
+                        self.after(0, on_error, self.T("update_backup_failed", err=str(e)[:60]))
+                        return
                 expected_sha = ""
                 if kind == "source":
                     os.makedirs(os.path.dirname(tmp_path), exist_ok=True)
