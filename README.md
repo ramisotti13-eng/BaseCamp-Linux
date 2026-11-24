@@ -14,10 +14,14 @@ Mountain Base Camp is only available on Windows. This project brings full device
   <a href="https://ko-fi.com/D1D61WIJRD"><img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Support me on Ko-fi" /></a>
 </p>
 
+> [!NOTE]
+> **BaseCamp Linux 4.0 is in beta.** A new interface in the layout of Mountain's Base Camp, every key of the Everest Max bindable, profiles for keyboard, mouse and DisplayPad, and much more. [See what is new](#basecamp-linux-40-beta) or [download the beta](https://github.com/ramisotti13-eng/BaseCamp-Linux/releases/tag/v4.0.0-beta.1).
+
 ---
 
 ## Contents
 
+- [BaseCamp Linux 4.0 (beta)](#basecamp-linux-40-beta)
 - [Device compatibility](#device-compatibility)
 - [Screenshot](#screenshot)
 - [Installation](#installation)
@@ -36,6 +40,61 @@ Mountain Base Camp is only available on Windows. This project brings full device
 - [Adding a language](#adding-a-language)
 - [Support](#support)
 - [License](#license)
+
+---
+
+## BaseCamp Linux 4.0 (beta)
+
+4.0 is the biggest update BaseCamp Linux has had. It is a pre-release for testers: **[download 4.0.0-beta.1](https://github.com/ramisotti13-eng/BaseCamp-Linux/releases/tag/v4.0.0-beta.1)** (an AppImage, no installation). The in-app update of 3.x does not offer it; 3.x stays the current release until 4.0 is done. Please report what breaks, with your distribution and desktop, in the [issues](https://github.com/ramisotti13-eng/BaseCamp-Linux/issues).
+
+### A new interface
+
+The window now follows the layout of Mountain's Base Camp for Windows, in the BaseCamp-Linux colours: a top bar with the devices you have plugged in, a home page, and per device a rail with its pages. Every device is drawn from its own data, the keyboards key by key in your layout (ten layouts, detected from your desktop), with the numpad and media dock when they are attached. Effects play live in the picture, the way the keyboard shows them. The classic window of 3.x is still there with `--classic`, and both use the same settings, so you can switch back and forth.
+
+<p align="center"><img src="docs/4.0/home.png" alt="The home page with every device" width="800"/></p>
+
+### Everest Max
+
+- **Every key can be bound, as in Base Camp.** Click a key and give it a function: media keys, a disabled key, another key, a key combination, a text or key macro that the keyboard plays itself, or anything the application can do (open a program, a folder or a web page, run a macro, switch a profile). D1 to D4 and the media dock buttons can be bound too.
+- **Individuell:** paint keys and the ring with a brush, select with a frame or Ctrl-click, and give single keys an effect of their own (breathing, wave, reactive and more) while the rest stay static.
+- **The Display Dial:** which menus the dial shows, the menu colour, screensaver and turn-off times, the clock type and the content, next to Monitor Mode with its live numbers.
+- **Settings:** game mode (which keys it blocks), the indicator LEDs, the brightness of D1 to D4, the firmware versions and a factory reset that asks first.
+
+<table>
+<tr>
+<td><img src="docs/4.0/everest-keys.png" alt="Key binding" width="400"/><br/><sub>Key binding: every key, D1 to D4 and the dock</sub></td>
+<td><img src="docs/4.0/everest-individuell.png" alt="Individuell" width="400"/><br/><sub>Individuell: colours and effects per key</sub></td>
+</tr>
+<tr>
+<td><img src="docs/4.0/everest-rgb.png" alt="Lighting effects" width="400"/><br/><sub>Effects with a live preview</sub></td>
+<td><img src="docs/4.0/everest-dial.png" alt="Display Dial" width="400"/><br/><sub>The Display Dial and Monitor Mode</sub></td>
+</tr>
+</table>
+
+### Profiles
+
+The Everest Max, the Makalu and the DisplayPad each have a Profile page with up to five profiles (the DisplayPad as many as you like). A profile holds everything of its device: lighting, bindings, D-key pictures and dial settings, DPI levels, or DisplayPad pages. A profile can switch on by itself while a program runs and switch back when it ends. That works for normal programs, Flatpak apps and Windows games through Steam's Proton or Wine. Profiles export to a file and import from one, and your 3.x profiles are taken over on the first start. They live in the application: the keyboard and the mouse stay on their own first slot, so switching never resets anything on the device.
+
+<p align="center"><img src="docs/4.0/profiles.png" alt="Profiles" width="800"/></p>
+
+### DisplayPad and Makalu
+
+- **DisplayPad:** one picture or GIF over the whole pad, gaps between the keys included, your own start-up picture, text over key pictures, clock and PC-info keys, switching off after a while, and a clock or picture while your session is locked.
+- **One image editor** for DisplayPad keys, D1 to D4 and the main display: crop, rotate and flip a picture or every frame of a GIF.
+- **Makalu:** lighting, DPI levels, buttons and sensor settings on their own pages; pressing the DPI button on the mouse shows in the application.
+
+<table>
+<tr>
+<td><img src="docs/4.0/displaypad.png" alt="DisplayPad" width="400"/><br/><sub>DisplayPad: a picture over all twelve keys</sub></td>
+<td><img src="docs/4.0/makalu.png" alt="Makalu" width="400"/><br/><sub>Makalu 67 lighting</sub></td>
+</tr>
+</table>
+
+### Before you try it
+
+- **Back up your settings:** `cp -a ~/.config/mountain-time-sync ~/mts-backup`. 4.0 uses the same files as 3.x.
+- Quit 3.x first (tray, Quit), then start the AppImage. To bind Everest keys to application actions, install the `99-mountain.rules` from the release.
+- Tested on KDE Plasma (Wayland) with an Everest Max, a Makalu 67 and a DisplayPad. Not yet on GNOME, Ubuntu or other graphics cards; the Everest 60 and the MacroPad were tested with simulated devices only. The AppImage carries its own web view (about 380 MB) and does not need Vulkan.
 
 ---
 
